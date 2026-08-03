@@ -7,6 +7,7 @@ import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.sfa.bg.BoxService
 import io.nekohasekai.sfa.compose.base.BaseViewModel
 import io.nekohasekai.sfa.compose.base.UiEvent
+import io.nekohasekai.sfa.compose.model.toList
 import io.nekohasekai.sfa.constant.Status
 import io.nekohasekai.sfa.database.Profile
 import io.nekohasekai.sfa.database.ProfileManager
