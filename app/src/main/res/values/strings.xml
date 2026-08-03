@@ -705,4 +705,5 @@
     <string name="card_status">Status</string>
     <string name="title_diagnostics">Diagnostics</string>
     <string name="diagnostics_run">Run checks</string>
+    <string name="first_run_hint">Enter the access code you were given — the rest is automatic.</string>
 </resources>
