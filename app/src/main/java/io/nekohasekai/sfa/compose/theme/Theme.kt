@@ -36,7 +36,8 @@ private val LightColorScheme =
 
 @Composable
 fun SFATheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    // приложение всегда тёмное: светлая тема ломает вид системных панелей
+    darkTheme: Boolean = true,
     // Dynamic color is available on Android 12+
     // подстройку под обои телефона отключаем: свой узнаваемый вид важнее
     dynamicColor: Boolean = false,

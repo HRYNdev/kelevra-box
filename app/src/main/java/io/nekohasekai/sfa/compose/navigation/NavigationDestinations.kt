@@ -51,8 +51,6 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
 
 // Логи и Инструменты обычному человеку не нужны никогда: они остаются доступны
 // из настроек, но не занимают половину нижней панели.
-val bottomNavigationScreens =
-    listOf(
-        Screen.Dashboard,
-        Screen.Settings,
-    )
+// Нижней панели нет: главный экран сам ведёт в настройки, а вкладка-дубль
+// на два экрана только занимает место.
+val bottomNavigationScreens = emptyList<Screen>()
