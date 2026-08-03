@@ -5,6 +5,8 @@ import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -19,6 +21,7 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsPage
 import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
+import io.nekohasekai.sfa.compose.screen.home.HomeScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.GroupsCard
 import io.nekohasekai.sfa.compose.screen.dashboard.groups.GroupsViewModel
 import io.nekohasekai.sfa.compose.screen.log.HookLogScreen
@@ -93,6 +96,7 @@ fun SFANavHost(
     newProfileArgs: NewProfileArgs = NewProfileArgs(),
     onClearNewProfileArgs: () -> Unit = {},
     onOpenNewProfile: (NewProfileArgs) -> Unit = {},
+    onToggleService: () -> Unit = {},
     dashboardViewModel: DashboardViewModel? = null,
     logViewModel: LogViewModel? = null,
     groupsViewModel: GroupsViewModel? = null,
@@ -110,6 +114,25 @@ fun SFANavHost(
         modifier = modifier,
     ) {
         composable(Screen.Dashboard.route) {
+            if (dashboardViewModel != null) {
+                val uiState by dashboardViewModel.uiState.collectAsState()
+                HomeScreen(
+                    serviceStatus = serviceStatus,
+                    profileName = uiState.selectedProfileName,
+                    activeOutbound = uiState.activeOutbound,
+                    hasProfile = uiState.selectedProfileId != -1L,
+                    onToggle = { onToggleService() },
+                    onOpenOutbounds = {
+                        if (uiState.hasGroups) navController.navigate(Screen.Groups.route)
+                    },
+                    onConnect = { onOpenNewProfile(NewProfileArgs()) },
+                )
+            } else {
+                Unit
+            }
+        }
+
+        composable("details") {
             if (dashboardViewModel != null) {
                 DashboardScreen(
                     onOpenGroups = { navController.navigate(Screen.Groups.route) },
