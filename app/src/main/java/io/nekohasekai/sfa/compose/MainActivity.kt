@@ -525,14 +525,19 @@ class MainActivity :
                 text = { Text(stringResource(R.string.import_remote_profile_message, name, host)) },
                 confirmButton = {
                     TextButton(onClick = {
-                        openNewProfile(
-                            NewProfileArgs(
-                                importName = name,
-                                importUrl = url,
-                            ),
-                        )
                         showImportProfileDialog = false
                         pendingImportProfile = null
+                        // подключаем сразу: без экрана создания и кнопки «Создать»
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val handler = ProfileImportHandler(this@MainActivity)
+                            when (val result = handler.connectByLink(name, url)) {
+                                is ProfileImportHandler.ImportResult.Success -> Unit
+                                is ProfileImportHandler.ImportResult.Error ->
+                                    withContext(Dispatchers.Main) {
+                                        pendingIntentErrorMessage = result.message
+                                    }
+                            }
+                        }
                     }) {
                         Text(stringResource(R.string.ok))
                     }

@@ -71,8 +71,11 @@ android {
         applicationId = "dev.hryn.kelevra"
         minSdk = 24
         targetSdk = 35
-        versionCode = getVersionProps("VERSION_CODE").toInt()
-        versionName = getVersionProps("VERSION_NAME")
+        // Номер нашей сборки: приходит из CI (номер прогона), локально 0.
+        // Нужен, чтобы приложение видело новую версию — версия ядра между нашими сборками не меняется.
+        val kelevraBuild = (System.getenv("KELEVRA_BUILD") ?: "0").toInt()
+        versionCode = getVersionProps("VERSION_CODE").toInt() * 1000 + kelevraBuild
+        versionName = "1.14.$kelevraBuild"
         base.archivesName.set("Kelevra-${versionName}")
     }
 
