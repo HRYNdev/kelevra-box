@@ -70,7 +70,6 @@ fun SFATheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = KelevraTypography,
-        typography = Typography,
         shapes = Shapes,
         content = content,
     )
