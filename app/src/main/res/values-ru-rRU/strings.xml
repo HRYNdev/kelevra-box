@@ -645,4 +645,5 @@
     <string name="diagnostics_run">Проверить</string>
     <string name="first_run_hint">Введите код доступа, который вам дали. Дальше всё само.</string>
     <string name="state_via">Через %1$s</string>
+    <string name="home_tap_to_choose">Нажмите, чтобы выбрать выход</string>
 </resources>
