@@ -76,6 +76,20 @@
 
             </intent-filter>
 
+            <!-- Ссылка подписки открывается сразу в приложении, без выбора браузера.
+                 Работает при наличии /.well-known/assetlinks.json на домене. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="subkv.chickenkiller.com"
+                    android:scheme="https" />
+
+            </intent-filter>
+
             <intent-filter android:priority="999">
                 <action android:name="android.intent.action.VIEW" />
 
