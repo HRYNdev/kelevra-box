@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material.icons.outlined.SettingsEthernet
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -381,6 +382,7 @@ fun DashboardItemCard(
             Icon(
                 imageVector =
                 when (cardGroup) {
+                    CardGroup.Status -> Icons.Outlined.Shield
                     CardGroup.Debug -> Icons.Outlined.BugReport
                     CardGroup.Connections -> Icons.Outlined.Cable
                     CardGroup.UploadTraffic -> Icons.Outlined.Upload
@@ -412,6 +414,7 @@ fun DashboardItemCard(
                 Text(
                     text =
                     when (cardGroup) {
+                        CardGroup.Status -> stringResource(R.string.card_status)
                         CardGroup.Debug -> stringResource(R.string.title_debug)
                         CardGroup.Connections -> stringResource(R.string.title_connections)
                         CardGroup.UploadTraffic -> stringResource(R.string.upload)

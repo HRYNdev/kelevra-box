@@ -636,4 +636,9 @@
     <string name="profile_add_by_code_hint">Введите код доступа, который вам дали, либо вставьте полную ссылку подписки.</string>
     <string name="profile_add_by_code_label">Код или ссылка</string>
     <string name="profile_add_by_code_confirm">Подключиться</string>
+    <string name="state_protected">Защищено</string>
+    <string name="state_connecting">Подключение…</string>
+    <string name="state_stopping">Отключение…</string>
+    <string name="state_off">Выключено</string>
+    <string name="card_status">Состояние</string>
 </resources>
