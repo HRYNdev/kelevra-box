@@ -36,7 +36,7 @@ class UpdateWorker(private val appContext: Context, params: WorkerParameters) : 
                 .build()
 
             val workRequest = PeriodicWorkRequestBuilder<UpdateWorker>(
-                24,
+                6,
                 TimeUnit.HOURS,
             )
                 .setConstraints(constraints)
