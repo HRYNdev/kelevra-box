@@ -646,4 +646,12 @@
     <string name="first_run_hint">Введите код доступа, который вам дали. Дальше всё само.</string>
     <string name="state_via">Через %1$s</string>
     <string name="home_tap_to_choose">Нажмите, чтобы выбрать выход</string>
+    <string name="settings_connect_title">Подключение</string>
+    <string name="settings_connect_hint">Ввести код доступа</string>
+    <string name="settings_autostart_title">Включать с телефоном</string>
+    <string name="settings_autostart_hint">Работать сразу после перезагрузки</string>
+    <string name="settings_apps_title">Приложения мимо сети</string>
+    <string name="settings_apps_hint">Банки и госуслуги пойдут напрямую</string>
+    <string name="settings_check_hint">Посмотреть, что работает</string>
+    <string name="settings_advanced">Дополнительно (для отладки)</string>
 </resources>
