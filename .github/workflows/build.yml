@@ -123,6 +123,22 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleOtherRelease --no-daemon --stacktrace -Pabi=arm64-v8a
 
+
+      # без этой проверки в релиз once уже уехало ядро без нашего транспорта
+      - name: Проверка что транспорт в APK
+        working-directory: sing-box-for-android
+        run: |
+          APK=$(find app/build/outputs/apk -name '*arm64*.apk' | head -1)
+          test -n "$APK" || { echo "APK не найден"; exit 1; }
+          mkdir -p /tmp/apkcheck && unzip -o -q "$APK" 'lib/*/libbox.so' -d /tmp/apkcheck
+          SO=$(find /tmp/apkcheck -name libbox.so | head -1)
+          if grep -qa 'v2rayxhttp' "$SO"; then
+            echo "транспорт xhttp внутри APK: есть"
+          else
+            echo "ОШИБКА: в libbox.so нет транспорта xhttp — ядро собрано без патча"
+            exit 1
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
