@@ -6,11 +6,11 @@ on:
       core_repo:
         description: "Репозиторий ядра (форк extended умеет xhttp, оригинал — нет)"
         required: false
-        default: "shtorm-7/sing-box-extended"
+        default: "SagerNet/sing-box"
       core_ref:
         description: "Тег/ветка ядра"
         required: false
-        default: "v1.13.14-extended-2.5.3"
+        default: "v1.14.0-beta.4"
 
 jobs:
   build:
@@ -31,14 +31,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sing-box-for-android/app/libs
-          key: libbox-${{ github.event.inputs.core_ref || 'v1.13.14-extended-2.5.3' }}
+          key: libbox-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
 
       - name: Checkout sing-box core
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.inputs.core_repo || 'shtorm-7/sing-box-extended' }}
-          ref: ${{ github.event.inputs.core_ref || 'v1.13.14-extended-2.5.3' }}
+          repository: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
+          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
           path: sing-box
           fetch-depth: 0   # нужны теги: build_libbox читает currentTag из git
 
