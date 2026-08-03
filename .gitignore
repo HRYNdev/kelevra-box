@@ -13,3 +13,8 @@ local.properties
 /service-account-credentials.json
 /CLAUDE.md
 /.claude/
+
+# наши секреты: ключ подписи кладётся сюда в CI, в репозиторий попасть не должен
+app/release.keystore
+*.jks
+kelevra-version.json
