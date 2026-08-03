@@ -326,6 +326,7 @@ fun processCardsForRendering(
  * Note: Profiles card is always available and should not use this function.
  */
 fun isCardAvailableWhenServiceRunning(cardGroup: CardGroup, uiState: DashboardUiState): Boolean = when (cardGroup) {
+    CardGroup.Status -> true // состояние видно всегда, в том числе когда служба стоит
     CardGroup.ClashMode -> uiState.clashModeVisible
     CardGroup.UploadTraffic -> uiState.trafficVisible
     CardGroup.DownloadTraffic -> uiState.trafficVisible

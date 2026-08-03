@@ -39,6 +39,15 @@ fun DashboardCardRenderer(
     modifier: Modifier = Modifier,
 ) {
     when (cardGroup) {
+        CardGroup.Status -> {
+            StatusCard(
+                serviceStatus = serviceStatus,
+                profileName = uiState.selectedProfileName,
+                serviceStartTime = uiState.serviceStartTime,
+                modifier = modifier,
+            )
+        }
+
         CardGroup.ClashMode -> {
             if (uiState.clashModeVisible) {
                 ClashModeCard(
