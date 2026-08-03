@@ -659,4 +659,8 @@
     <string name="home_turn_off">Выключить</string>
     <string name="home_channels">Каналы</string>
     <string name="home_uptime">Работает %1$s</string>
+    <string name="app_eyebrow">СВОЯ СЕТЬ</string>
+    <string name="home_btn_on">[ ВКЛЮЧИТЬ ]</string>
+    <string name="home_btn_off">[ ВЫКЛЮЧИТЬ ]</string>
+    <string name="home_btn_connect">[ ПОДКЛЮЧИТЬСЯ ]</string>
 </resources>
