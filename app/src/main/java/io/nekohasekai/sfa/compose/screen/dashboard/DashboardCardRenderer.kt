@@ -35,6 +35,7 @@ fun DashboardCardRenderer(
     onShowProfilePickerSheet: () -> Unit = {},
     onHideProfilePickerSheet: () -> Unit = {},
     onOpenNewProfile: (NewProfileArgs) -> Unit = {},
+    onOpenGroups: () -> Unit = {},
     commandClient: CommandClient? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -45,6 +46,7 @@ fun DashboardCardRenderer(
                 profileName = uiState.selectedProfileName,
                 serviceStartTime = uiState.serviceStartTime,
                 activeOutbound = uiState.activeOutbound,
+                onClick = if (uiState.hasGroups) onOpenGroups else null,
                 modifier = modifier,
             )
         }

@@ -884,7 +884,8 @@ class MainActivity :
                 add(Screen.Log.route)
                 add(Screen.Tools.route)
                 add(Screen.Settings.route)
-                if (useNavigationRail && showGroupsInNav) {
+                // экран выходов нужен и на телефоне: там видно задержку каждого выхода
+                if (showGroupsInNav) {
                     add(Screen.Groups.route)
                 }
                 if (useNavigationRail && showConnectionsInNav) {
