@@ -1,0 +1,202 @@
+package io.nekohasekai.sfa.compose.screen.settings
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
+import io.nekohasekai.sfa.utils.HTTPClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Проверка «что работает» одним экраном.
+ *
+ * Смысл: когда что-то отвалилось, не надо читать простыню логов ядра — видно,
+ * какой именно кусок цепочки лёг: раздача правил, подписка, туннель или блокировка рекламы.
+ */
+private data class Check(
+    val title: String,
+    val hint: String,
+    val run: suspend () -> String,
+)
+
+private sealed class CheckState {
+    object Idle : CheckState()
+
+    object Running : CheckState()
+
+    data class Done(val ok: Boolean, val detail: String) : CheckState()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DiagnosticsScreen() {
+    OverrideTopBar {
+        TopAppBar(title = { Text(stringResource(R.string.title_diagnostics)) })
+    }
+
+    val scope = rememberCoroutineScope()
+    var states by remember { mutableStateOf<Map<String, CheckState>>(emptyMap()) }
+
+    val checks =
+        remember {
+            listOf(
+                Check(
+                    title = "Раздача правил",
+                    hint = "Наборы доменов и рекламы доступны напрямую, мимо туннеля",
+                ) {
+                    val body = HTTPClient().use { it.getString("https://${Kelevra.SUBSCRIPTION_HOST}/rules/main-domains.srs") }
+                    if (body.isEmpty()) throw Exception("пустой ответ") else "набор получен"
+                },
+                Check(
+                    title = "Заблокированное открывается",
+                    hint = "Проверяем сайт из наших наборов через туннель",
+                ) {
+                    HTTPClient().use { it.getString("https://rutracker.org/forum/index.php") }
+                    "открылся"
+                },
+                Check(
+                    title = "Российское идёт напрямую",
+                    hint = "Госуслуги и банки не должны ходить через туннель",
+                ) {
+                    HTTPClient().use { it.getString("https://www.gosuslugi.ru/robots.txt") }
+                    "открылся напрямую"
+                },
+                Check(
+                    title = "Реклама режется",
+                    hint = "Рекламный домен должен НЕ открыться",
+                ) {
+                    val failed =
+                        try {
+                            HTTPClient().use { it.getString("https://an.yandex.ru/") }
+                            false
+                        } catch (e: Exception) {
+                            true
+                        }
+                    if (failed) "заблокирован" else throw Exception("реклама грузится")
+                },
+            )
+        }
+
+    fun runAll() {
+        scope.launch {
+            checks.forEach { check ->
+                states = states + (check.title to CheckState.Running)
+                val result =
+                    withContext(Dispatchers.IO) {
+                        try {
+                            CheckState.Done(true, check.run())
+                        } catch (e: Exception) {
+                            CheckState.Done(false, e.message ?: "ошибка")
+                        }
+                    }
+                states = states + (check.title to result)
+            }
+        }
+    }
+
+    Column(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surface)
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+        ) {
+            Column {
+                checks.forEach { check ->
+                    val state = states[check.title] ?: CheckState.Idle
+                    ListItem(
+                        headlineContent = { Text(check.title) },
+                        supportingContent = {
+                            Text(
+                                when (state) {
+                                    is CheckState.Done -> state.detail
+                                    CheckState.Running -> "проверяю…"
+                                    CheckState.Idle -> check.hint
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        },
+                        leadingContent = {
+                            when (state) {
+                                CheckState.Running ->
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+
+                                is CheckState.Done ->
+                                    Icon(
+                                        imageVector = if (state.ok) Icons.Default.Check else Icons.Default.Close,
+                                        contentDescription = null,
+                                        tint =
+                                            if (state.ok) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.error
+                                            },
+                                    )
+
+                                CheckState.Idle ->
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                            }
+                        },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    )
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = { runAll() }) {
+                Text(stringResource(R.string.diagnostics_run))
+            }
+        }
+    }
+}
