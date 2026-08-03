@@ -33,6 +33,7 @@ fun StatusCard(
     serviceStatus: Status,
     profileName: String?,
     serviceStartTime: Long?,
+    activeOutbound: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val running = serviceStatus == Status.Started
@@ -78,6 +79,13 @@ fun StatusCard(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
+                if (running && !activeOutbound.isNullOrBlank()) {
+                    Text(
+                        text = stringResource(R.string.state_via, activeOutbound),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 if (!profileName.isNullOrBlank()) {
                     Text(
                         text = profileName,

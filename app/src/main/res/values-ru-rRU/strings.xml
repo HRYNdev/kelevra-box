@@ -644,4 +644,5 @@
     <string name="title_diagnostics">Проверка</string>
     <string name="diagnostics_run">Проверить</string>
     <string name="first_run_hint">Введите код доступа, который вам дали. Дальше всё само.</string>
+    <string name="state_via">Через %1$s</string>
 </resources>
