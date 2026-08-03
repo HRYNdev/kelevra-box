@@ -14,8 +14,8 @@ import java.io.Closeable
 
 class GitHubUpdateChecker : Closeable {
     companion object {
-        private const val RELEASES_URL = "https://api.github.com/repos/SagerNet/sing-box/releases"
-        private const val METADATA_FILENAME = "SFA-version-metadata.json"
+        private const val RELEASES_URL = "https://api.github.com/repos/HRYNdev/kelevra-box/releases"
+        private const val METADATA_FILENAME = "kelevra-version.json"
     }
 
     private val client = Libbox.newHTTPClient().apply {

@@ -108,6 +108,8 @@ jobs:
       # только arm64: реальные телефоны в семье все на нём, universal собирается втрое дольше
       - name: Build APK
         working-directory: sing-box-for-android
+        env:
+          KELEVRA_BUILD: ${{ github.run_number }}
         run: |
           chmod +x gradlew
           ./gradlew assembleOtherRelease --no-daemon --stacktrace -Pabi=arm64-v8a
