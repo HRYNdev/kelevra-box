@@ -641,4 +641,6 @@
     <string name="state_stopping">Отключение…</string>
     <string name="state_off">Выключено</string>
     <string name="card_status">Состояние</string>
+    <string name="title_diagnostics">Проверка</string>
+    <string name="diagnostics_run">Проверить</string>
 </resources>
