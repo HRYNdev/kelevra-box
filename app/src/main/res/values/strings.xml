@@ -721,4 +721,8 @@
     <string name="home_turn_off">Turn off</string>
     <string name="home_channels">Channels</string>
     <string name="home_uptime">Working %1$s</string>
+    <string name="app_eyebrow">YOUR NETWORK</string>
+    <string name="home_btn_on">[ TURN ON ]</string>
+    <string name="home_btn_off">[ TURN OFF ]</string>
+    <string name="home_btn_connect">[ CONNECT ]</string>
 </resources>
