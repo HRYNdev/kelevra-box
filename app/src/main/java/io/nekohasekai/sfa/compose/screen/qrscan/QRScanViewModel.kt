@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.qrs.QRSDecoder
 import io.nekohasekai.sfa.qrs.readIntLE
 import io.nekohasekai.sfa.vendor.Vendor
@@ -379,7 +380,20 @@ class QRScanViewModel(application: Application) : AndroidViewModel(application) 
 
     private fun processQRCode(value: String): Boolean {
         try {
-            val uri = Uri.parse(value)
+            val raw = value.trim()
+            // Кроме родного sing-box://import-remote-profile принимаем обычную ссылку подписки
+            // (в том числе ту, что показывает панель) и короткий код доступа.
+            val uri =
+                if (raw.startsWith("sing-box://")) {
+                    Uri.parse(raw)
+                } else {
+                    Uri.parse(
+                        Libbox.generateRemoteProfileImportLink(
+                            "Kelevra",
+                            Kelevra.normalizeSubscription(raw),
+                        ),
+                    )
+                }
             if (uri.scheme != "sing-box" || uri.host != "import-remote-profile") {
                 _uiState.update { it.copy(errorMessage = "Not a valid sing-box remote profile URI") }
                 imageAnalysis?.setAnalyzer(analysisExecutor, imageAnalyzer!!)

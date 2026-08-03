@@ -64,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.ProfileContent
+import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.component.qr.QRCodeDialog
 import io.nekohasekai.sfa.compose.component.qr.QRSDialog
@@ -82,9 +83,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-
-// адрес раздачи подписок: по короткому коду достраиваем полную ссылку
-private const val SUBSCRIPTION_HOST = "subkv.chickenkiller.com"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -505,14 +503,8 @@ fun ProfilesCard(
                 TextButton(
                     enabled = linkInput.isNotBlank(),
                     onClick = {
-                        val raw = linkInput.trim()
-                        // приняли и короткий код, и полную ссылку
-                        val url =
-                            if (raw.contains("://")) {
-                                raw
-                            } else {
-                                "https://$SUBSCRIPTION_HOST/$raw/singbox"
-                            }
+                        // принимаем короткий код, полную ссылку и ссылку панели без /singbox
+                        val url = Kelevra.normalizeSubscription(linkInput)
                         showLinkDialog = false
                         onOpenNewProfile(NewProfileArgs(importName = "Kelevra", importUrl = url))
                     },
