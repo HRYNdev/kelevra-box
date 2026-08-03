@@ -44,6 +44,7 @@ fun DashboardCardRenderer(
                 serviceStatus = serviceStatus,
                 profileName = uiState.selectedProfileName,
                 serviceStartTime = uiState.serviceStartTime,
+                activeOutbound = uiState.activeOutbound,
                 modifier = modifier,
             )
         }

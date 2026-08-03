@@ -58,6 +58,8 @@ data class DashboardUiState(
     val groupsCount: Int = 0,
     val connectionsCount: Int = 0,
     val serviceStartTime: Long? = null,
+    // какой выход сейчас выбран автовыбором: человеку важно видеть, куда идёт трафик
+    val activeOutbound: String? = null,
     val deprecatedNotes: List<DeprecatedNote> = emptyList(),
     val showDeprecatedDialog: Boolean = false,
     val showAddProfileSheet: Boolean = false,
@@ -663,8 +665,10 @@ class DashboardViewModel :
     override fun updateGroups(newGroups: MutableList<OutboundGroup>) {
         viewModelScope.launch(Dispatchers.Main) {
             val hasGroups = newGroups.isNotEmpty()
+            // берём выбранный элемент основной группы (селектор или автовыбор)
+            val active = newGroups.firstOrNull()?.selected?.takeIf { it.isNotBlank() }
             updateState {
-                copy(hasGroups = hasGroups, groupsCount = newGroups.size)
+                copy(hasGroups = hasGroups, groupsCount = newGroups.size, activeOutbound = active)
             }
         }
     }
