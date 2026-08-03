@@ -725,4 +725,8 @@
     <string name="home_btn_on">[ TURN ON ]</string>
     <string name="home_btn_off">[ TURN OFF ]</string>
     <string name="home_btn_connect">[ CONNECT ]</string>
+    <string name="home_circle_connect">Connect</string>
+    <string name="settings_group_network">NETWORK</string>
+    <string name="settings_group_behavior">BEHAVIOR</string>
+    <string name="settings_group_service">SERVICE</string>
 </resources>
