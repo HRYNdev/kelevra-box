@@ -17,23 +17,29 @@ import androidx.core.view.WindowCompat
 
 private val DarkColorScheme =
     darkColorScheme(
-        primary = SingBoxPrimary,
-        secondary = SingBoxPrimaryLight,
-        tertiary = LogBlue,
+        primary = KelevraAccent,
+        secondary = KelevraAccentSoft,
+        tertiary = KelevraAccentSoft,
+        background = KelevraBackground,
+        surface = KelevraSurface,
+        surfaceContainer = KelevraCard,
+        surfaceContainerHigh = KelevraCard,
+        primaryContainer = KelevraAccentDark,
     )
 
 private val LightColorScheme =
     lightColorScheme(
-        primary = SingBoxPrimary,
-        secondary = SingBoxPrimaryDark,
-        tertiary = LogBlue,
+        primary = KelevraAccentDark,
+        secondary = KelevraAccent,
+        tertiary = KelevraAccentSoft,
     )
 
 @Composable
 fun SFATheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    // подстройку под обои телефона отключаем: свой узнаваемый вид важнее
+    dynamicColor: Boolean = false,
     content: @Composable () -> Unit,
 ) {
     val colorScheme =

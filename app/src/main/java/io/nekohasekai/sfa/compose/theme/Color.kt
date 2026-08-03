@@ -2,6 +2,15 @@ package io.nekohasekai.sfa.compose.theme
 
 import androidx.compose.ui.graphics.Color
 
+// Палитра Kelevra: один стиль на телефоне и на компьютере.
+// Синий акцент, глубокий тёмный фон — спокойно и читаемо в темноте.
+val KelevraAccent = Color(0xFF3B82F6)
+val KelevraAccentDark = Color(0xFF2563EB)
+val KelevraAccentSoft = Color(0xFF60A5FA)
+val KelevraSurface = Color(0xFF151A21)
+val KelevraBackground = Color(0xFF0F1216)
+val KelevraCard = Color(0xFF1B222B)
+
 // Primary colors from existing app
 val SingBoxPrimary = Color(0xFFD81B60)
 val SingBoxPrimaryDark = Color(0xFFA00037)
