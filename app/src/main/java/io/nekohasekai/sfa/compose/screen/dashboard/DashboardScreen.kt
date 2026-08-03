@@ -53,6 +53,7 @@ fun DashboardScreen(
     showStartFab: Boolean = false,
     showStatusBar: Boolean = false,
     onOpenNewProfile: (NewProfileArgs) -> Unit = {},
+    onOpenGroups: () -> Unit = {},
     viewModel: DashboardViewModel = viewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsState()
@@ -215,6 +216,7 @@ fun DashboardScreen(
                                 onShowProfilePickerSheet = viewModel::showProfilePickerSheet,
                                 onHideProfilePickerSheet = viewModel::hideProfilePickerSheet,
                                 onOpenNewProfile = onOpenNewProfile,
+                                onOpenGroups = onOpenGroups,
                                 commandClient = viewModel.commandClient,
                                 modifier =
                                 Modifier
@@ -255,6 +257,7 @@ fun DashboardScreen(
                             onShowProfilePickerSheet = viewModel::showProfilePickerSheet,
                             onHideProfilePickerSheet = viewModel::hideProfilePickerSheet,
                             onOpenNewProfile = onOpenNewProfile,
+                                onOpenGroups = onOpenGroups,
                             commandClient = viewModel.commandClient,
                         )
                     }
