@@ -21,6 +21,7 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsPage
 import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
+import io.nekohasekai.sfa.compose.screen.home.ChannelRow
 import io.nekohasekai.sfa.compose.screen.home.HomeScreen
 import io.nekohasekai.sfa.compose.screen.home.SimpleSettingsScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.GroupsCard
@@ -120,14 +121,21 @@ fun SFANavHost(
                 val uiState by dashboardViewModel.uiState.collectAsState()
                 HomeScreen(
                     serviceStatus = serviceStatus,
-                    profileName = uiState.selectedProfileName,
                     activeOutbound = uiState.activeOutbound,
+                    uptimeText = uiState.serviceStartTime?.let { start ->
+                        val mins = ((System.currentTimeMillis() - start) / 60000).coerceAtLeast(0)
+                        if (mins >= 60) "${mins / 60} ч ${mins % 60} мин" else "$mins мин"
+                    },
+                    channels = uiState.channelRows.map { (name, delay, sel) ->
+                        ChannelRow(name = name, delayMs = delay, selected = sel)
+                    },
                     hasProfile = uiState.selectedProfileId != -1L,
                     onToggle = { onToggleService() },
-                    onOpenOutbounds = {
+                    onChannelClick = {
                         if (uiState.hasGroups) navController.navigate(Screen.Groups.route)
                     },
                     onConnect = { onOpenNewProfile(NewProfileArgs()) },
+                    onOpenSettings = { navController.navigate(Screen.Settings.route) },
                 )
             } else {
                 Unit
