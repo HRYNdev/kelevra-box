@@ -708,4 +708,12 @@
     <string name="first_run_hint">Enter the access code you were given — the rest is automatic.</string>
     <string name="state_via">Via %1$s</string>
     <string name="home_tap_to_choose">Tap to choose exit</string>
+    <string name="settings_connect_title">Connection</string>
+    <string name="settings_connect_hint">Enter access code</string>
+    <string name="settings_autostart_title">Start with phone</string>
+    <string name="settings_autostart_hint">Turn on automatically after reboot</string>
+    <string name="settings_apps_title">Apps outside the network</string>
+    <string name="settings_apps_hint">Banks and state services go directly</string>
+    <string name="settings_check_hint">See what works and what does not</string>
+    <string name="settings_advanced">Advanced (for debugging)</string>
 </resources>
