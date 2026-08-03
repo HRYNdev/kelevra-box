@@ -20,15 +20,26 @@ jobs:
           path: sing-box-for-android
           submodules: recursive
 
+      # Ядро зависит только от версии sing-box. Пока она та же — не пересобираем:
+      # это разница между 15 минутами и парой минут на каждую правку в Kotlin.
+      - name: Кеш ядра
+        id: libbox-cache
+        uses: actions/cache@v4
+        with:
+          path: sing-box-for-android/app/libs
+          key: libbox-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+
       - name: Checkout sing-box core
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
           repository: SagerNet/sing-box
-          ref: ${{ github.event.inputs.core_ref }}
+          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
           path: sing-box
           fetch-depth: 0   # нужны теги: build_libbox читает currentTag из git
 
       - name: Setup Go
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: sing-box/go.mod
@@ -39,34 +50,38 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"   # build_libbox проверяет версию и падает на всём, кроме 17
+          cache: gradle
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
       - name: Install NDK
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         run: sdkmanager --install "ndk;28.0.13004108"
 
       - name: Install gomobile
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         working-directory: sing-box
         run: make lib_install
 
       # build_libbox копирует .aar в ../sing-box-for-android/app/libs ТОЛЬКО если папка уже есть,
       # иначе молча оставляет файл у себя. В репозитории этой папки нет.
       - name: Создать app/libs
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         run: mkdir -p sing-box-for-android/app/libs
 
       - name: Build libbox
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         working-directory: sing-box
         run: |
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.0.13004108"
           export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
           export PATH="$PATH:$(go env GOPATH)/bin"
-          echo "SDK=$ANDROID_HOME NDK=$ANDROID_NDK_HOME"
           make lib_android
 
-      - name: Проверка что ядро приехало на место
+      - name: Проверка что ядро на месте
         run: |
-          # подстраховка: если копирование всё же не сработало, забираем сами
+          # подстраховка: если копирование не сработало, забираем сами
           for f in libbox.aar libbox-legacy.aar; do
             if [ ! -f "sing-box-for-android/app/libs/$f" ] && [ -f "sing-box/$f" ]; then
               cp "sing-box/$f" "sing-box-for-android/app/libs/$f"
@@ -74,6 +89,7 @@ jobs:
           done
           ls -la sing-box-for-android/app/libs/
           test -f sing-box-for-android/app/libs/libbox.aar
+          echo "кеш ядра: ${{ steps.libbox-cache.outputs.cache-hit == 'true' && 'попадание' || 'пересобрано' }}"
 
       - name: Подготовка подписи
         working-directory: sing-box-for-android
@@ -89,15 +105,16 @@ jobs:
           rm -f /tmp/local.properties
           test -s app/release.keystore
 
+      # только arm64: реальные телефоны в семье все на нём, universal собирается втрое дольше
       - name: Build APK
         working-directory: sing-box-for-android
         run: |
           chmod +x gradlew
-          ./gradlew assembleOtherRelease --no-daemon --stacktrace
+          ./gradlew assembleOtherRelease --no-daemon --stacktrace -Pabi=arm64-v8a
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: kelevra-apk
-          path: sing-box-for-android/app/build/outputs/apk/**/*.apk
+          path: sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
           if-no-files-found: error
