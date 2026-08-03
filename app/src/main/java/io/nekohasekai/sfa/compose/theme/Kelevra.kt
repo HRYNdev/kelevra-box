@@ -1,6 +1,7 @@
 package io.nekohasekai.sfa.compose.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -30,6 +31,7 @@ object K {
 
 // Шрифты переменные: без явных настроек начертания Android рисует все веса
 // одинаково тонкими — заголовок выглядит бледным. Задаём вес осью wght.
+@OptIn(ExperimentalTextApi::class)
 private fun mont(weight: Int) =
     Font(
         R.font.montserrat,
@@ -39,6 +41,7 @@ private fun mont(weight: Int) =
 
 val Montserrat = FontFamily(mont(300), mont(400), mont(600), mont(700))
 
+@OptIn(ExperimentalTextApi::class)
 val RobotoMono = FontFamily(
     Font(
         R.font.roboto_mono,
