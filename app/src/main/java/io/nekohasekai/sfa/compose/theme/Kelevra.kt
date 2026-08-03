@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.R
@@ -27,14 +28,24 @@ object K {
     val Dim = Color(0xFF96A2B6)
 }
 
-val Montserrat = FontFamily(
-    Font(R.font.montserrat, FontWeight.Light),
-    Font(R.font.montserrat, FontWeight.Normal),
-    Font(R.font.montserrat, FontWeight.SemiBold),
-    Font(R.font.montserrat, FontWeight.Bold),
-)
+// Шрифты переменные: без явных настроек начертания Android рисует все веса
+// одинаково тонкими — заголовок выглядит бледным. Задаём вес осью wght.
+private fun mont(weight: Int) =
+    Font(
+        R.font.montserrat,
+        FontWeight(weight),
+        variationSettings = FontVariation.Settings(FontVariation.weight(weight)),
+    )
 
-val RobotoMono = FontFamily(Font(R.font.roboto_mono, FontWeight.Medium))
+val Montserrat = FontFamily(mont(300), mont(400), mont(600), mont(700))
+
+val RobotoMono = FontFamily(
+    Font(
+        R.font.roboto_mono,
+        FontWeight.Medium,
+        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
+    ),
+)
 
 /** Заголовки крупные с отрицательным трекингом, тело лёгкое. */
 val KelevraTypography = Typography(
