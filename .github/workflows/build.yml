@@ -50,6 +50,11 @@ jobs:
         working-directory: sing-box
         run: make lib_install
 
+      # build_libbox копирует .aar в ../sing-box-for-android/app/libs ТОЛЬКО если папка уже есть,
+      # иначе молча оставляет файл у себя. В репозитории этой папки нет.
+      - name: Создать app/libs
+        run: mkdir -p sing-box-for-android/app/libs
+
       - name: Build libbox
         working-directory: sing-box
         run: |
@@ -61,6 +66,12 @@ jobs:
 
       - name: Проверка что ядро приехало на место
         run: |
+          # подстраховка: если копирование всё же не сработало, забираем сами
+          for f in libbox.aar libbox-legacy.aar; do
+            if [ ! -f "sing-box-for-android/app/libs/$f" ] && [ -f "sing-box/$f" ]; then
+              cp "sing-box/$f" "sing-box-for-android/app/libs/$f"
+            fi
+          done
           ls -la sing-box-for-android/app/libs/
           test -f sing-box-for-android/app/libs/libbox.aar
 
