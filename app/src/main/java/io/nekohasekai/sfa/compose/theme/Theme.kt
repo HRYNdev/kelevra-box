@@ -17,21 +17,21 @@ import androidx.core.view.WindowCompat
 
 private val DarkColorScheme =
     darkColorScheme(
-        primary = KelevraAccent,
-        secondary = KelevraAccentSoft,
-        tertiary = KelevraAccentSoft,
-        background = KelevraBackground,
-        surface = KelevraSurface,
-        surfaceContainer = KelevraCard,
-        surfaceContainerHigh = KelevraCard,
-        primaryContainer = KelevraAccentDark,
+        primary = K.Accent,
+        secondary = K.SurfaceHi,
+        tertiary = K.Accent,
+        background = K.Bg,
+        surface = K.Surface,
+        surfaceContainer = K.Surface,
+        surfaceContainerHigh = K.SurfaceHi,
+        primaryContainer = K.SurfaceHi,
     )
 
 private val LightColorScheme =
     lightColorScheme(
         primary = KelevraAccentDark,
         secondary = KelevraAccent,
-        tertiary = KelevraAccentSoft,
+        tertiary = K.Accent,
     )
 
 @Composable
@@ -69,6 +69,7 @@ fun SFATheme(
 
     MaterialTheme(
         colorScheme = colorScheme,
+        typography = KelevraTypography,
         typography = Typography,
         shapes = Shapes,
         content = content,
