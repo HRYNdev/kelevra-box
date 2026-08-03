@@ -64,15 +64,29 @@ jobs:
           ls -la sing-box-for-android/app/libs/
           test -f sing-box-for-android/app/libs/libbox.aar
 
+      - name: Подготовка подписи
+        working-directory: sing-box-for-android
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
+          # проект читает параметры подписи из base64-properties в LOCAL_PROPERTIES
+          printf 'KEYSTORE_PASS=%s\nALIAS_NAME=%s\nALIAS_PASS=%s\n' "$KEYSTORE_PASS" "$KEY_ALIAS" "$KEYSTORE_PASS" > /tmp/local.properties
+          echo "LOCAL_PROPERTIES=$(base64 -w0 /tmp/local.properties)" >> $GITHUB_ENV
+          rm -f /tmp/local.properties
+          test -s app/release.keystore
+
       - name: Build APK
         working-directory: sing-box-for-android
         run: |
           chmod +x gradlew
-          ./gradlew assembleOtherDebug --no-daemon --stacktrace
+          ./gradlew assembleOtherRelease --no-daemon --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: kelevra-box-debug
+          name: kelevra-apk
           path: sing-box-for-android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
