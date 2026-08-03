@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sing-box-for-android/app/libs
-          key: libbox-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          key: libbox-xhttp2-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
 
       - name: Checkout sing-box core
         if: steps.libbox-cache.outputs.cache-hit != 'true'
@@ -62,6 +62,11 @@ jobs:
       - name: Install NDK
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         run: sdkmanager --install "ndk;28.0.13004108"
+
+      # наш транспорт xhttp: в апстриме его нет
+      - name: Патч ядра
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        run: python3 sing-box-for-android/core-xhttp/apply.py sing-box
 
       - name: Install gomobile
         if: steps.libbox-cache.outputs.cache-hit != 'true'
