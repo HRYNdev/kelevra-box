@@ -1,0 +1,78 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: "Тег/ветка sing-box для сборки ядра"
+        required: false
+        default: "v1.14.0-beta.4"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Приложение обязано лежать в папке с этим именем: build_libbox копирует
+      # готовый .aar в ../sing-box-for-android/app/libs (см. cmd/internal/build_libbox/main.go)
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: sing-box-for-android
+          submodules: recursive
+
+      - name: Checkout sing-box core
+        uses: actions/checkout@v4
+        with:
+          repository: SagerNet/sing-box
+          ref: ${{ github.event.inputs.core_ref }}
+          path: sing-box
+          fetch-depth: 0   # нужны теги: build_libbox читает currentTag из git
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: sing-box/go.mod
+          cache-dependency-path: sing-box/go.sum
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager --install "ndk;27.2.12479018"
+
+      - name: Install gomobile
+        working-directory: sing-box
+        run: make lib_install
+
+      - name: Build libbox
+        working-directory: sing-box
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          echo "SDK=$ANDROID_HOME NDK=$ANDROID_NDK_HOME"
+          make lib_android
+
+      - name: Проверка что ядро приехало на место
+        run: |
+          ls -la sing-box-for-android/app/libs/
+          test -f sing-box-for-android/app/libs/libbox.aar
+
+      - name: Build APK
+        working-directory: sing-box-for-android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleOtherDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kelevra-box-debug
+          path: sing-box-for-android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
