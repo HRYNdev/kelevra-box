@@ -33,6 +33,7 @@ import java.util.Collections
 import java.util.Date
 
 enum class CardGroup {
+    Status,
     ClashMode,
     UploadTraffic,
     DownloadTraffic,
@@ -108,6 +109,7 @@ data class DashboardUiState(
         ),
     val cardWidths: Map<CardGroup, CardWidth> =
         mapOf(
+            CardGroup.Status to CardWidth.Full,
             CardGroup.ClashMode to CardWidth.Full,
             CardGroup.UploadTraffic to CardWidth.Half,
             CardGroup.DownloadTraffic to CardWidth.Half,
@@ -724,13 +726,14 @@ class DashboardViewModel :
 
     // Helper functions for serialization
     private fun getDefaultItemOrder() = listOf(
+        CardGroup.Status,
+        CardGroup.Profiles,
         CardGroup.UploadTraffic,
         CardGroup.DownloadTraffic,
         CardGroup.Debug,
         CardGroup.Connections,
         CardGroup.SystemProxy,
         CardGroup.ClashMode,
-        CardGroup.Profiles,
     )
 
     private fun loadItemOrder(): List<CardGroup> {
@@ -754,6 +757,9 @@ class DashboardViewModel :
             val newItems = allItems - savedItems
 
             order.addAll(newItems)
+            // состояние всегда сверху, даже если порядок сохранён с прошлых версий
+            order.remove(CardGroup.Status)
+            order.add(0, CardGroup.Status)
             order
         } catch (e: JSONException) {
             getDefaultItemOrder()

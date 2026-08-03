@@ -114,7 +114,11 @@ object Settings {
     var oomMemoryLimitMB by dataStore.int(SettingsKey.OOM_MEMORY_LIMIT_MB) { 50 }
 
     var dashboardItemOrder by dataStore.string(SettingsKey.DASHBOARD_ITEM_ORDER) { "" }
-    var dashboardDisabledItems by dataStore.stringSet(SettingsKey.DASHBOARD_DISABLED_ITEMS) { emptySet() }
+    // По умолчанию на главной только профиль и состояние. Трафик, соединения, отладка
+    // и системный прокси — это инструменты отладки, они включаются в настройках карточек.
+    var dashboardDisabledItems by dataStore.stringSet(SettingsKey.DASHBOARD_DISABLED_ITEMS) {
+        setOf("Debug", "UploadTraffic", "DownloadTraffic", "Connections", "SystemProxy", "ClashMode")
+    }
 
     var activeRemoteServerId by dataStore.long(SettingsKey.ACTIVE_REMOTE_SERVER_ID) { 0L }
 
