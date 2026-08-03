@@ -98,13 +98,26 @@ jobs:
 
       - name: Build APK
         working-directory: sing-box-for-android
+        env:
+          KELEVRA_BUILD: ${{ github.run_number }}
         run: |
           chmod +x gradlew
           ./gradlew assembleOtherRelease --no-daemon
 
+      # приложение сравнивает версии по этому файлу в релизе
+      - name: Метаданные версии
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          CODE=$(( 707 * 1000 + BUILD_NUMBER ))
+          echo "{\"version_code\": $CODE, \"version_name\": \"1.14.$BUILD_NUMBER\"}" > kelevra-version.json
+          cat kelevra-version.json
+
       - name: Публикация релиза
         uses: softprops/action-gh-release@v2
         with:
-          files: sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
+          files: |
+            sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
+            kelevra-version.json
           prerelease: true
           generate_release_notes: true

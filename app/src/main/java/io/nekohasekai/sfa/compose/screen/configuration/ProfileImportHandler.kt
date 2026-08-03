@@ -6,9 +6,11 @@ import android.provider.OpenableColumns
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.ProfileContent
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.UpdateProfileWork
 import io.nekohasekai.sfa.database.Profile
 import io.nekohasekai.sfa.database.ProfileManager
 import io.nekohasekai.sfa.database.TypedProfile
+import io.nekohasekai.sfa.utils.HTTPClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -251,6 +253,45 @@ class ProfileImportHandler(private val context: Context) {
         ProfileManager.create(profile, andSelect = true)
 
         return ImportResult.Success(profile)
+    }
+
+    /**
+     * Подключение по ссылке в один шаг: скачали конфиг, создали профиль, выбрали его.
+     * Пользователю остаётся только нажать «Вкл» — никаких экранов создания.
+     */
+    suspend fun connectByLink(name: String, url: String): ImportResult = withContext(Dispatchers.IO) {
+        try {
+            val typedProfile =
+                TypedProfile().apply {
+                    type = TypedProfile.Type.Remote
+                    remoteURL = url
+                    autoUpdate = true
+                    autoUpdateInterval = 60
+                    lastUpdated = Date()
+                }
+
+            val profile =
+                Profile(name = name, typed = typedProfile).apply {
+                    userOrder = ProfileManager.nextOrder()
+                }
+
+            val fileID = ProfileManager.nextFileID()
+            val configDirectory = File(context.filesDir, "configs").also { it.mkdirs() }
+            val configFile = File(configDirectory, "$fileID.json")
+            typedProfile.path = configFile.path
+
+            // конфиг тянем сразу: профиль без него бесполезен
+            val content = HTTPClient().use { it.getString(url) }
+            Libbox.checkConfig(content)
+            configFile.writeText(content)
+
+            ProfileManager.create(profile, andSelect = true)
+            UpdateProfileWork.reconfigureUpdater()
+
+            ImportResult.Success(profile)
+        } catch (e: Exception) {
+            ImportResult.Error(e.message ?: "Не удалось подключиться по ссылке")
+        }
     }
 
     private suspend fun importRemoteProfile(name: String, url: String): ImportResult {
