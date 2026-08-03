@@ -60,6 +60,8 @@ data class DashboardUiState(
     val serviceStartTime: Long? = null,
     // какой выход сейчас выбран автовыбором: человеку важно видеть, куда идёт трафик
     val activeOutbound: String? = null,
+    // каналы для главного экрана: имя, задержка, выбран ли
+    val channelRows: List<Triple<String, Int, Boolean>> = emptyList(),
     val deprecatedNotes: List<DeprecatedNote> = emptyList(),
     val showDeprecatedDialog: Boolean = false,
     val showAddProfileSheet: Boolean = false,
@@ -673,8 +675,18 @@ class DashboardViewModel :
             while (active != null && byTag.containsKey(active) && guard++ < 4) {
                 active = byTag[active]?.selected?.takeIf { it.isNotBlank() }
             }
+            // строки каналов берём из группы автовыбора: там реальные выходы с задержкой
+            val autoGroup = newGroups.firstOrNull { it.items.toList().size > 1 } ?: newGroups.firstOrNull()
+            val rows = autoGroup?.items?.toList().orEmpty().map { item ->
+                Triple(item.tag, item.urlTestDelay, item.tag == autoGroup?.selected)
+            }
             updateState {
-                copy(hasGroups = hasGroups, groupsCount = newGroups.size, activeOutbound = active)
+                copy(
+                    hasGroups = hasGroups,
+                    groupsCount = newGroups.size,
+                    activeOutbound = active,
+                    channelRows = rows,
+                )
             }
         }
     }
