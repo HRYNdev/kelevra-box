@@ -693,4 +693,9 @@
     <string name="endpoint_browser_navigation_failed">Browser navigation failed: %1$s</string>
     <string name="endpoint_browser_too_many_windows">The authentication page opened too many browser windows.</string>
     <string name="endpoint_browser_profile_unavailable">Browser authentication is unavailable on this device.</string>
+    <string name="profile_add_by_code">Connect by code</string>
+    <string name="profile_add_by_code_description">Enter access code or subscription link</string>
+    <string name="profile_add_by_code_hint">Enter the access code you were given, or paste a full subscription link.</string>
+    <string name="profile_add_by_code_label">Code or link</string>
+    <string name="profile_add_by_code_confirm">Connect</string>
 </resources>

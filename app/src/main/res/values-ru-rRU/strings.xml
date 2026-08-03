@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <!-- App -->
-    <string name="app_name" translatable="false">sing-box</string>
+    <string name="app_name" translatable="false">Kelevra</string>
     <string name="app_version_title">Версия приложения</string>
     <string name="language">Язык</string>
     <string name="system_default">Системный по умолчанию</string>
@@ -631,4 +631,9 @@
     <string name="remote_unavailable">Недоступно</string>
     <string name="endpoint_globalprotect_sso_unsupported_android">Браузерная аутентификация GlobalProtect SAML не поддерживается на Android.</string>
     <string name="endpoint_browser_cookie_missing">Аутентификация в браузере завершена, но необходимый VPN cookie не получен.</string>
+    <string name="profile_add_by_code">Подключиться по коду</string>
+    <string name="profile_add_by_code_description">Ввести код доступа или ссылку подписки</string>
+    <string name="profile_add_by_code_hint">Введите код доступа, который вам дали, либо вставьте полную ссылку подписки.</string>
+    <string name="profile_add_by_code_label">Код или ссылка</string>
+    <string name="profile_add_by_code_confirm">Подключиться</string>
 </resources>
