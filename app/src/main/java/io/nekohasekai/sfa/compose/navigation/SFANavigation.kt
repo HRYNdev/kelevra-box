@@ -112,6 +112,7 @@ fun SFANavHost(
         composable(Screen.Dashboard.route) {
             if (dashboardViewModel != null) {
                 DashboardScreen(
+                    onOpenGroups = { navController.navigate(Screen.Groups.route) },
                     serviceStatus = serviceStatus,
                     showStartFab = showStartFab,
                     showStatusBar = showStatusBar,
@@ -120,6 +121,7 @@ fun SFANavHost(
                 )
             } else {
                 DashboardScreen(
+                    onOpenGroups = { navController.navigate(Screen.Groups.route) },
                     serviceStatus = serviceStatus,
                     showStartFab = showStartFab,
                     showStatusBar = showStatusBar,
