@@ -37,6 +37,10 @@ object Kelevra {
             return "https://$SUBSCRIPTION_HOST/${raw.trim('/')}$CONFIG_SUFFIX"
         }
         val cleaned = raw.trimEnd('/')
+        // ссылки нашего сборщика (/k/<код>) уже готовые — суффикс им не нужен
+        if (cleaned.contains("$SUBSCRIPTION_HOST/k/")) {
+            return cleaned
+        }
         return if (cleaned.contains(SUBSCRIPTION_HOST) && !cleaned.endsWith(CONFIG_SUFFIX)) {
             cleaned + CONFIG_SUFFIX
         } else {
