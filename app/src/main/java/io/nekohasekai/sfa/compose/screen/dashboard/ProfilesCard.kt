@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.FileUpload
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -280,12 +281,28 @@ fun ProfilesCard(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (profiles.isEmpty()) {
+                // Первый запуск: человеку нужна одна понятная кнопка, а не надпись «пусто».
                 Text(
-                    text = stringResource(R.string.no_profiles),
+                    text = stringResource(R.string.first_run_hint),
                     style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(vertical = 16.dp),
+                    modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Button(
+                    onClick = {
+                        linkInput = ""
+                        showLinkDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Link,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.profile_add_by_code_confirm))
+                }
             } else {
                 ProfileSelectorButton(
                     selectedProfile = selectedProfile,
