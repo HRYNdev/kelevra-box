@@ -978,6 +978,13 @@ class MainActivity :
                     newProfileArgs = newProfileArgs,
                     onClearNewProfileArgs = { newProfileArgs = NewProfileArgs() },
                     onOpenNewProfile = openNewProfile,
+                    onToggleService = {
+                        if (currentServiceStatus == Status.Started || currentServiceStatus == Status.Stopping) {
+                            dashboardViewModel.toggleService()
+                        } else {
+                            startService()
+                        }
+                    },
                     dashboardViewModel = dashboardViewModel,
                     logViewModel = logViewModel,
                     groupsViewModel = groupsViewModel,
