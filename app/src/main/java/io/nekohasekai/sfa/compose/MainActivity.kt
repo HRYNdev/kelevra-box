@@ -89,6 +89,7 @@ import dev.jeziellago.compose.markdowntext.MarkdownText
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.BuildConfig
+import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.BoxService
 import io.nekohasekai.sfa.bg.CrashReportManager
@@ -252,6 +253,23 @@ class MainActivity :
         val uri = intent.data ?: return
         if (intent.action == Action.OPEN_URL) {
             launchCustomTab(uri.toString())
+            return
+        }
+        // Ссылка подписки, открытая тапом: https://<host>/<код>.
+        // Человеку не нужно ничего вводить и никуда вставлять — тап и всё.
+        if ((uri.scheme == "https" || uri.scheme == "http") && uri.host == Kelevra.SUBSCRIPTION_HOST) {
+            try {
+                val link =
+                    Libbox.generateRemoteProfileImportLink(
+                        "Kelevra",
+                        Kelevra.normalizeSubscription(uri.toString()),
+                    )
+                val profile = Libbox.parseRemoteProfileImportLink(link)
+                pendingImportProfile = Triple(profile.name, profile.host, profile.url)
+                showImportProfileDialog = true
+            } catch (e: Exception) {
+                pendingIntentErrorMessage = e.message ?: "Failed to parse subscription link"
+            }
             return
         }
         if (uri.scheme == "sing-box" && uri.host == "import-remote-profile") {
