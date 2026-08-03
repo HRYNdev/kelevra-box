@@ -663,4 +663,8 @@
     <string name="home_btn_on">[ ВКЛЮЧИТЬ ]</string>
     <string name="home_btn_off">[ ВЫКЛЮЧИТЬ ]</string>
     <string name="home_btn_connect">[ ПОДКЛЮЧИТЬСЯ ]</string>
+    <string name="home_circle_connect">Подключить</string>
+    <string name="settings_group_network">СЕТЬ</string>
+    <string name="settings_group_behavior">ПОВЕДЕНИЕ</string>
+    <string name="settings_group_service">ОБСЛУЖИВАНИЕ</string>
 </resources>
