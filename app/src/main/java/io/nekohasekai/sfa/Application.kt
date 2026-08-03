@@ -50,6 +50,10 @@ class Application : Application() {
         HookStatusClient.register(this)
         PrivilegeSettingsClient.register(this)
 
+        // фоновая проверка обновлений: планируем при каждом запуске, иначе она
+        // включалась только когда человек сам лез в настройки
+        runCatching { Vendor.scheduleAutoUpdate() }
+
         val baseDir = filesDir
         baseDir.mkdirs()
         val workingDir = getExternalFilesDir(null)
