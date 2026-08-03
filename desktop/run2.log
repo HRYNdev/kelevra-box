@@ -1,0 +1,1 @@
+[33mWARN[0m[0000] implicit default HTTP client using default outbound for remote rule-sets is deprecated in sing-box 1.14.0 and will be removed in sing-box 1.16.0.
