@@ -32,7 +32,9 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FileUpload
+import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -81,6 +83,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+// адрес раздачи подписок: по короткому коду достраиваем полную ссылку
+private const val SUBSCRIPTION_HOST = "subkv.chickenkiller.com"
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfilesCard(
@@ -122,6 +127,10 @@ fun ProfilesCard(
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
 
     var showQRScanSheet by remember { mutableStateOf(false) }
+
+    // подключение по коду доступа или полной ссылке
+    var showLinkDialog by remember { mutableStateOf(false) }
+    var linkInput by remember { mutableStateOf("") }
 
     val importFromFileLauncher =
         rememberLauncherForActivityResult(
@@ -394,6 +403,27 @@ fun ProfilesCard(
                 ListItem(
                     modifier = Modifier.clickable {
                         onHideAddProfileSheet()
+                        linkInput = ""
+                        showLinkDialog = true
+                    },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Outlined.Link,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    headlineContent = {
+                        Text(stringResource(R.string.profile_add_by_code))
+                    },
+                    supportingContent = {
+                        Text(stringResource(R.string.profile_add_by_code_description))
+                    },
+                )
+
+                ListItem(
+                    modifier = Modifier.clickable {
+                        onHideAddProfileSheet()
                         importFromFileLauncher.launch("*/*")
                     },
                     leadingContent = {
@@ -452,6 +482,50 @@ fun ProfilesCard(
                 )
             }
         }
+    }
+
+    if (showLinkDialog) {
+        AlertDialog(
+            onDismissRequest = { showLinkDialog = false },
+            title = { Text(stringResource(R.string.profile_add_by_code)) },
+            text = {
+                Column {
+                    Text(stringResource(R.string.profile_add_by_code_hint))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = linkInput,
+                        onValueChange = { linkInput = it },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.profile_add_by_code_label)) },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = linkInput.isNotBlank(),
+                    onClick = {
+                        val raw = linkInput.trim()
+                        // приняли и короткий код, и полную ссылку
+                        val url =
+                            if (raw.contains("://")) {
+                                raw
+                            } else {
+                                "https://$SUBSCRIPTION_HOST/$raw/singbox"
+                            }
+                        showLinkDialog = false
+                        onOpenNewProfile(NewProfileArgs(importName = "Kelevra", importUrl = url))
+                    },
+                ) {
+                    Text(stringResource(R.string.profile_add_by_code_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLinkDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 
     if (showQRCodeDialog && qrCodeProfile != null) {
