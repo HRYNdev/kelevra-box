@@ -2,6 +2,8 @@ package io.nekohasekai.sfa.compose.screen.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,38 +13,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.outlined.Apps
-import androidx.compose.material.icons.outlined.BugReport
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material.icons.outlined.Link
-import androidx.compose.material.icons.outlined.MonitorHeart
-import androidx.compose.material.icons.outlined.PowerSettingsNew
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.compose.theme.K
+import io.nekohasekai.sfa.compose.theme.Montserrat
+import io.nekohasekai.sfa.compose.theme.RobotoMono
 
 /**
- * Настройки: пять пунктов, а не двадцать экранов.
- *
- * Всё, что нужно обычному человеку. Технические настройки ядра, правила, плагины
- * и профили остаются в приложении, но лежат за пунктом «Для отладки» — туда
- * заходят раз в жизни, и то не все.
+ * Настройки в том же языке, что и главный: navy, моно-лейблы капсом,
+ * 1px-линии вместо карточек, один cyan-акцент, стрелка вместо шеврона.
  */
 @Composable
 fun SimpleSettingsScreen(
@@ -55,175 +48,163 @@ fun SimpleSettingsScreen(
     modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier =
-            modifier
-                .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 24.dp),
+        modifier = modifier.fillMaxSize().background(K.Bg).verticalScroll(rememberScrollState()),
     ) {
-        SettingsItem(
-            icon = Icons.Outlined.Link,
+        Spacer(modifier = Modifier.height(34.dp))
+
+        Text(
+            text = stringResource(R.string.title_settings).uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = K.Dim,
+            modifier = Modifier.padding(horizontal = 24.dp),
+        )
+
+        Spacer(modifier = Modifier.height(26.dp))
+
+        SectionLabel(stringResource(R.string.settings_group_network))
+        Line()
+        Item(
             title = stringResource(R.string.settings_connect_title),
-            subtitle = stringResource(R.string.settings_connect_hint),
+            value = stringResource(R.string.settings_connect_hint),
             onClick = onConnectByCode,
         )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        SettingsToggle(
-            icon = Icons.Outlined.PowerSettingsNew,
-            title = stringResource(R.string.settings_autostart_title),
-            subtitle = stringResource(R.string.settings_autostart_hint),
-            checked = autoStart,
-            onChange = onAutoStartChange,
-        )
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        SettingsItem(
-            icon = Icons.Outlined.Apps,
+        Line()
+        Item(
             title = stringResource(R.string.settings_apps_title),
-            subtitle = stringResource(R.string.settings_apps_hint),
+            value = stringResource(R.string.settings_apps_hint),
             onClick = onAppsBypass,
         )
+        Line()
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(30.dp))
 
-        SettingsItem(
-            icon = Icons.Outlined.MonitorHeart,
+        SectionLabel(stringResource(R.string.settings_group_behavior))
+        Line()
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.settings_autostart_title),
+                    fontFamily = Montserrat,
+                    fontWeight = FontWeight.Normal,
+                    fontSize = 15.sp,
+                    color = K.Text,
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = stringResource(R.string.settings_autostart_hint),
+                    fontFamily = Montserrat,
+                    fontWeight = FontWeight.Light,
+                    fontSize = 13.sp,
+                    color = K.Dim,
+                )
+            }
+            Switch(
+                checked = autoStart,
+                onCheckedChange = onAutoStartChange,
+                colors =
+                    SwitchDefaults.colors(
+                        checkedThumbColor = K.Bg,
+                        checkedTrackColor = K.Accent,
+                        uncheckedThumbColor = K.Dim,
+                        uncheckedTrackColor = K.Surface,
+                        uncheckedBorderColor = K.Border,
+                    ),
+            )
+        }
+        Line()
+
+        Spacer(modifier = Modifier.height(30.dp))
+
+        SectionLabel(stringResource(R.string.settings_group_service))
+        Line()
+        Item(
             title = stringResource(R.string.title_diagnostics),
-            subtitle = stringResource(R.string.settings_check_hint),
+            value = stringResource(R.string.settings_check_hint),
             onClick = onCheck,
         )
+        Line()
+        Item(
+            title = stringResource(R.string.settings_advanced),
+            value = "",
+            onClick = onAdvanced,
+            dimmed = true,
+        )
+        Line()
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(34.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                imageVector = Icons.Outlined.Info,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(K.Border))
             Spacer(modifier = Modifier.size(8.dp))
             Text(
-                text = "Kelevra ${BuildConfig.VERSION_NAME}",
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                text = "KELEVRA ${BuildConfig.VERSION_NAME}",
+                fontFamily = RobotoMono,
+                fontSize = 11.sp,
+                letterSpacing = 1.4.sp,
+                color = K.Border,
             )
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Row(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .clickable { onAdvanced() }
-                    .padding(horizontal = 4.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.BugReport,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.size(8.dp))
-            Text(
-                text = stringResource(R.string.settings_advanced),
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.weight(1f))
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+        Spacer(modifier = Modifier.height(30.dp))
     }
 }
 
 @Composable
-private fun SettingsItem(
-    icon: ImageVector,
+private fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelMedium,
+        color = K.Accent,
+        modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
+    )
+}
+
+@Composable
+private fun Line() {
+    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).height(1.dp).background(K.Border))
+}
+
+@Composable
+private fun Item(
     title: String,
-    subtitle: String,
+    value: String,
     onClick: () -> Unit,
+    dimmed: Boolean = false,
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
+    Row(
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontFamily = Montserrat,
+                fontWeight = FontWeight.Normal,
+                fontSize = 15.sp,
+                color = if (dimmed) K.Dim else K.Text,
             )
-            Spacer(modifier = Modifier.size(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, fontWeight = FontWeight.Medium)
+            if (value.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(3.dp))
                 Text(
-                    text = subtitle,
+                    text = value,
+                    fontFamily = Montserrat,
+                    fontWeight = FontWeight.Light,
                     fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = K.Dim,
                 )
             }
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
-    }
-}
-
-@Composable
-private fun SettingsToggle(
-    icon: ImageVector,
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onChange: (Boolean) -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(22.dp),
-            )
-            Spacer(modifier = Modifier.size(14.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = title, fontWeight = FontWeight.Medium)
-                Text(
-                    text = subtitle,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Switch(checked = checked, onCheckedChange = onChange)
-        }
+        Text(text = "→", fontFamily = RobotoMono, fontSize = 14.sp, color = K.Accent)
     }
 }
