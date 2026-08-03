@@ -11,11 +11,11 @@ import java.util.Locale
 class HTTPClient : Closeable {
     companion object {
         val userAgent by lazy {
-            var userAgent = "SFA/"
+            var userAgent = "Kelevra/"
             userAgent += BuildConfig.VERSION_NAME
             userAgent += " ("
             userAgent += BuildConfig.VERSION_CODE
-            userAgent += "; sing-box "
+            userAgent += "; sing-box-xhttp "
             userAgent += Libbox.version()
             userAgent += "; language "
             userAgent += Locale.getDefault().toLanguageTag().replace("-", "_")
