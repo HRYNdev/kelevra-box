@@ -119,5 +119,5 @@ jobs:
           files: |
             sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
             kelevra-version.json
-          prerelease: true
+          prerelease: false
           generate_release_notes: true
