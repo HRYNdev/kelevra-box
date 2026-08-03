@@ -13,6 +13,18 @@ object Kelevra {
     private const val CONFIG_SUFFIX = "/singbox"
 
     /**
+     * Постоянный идентификатор устройства для учёта в панели.
+     * Генерируется один раз и переживает перезапуски: иначе каждое обновление подписки
+     * выглядело бы как новое устройство.
+     */
+    val deviceId: String by lazy {
+        val prefs = Application.application.getSharedPreferences("kelevra", android.content.Context.MODE_PRIVATE)
+        prefs.getString("device_id", null) ?: java.util.UUID.randomUUID().toString().also {
+            prefs.edit().putString("device_id", it).apply()
+        }
+    }
+
+    /**
      * Приводит к рабочей ссылке на конфиг:
      *  - короткий код              -> https://<host>/<код>/singbox
      *  - ссылка панели без суффикса -> дописываем /singbox
