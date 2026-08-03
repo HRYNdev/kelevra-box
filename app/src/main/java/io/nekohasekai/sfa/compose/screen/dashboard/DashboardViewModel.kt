@@ -665,8 +665,14 @@ class DashboardViewModel :
     override fun updateGroups(newGroups: MutableList<OutboundGroup>) {
         viewModelScope.launch(Dispatchers.Main) {
             val hasGroups = newGroups.isNotEmpty()
-            // берём выбранный элемент основной группы (селектор или автовыбор)
-            val active = newGroups.firstOrNull()?.selected?.takeIf { it.isNotBlank() }
+            // Человеку нужен реальный канал, а не название группы: если выбрана
+            // группа автовыбора — разворачиваем её и показываем, что выбрано внутри.
+            val byTag = newGroups.associateBy { it.tag }
+            var active = newGroups.firstOrNull()?.selected?.takeIf { it.isNotBlank() }
+            var guard = 0
+            while (active != null && byTag.containsKey(active) && guard++ < 4) {
+                active = byTag[active]?.selected?.takeIf { it.isNotBlank() }
+            }
             updateState {
                 copy(hasGroups = hasGroups, groupsCount = newGroups.size, activeOutbound = active)
             }

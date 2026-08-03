@@ -22,6 +22,7 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
 import io.nekohasekai.sfa.compose.screen.home.HomeScreen
+import io.nekohasekai.sfa.compose.screen.home.SimpleSettingsScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.GroupsCard
 import io.nekohasekai.sfa.compose.screen.dashboard.groups.GroupsViewModel
 import io.nekohasekai.sfa.compose.screen.log.HookLogScreen
@@ -70,6 +71,7 @@ import io.nekohasekai.sfa.compose.screen.usbip.USBIPDeviceDetailScreen
 import io.nekohasekai.sfa.compose.screen.usbip.USBIPServerScreen
 import io.nekohasekai.sfa.compose.screen.usbip.USBIPStatusViewModel
 import io.nekohasekai.sfa.constant.Status
+import io.nekohasekai.sfa.database.Settings
 
 private val slideInFromRight: AnimatedContentTransitionScope<*>.() -> androidx.compose.animation.EnterTransition = {
     slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, animationSpec = tween(300))
@@ -560,6 +562,18 @@ fun SFANavHost(
         }
 
         composable(Screen.Settings.route) {
+            SimpleSettingsScreen(
+                autoStart = Settings.startedByUser,
+                onAutoStartChange = { Settings.startedByUser = it },
+                onConnectByCode = { onOpenNewProfile(NewProfileArgs()) },
+                onAppsBypass = { navController.navigate("settings/profile_override/manage") },
+                onCheck = { navController.navigate("settings/diagnostics") },
+                onAdvanced = { navController.navigate("settings/all") },
+            )
+        }
+
+        // прежний экран настроек остаётся: там ядро, правила, профили
+        composable("settings/all") {
             SettingsScreen(navController = navController)
         }
 
