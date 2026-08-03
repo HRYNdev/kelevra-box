@@ -716,4 +716,9 @@
     <string name="settings_apps_hint">Banks and state services go directly</string>
     <string name="settings_check_hint">See what works and what does not</string>
     <string name="settings_advanced">Advanced (for debugging)</string>
+    <string name="home_not_connected">not connected</string>
+    <string name="home_turn_on">Turn on</string>
+    <string name="home_turn_off">Turn off</string>
+    <string name="home_channels">Channels</string>
+    <string name="home_uptime">Working %1$s</string>
 </resources>

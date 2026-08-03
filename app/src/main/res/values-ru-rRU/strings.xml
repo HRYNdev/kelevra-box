@@ -654,4 +654,9 @@
     <string name="settings_apps_hint">Банки и госуслуги пойдут напрямую</string>
     <string name="settings_check_hint">Посмотреть, что работает</string>
     <string name="settings_advanced">Дополнительно (для отладки)</string>
+    <string name="home_not_connected">не подключено</string>
+    <string name="home_turn_on">Включить</string>
+    <string name="home_turn_off">Выключить</string>
+    <string name="home_channels">Каналы</string>
+    <string name="home_uptime">Работает %1$s</string>
 </resources>
