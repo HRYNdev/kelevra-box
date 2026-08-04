@@ -138,8 +138,8 @@ fun HomeScreen(
         Spacer(Modifier.height(16.dp))
         KHint(
             when {
-                !hasProfile -> "нажмите, чтобы подключить подписку"
-                busy -> "секунду"
+                !hasProfile -> "нажмите, чтобы подключить"
+                busy -> "подождите"
                 running -> "нажмите, чтобы выключить"
                 else -> "нажмите, чтобы включить"
             },
@@ -155,7 +155,7 @@ fun HomeScreen(
                     KRowItem(
                         label = "Выход",
                         title = activeOutbound ?: "Авто",
-                        subtitle = if (channels.isEmpty() && !running) "выберется при включении" else null,
+                        subtitle = if (channels.isEmpty() && !running) "определится при подключении" else null,
                         badge = badgeOf(activeOutbound),
                         chevron = channels.isNotEmpty(),
                     )
@@ -166,9 +166,10 @@ fun HomeScreen(
             val sub = subscription
             if (sub != null) {
                 KCard {
+                    // имя аккаунта из панели человеку ничего не говорит: показываем состояние
                     KRowItem(
                         label = "Подписка",
-                        title = sub.name,
+                        title = if (sub.active) "Активна" else "Приостановлена",
                         subtitle = sub.note,
                     )
                 }
@@ -188,7 +189,7 @@ fun HomeScreen(
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {
                 Text(
-                    text = "Через что выходим",
+                    text = "Выбор выхода",
                     fontFamily = Montserrat,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
