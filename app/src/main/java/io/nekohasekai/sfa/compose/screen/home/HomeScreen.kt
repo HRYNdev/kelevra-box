@@ -84,7 +84,10 @@ fun HomeScreen(
     var subscription by remember { mutableStateOf<SubscriptionInfo?>(null) }
 
     LaunchedEffect(hasProfile, running) {
-        if (hasProfile) subscription = loadSubscription()
+        if (hasProfile) {
+            subscription = loadSubscription()
+            subscription?.bypassPackages?.let { applyBypassPackages(it) }
+        }
     }
 
     val state = when {

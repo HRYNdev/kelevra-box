@@ -128,7 +128,7 @@ fun SimpleSettingsScreen(
                 KDivider()
                 KRowItem(
                     title = "Приложения мимо сети",
-                    subtitle = "Приложения, работающие в обход сети",
+                    subtitle = "Список исключений",
                     chevron = true,
                     onClick = onAppsBypass,
                 )

@@ -20,6 +20,8 @@ data class SubscriptionInfo(
     val usedBytes: Long,
     /** имя канала -> транспорт, которым он ходит */
     val transports: Map<String, String> = emptyMap(),
+    /** приложения, которые сеть по умолчанию пускает мимо туннеля */
+    val bypassPackages: List<String> = emptyList(),
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -55,6 +57,20 @@ private fun humanDate(iso: String): String = runCatching {
  * Код нигде отдельно не хранится — он уже зашит в адрес подписки выбранного
  * профиля, оттуда его и берём.
  */
+/**
+ * Базовые исключения из сети приезжают с сервера и добавляются к тому, что человек
+ * выбрал сам. Раньше эти два списка жили порознь: на сервере одно, в телефоне другое.
+ */
+fun applyBypassPackages(packages: List<String>) {
+    if (packages.isEmpty()) return
+    val current = Settings.perAppProxyList
+    val merged = current + packages.filter { it !in current }
+    if (merged.size != current.size) {
+        Settings.perAppProxyList = merged.toSet()
+        Settings.perAppProxyMode = Settings.PER_APP_PROXY_EXCLUDE
+    }
+}
+
 suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) {
     runCatching {
         val id = Settings.selectedProfile
@@ -82,6 +98,10 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             expires = json.optString("expires").takeIf { it.isNotBlank() && it != "null" },
             limitBytes = json.optLong("limit_bytes"),
             usedBytes = json.optLong("used_bytes"),
+            bypassPackages = buildList {
+                val arr = json.optJSONArray("bypass_packages") ?: return@buildList
+                for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
+            },
             transports = buildMap {
                 val list = json.optJSONArray("channels") ?: return@buildMap
                 for (i in 0 until list.length()) {
