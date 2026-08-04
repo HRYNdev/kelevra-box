@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -413,4 +415,46 @@ fun KHint(text: String) {
         textAlign = TextAlign.Center,
         modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/** Шапка внутреннего экрана: название и возврат. */
+@Composable
+fun KScreenHeader(title: String, subtitle: String? = null, onBack: () -> Unit) {
+    val colors = K
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+            contentDescription = "Назад",
+            tint = colors.Text,
+            modifier = Modifier.size(22.dp).clickable { onBack() },
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                text = title,
+                fontFamily = Montserrat,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 17.sp,
+                color = colors.Text,
+            )
+            if (subtitle != null) {
+                Text(text = subtitle, fontFamily = Montserrat, fontSize = 12.sp, color = colors.Dim)
+            }
+        }
+    }
+}
+
+/** Русское склонение: «1 активное», «2 активных», «5 активных». */
+fun plural(n: Int, one: String, few: String, many: String): String {
+    val mod100 = n % 100
+    val mod10 = n % 10
+    return when {
+        mod100 in 11..14 -> many
+        mod10 == 1 -> one
+        mod10 in 2..4 -> few
+        else -> many
+    }
 }

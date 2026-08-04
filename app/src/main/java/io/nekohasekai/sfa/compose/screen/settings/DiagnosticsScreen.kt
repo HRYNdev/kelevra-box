@@ -38,7 +38,15 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.R
-import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import io.nekohasekai.sfa.compose.theme.K
+import io.nekohasekai.sfa.compose.theme.KButton
+import io.nekohasekai.sfa.compose.theme.KCard
+import io.nekohasekai.sfa.compose.theme.KDim
+import io.nekohasekai.sfa.compose.theme.KDivider
+import io.nekohasekai.sfa.compose.theme.KRowItem
+import io.nekohasekai.sfa.compose.theme.KScreenHeader
 import io.nekohasekai.sfa.utils.HTTPClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -64,14 +72,13 @@ private sealed class CheckState {
     data class Done(val ok: Boolean, val detail: String) : CheckState()
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DiagnosticsScreen() {
-    OverrideTopBar {
-        TopAppBar(title = { Text(stringResource(R.string.title_diagnostics)) })
-    }
+fun DiagnosticsScreen(onBack: () -> Unit = {}) {
 
     val scope = rememberCoroutineScope()
+
     var states by remember { mutableStateOf<Map<String, CheckState>>(emptyMap()) }
 
     val checks =
@@ -135,68 +142,48 @@ fun DiagnosticsScreen() {
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.surface)
+                .background(K.Bg)
                 .verticalScroll(rememberScrollState())
                 .padding(vertical = 8.dp),
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-        ) {
+        KScreenHeader(title = "Проверка сети", subtitle = "Что открывается, а что нет", onBack = onBack)
+        KCard(modifier = Modifier.padding(horizontal = KDim.Pad, vertical = 8.dp)) {
             Column {
-                checks.forEach { check ->
+                checks.forEachIndexed { index, check ->
+                    if (index > 0) KDivider()
                     val state = states[check.title] ?: CheckState.Idle
-                    ListItem(
-                        headlineContent = { Text(check.title) },
-                        supportingContent = {
-                            Text(
-                                when (state) {
-                                    is CheckState.Done -> state.detail
-                                    CheckState.Running -> "проверяю…"
-                                    CheckState.Idle -> check.hint
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                            )
+                    KRowItem(
+                        title = check.title,
+                        subtitle = when (state) {
+                            is CheckState.Done -> state.detail
+                            CheckState.Running -> "проверяю…"
+                            CheckState.Idle -> check.hint
                         },
-                        leadingContent = {
+                        trailing = {
                             when (state) {
-                                CheckState.Running ->
-                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-
-                                is CheckState.Done ->
-                                    Icon(
-                                        imageVector = if (state.ok) Icons.Default.Check else Icons.Default.Close,
-                                        contentDescription = null,
-                                        tint =
-                                            if (state.ok) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.error
-                                            },
-                                    )
-
-                                CheckState.Idle ->
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
+                                CheckState.Running -> CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = K.Accent,
+                                )
+                                is CheckState.Done -> Text(
+                                    text = if (state.ok) "✓" else "✕",
+                                    color = if (state.ok) K.Accent else K.Bad,
+                                )
+                                CheckState.Idle -> Text(text = "—", color = K.Dim2)
                             }
                         },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     )
                 }
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(onClick = { runAll() }) {
-                Text(stringResource(R.string.diagnostics_run))
-            }
-        }
+        Spacer(Modifier.height(8.dp))
+        KButton(
+            text = stringResource(R.string.diagnostics_run),
+            onClick = { runAll() },
+            modifier = Modifier.padding(horizontal = KDim.Pad),
+        )
+        Spacer(Modifier.height(24.dp))
     }
 }

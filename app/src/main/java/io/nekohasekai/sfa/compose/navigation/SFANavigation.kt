@@ -26,6 +26,8 @@ import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
 import io.nekohasekai.sfa.compose.screen.home.AdvancedScreen
 import io.nekohasekai.sfa.compose.screen.home.AppsBypassScreen
+import io.nekohasekai.sfa.compose.screen.home.ConnectionsScreen
+import io.nekohasekai.sfa.compose.screen.home.JournalScreen
 import io.nekohasekai.sfa.compose.screen.home.ChannelRow
 import io.nekohasekai.sfa.compose.screen.home.ComplaintScreen
 import io.nekohasekai.sfa.compose.screen.home.ConnectScreen
@@ -133,6 +135,7 @@ fun SFANavHost(
                         ChannelRow(name = name, delayMs = delay, selected = sel)
                     },
                     hasProfile = uiState.selectedProfileId != -1L,
+                    activeChannel = uiState.activeChannel,
                     onToggle = { onToggleService() },
                     onSelectChannel = { tag -> dashboardViewModel.selectChannel(tag) },
                     onConnect = { navController.navigate("connect") },
@@ -605,7 +608,7 @@ fun SFANavHost(
             popEnterTransition = slideInFromLeft,
             popExitTransition = slideOutToRight,
         ) {
-            LogScreen(serviceStatus = serviceStatus, showStartFab = false, showStatusBar = false)
+            JournalScreen(onBack = { navController.popBackStack() }, serviceStatus = serviceStatus)
         }
 
         composable(
@@ -615,13 +618,7 @@ fun SFANavHost(
             popEnterTransition = slideInFromLeft,
             popExitTransition = slideOutToRight,
         ) {
-            ConnectionsPage(
-                serviceStatus = serviceStatus,
-                showTitle = true,
-                showTopBar = true,
-                onConnectionClick = { id -> navController.navigate("connections/detail/" + Uri.encode(id)) },
-                modifier = Modifier.fillMaxSize(),
-            )
+            ConnectionsScreen(onBack = { navController.popBackStack() }, serviceStatus = serviceStatus)
         }
 
         // жалоба: текст + техническая справка уходят на свой сервер
@@ -662,7 +659,6 @@ fun SFANavHost(
                 onBack = { navController.popBackStack() },
                 connectionsCount = uiState?.connectionsCount ?: 0,
                 onAppsBypass = { navController.navigate("settings/profile_override/manage") },
-                onLog = { navController.navigate("advanced/log") },
                 onConnections = { navController.navigate("advanced/connections") },
                 onCheck = { navController.navigate("settings/diagnostics") },
             )
@@ -686,7 +682,7 @@ fun SFANavHost(
             popEnterTransition = slideInFromLeft,
             popExitTransition = slideOutToRight,
         ) {
-            DiagnosticsScreen()
+            DiagnosticsScreen(onBack = { navController.popBackStack() })
         }
 
         composable(
