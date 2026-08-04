@@ -141,13 +141,7 @@ fun SimpleSettingsScreen(
                     subtitle = "Состояние подключения в панели уведомлений",
                     trailing = { KSwitch(notifications, onNotificationsChange) },
                 )
-                KDivider()
-                KRowItem(
-                    title = "Проверка",
-                    subtitle = "Доступ к сайтам и правилам",
-                    chevron = true,
-                    onClick = onCheck,
-                )
+
             }
 
             KGroupTitle("Подписка")
