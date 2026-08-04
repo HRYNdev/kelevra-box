@@ -224,22 +224,8 @@ fun QRSDialog(profileData: ByteArray, profileName: String, onDismiss: () -> Unit
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/qifi-dev/qrs"))
-                            context.startActivity(intent)
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Info,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.qrs_what_is_qrs))
-                    }
-
+                    // кнопка «что это такое» вела на чужой репозиторий — убрана,
+                    // выдумывать вместо неё свою страницу нечего
                     Button(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f),
