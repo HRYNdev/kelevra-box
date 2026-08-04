@@ -198,7 +198,7 @@ private fun ColumnScope.StepCode(
     StepHeader(
         icon = Icons.Outlined.Lock,
         title = "Введите код",
-        text = "Код вам дал хозяин. Один раз. Дальше всё само.",
+        text = "Введите код доступа. Один раз. Дальше всё само.",
     )
 
     Spacer(Modifier.height(26.dp))
