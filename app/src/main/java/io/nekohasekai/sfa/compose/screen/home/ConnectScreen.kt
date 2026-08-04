@@ -1,10 +1,12 @@
 package io.nekohasekai.sfa.compose.screen.home
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,11 +15,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -25,20 +34,27 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.compose.base.GlobalEventBus
+import io.nekohasekai.sfa.compose.base.UiEvent
 import io.nekohasekai.sfa.compose.theme.K
+import io.nekohasekai.sfa.compose.theme.KButton
+import io.nekohasekai.sfa.compose.theme.KDim
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
 import io.nekohasekai.sfa.database.Profile
 import io.nekohasekai.sfa.database.ProfileManager
 import io.nekohasekai.sfa.database.TypedProfile
 import io.nekohasekai.sfa.utils.HTTPClient
-import io.nekohasekai.libbox.Libbox
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -46,10 +62,11 @@ import java.io.File
 import java.util.Date
 
 /**
- * Подключение по коду: одно поле и одна кнопка.
+ * Первый запуск: код -> предупреждение о системном вопросе -> готово.
  *
- * Всё остальное (скачать настройки, проверить, сохранить, выбрать) делается само —
- * человеку, которому дали код, не нужно знать слов «профиль» и «подписка».
+ * Второй шаг существует ровно затем, чтобы человек не увидел английский
+ * системный запрос на пустом месте: вид этого запроса мы поменять не можем,
+ * но можем объяснить его заранее своими словами.
  */
 @Composable
 fun ConnectScreen(
@@ -57,10 +74,14 @@ fun ConnectScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = K
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var step by remember { mutableIntStateOf(1) }
     var input by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
 
     fun connect() {
         if (input.isBlank() || busy) return
@@ -72,7 +93,7 @@ fun ConnectScreen(
             }
             busy = false
             result.fold(
-                onSuccess = { onDone() },
+                onSuccess = { step = 2 },
                 onFailure = {
                     android.util.Log.w("KelevraConnect", "подключение по коду не удалось", it)
                     error = humanError(it)
@@ -82,111 +103,255 @@ fun ConnectScreen(
     }
 
     Column(
-        modifier = modifier.fillMaxSize().background(K.Bg).padding(horizontal = 24.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.Bg)
+            .padding(horizontal = 22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(modifier = Modifier.height(34.dp))
-        Text(
-            text = "← НАЗАД",
-            style = androidx.compose.material3.MaterialTheme.typography.labelMedium,
-            color = K.Dim,
-            modifier = Modifier.clickable { onBack() },
-        )
+        Spacer(Modifier.height(26.dp))
+        StepDots(step)
 
-        Spacer(modifier = Modifier.height(46.dp))
-        Text(
-            text = "Подключение",
-            fontFamily = Montserrat,
-            fontWeight = FontWeight.Bold,
-            fontSize = 30.sp,
-            letterSpacing = (-0.8).sp,
-            color = K.Text,
-        )
-        Spacer(modifier = Modifier.height(10.dp))
-        Text(
-            text = "Введите код доступа, который вам дали. Дальше всё настроится само.",
-            fontFamily = Montserrat,
-            fontWeight = FontWeight.Light,
-            fontSize = 15.sp,
-            color = K.Dim,
-        )
-
-        Spacer(modifier = Modifier.height(34.dp))
-
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, if (error != null) K.Warn else K.Border, RoundedCornerShape(14.dp))
-                    .padding(horizontal = 18.dp, vertical = 18.dp),
-        ) {
-            if (input.isEmpty()) {
-                Text(
-                    text = "код или ссылка",
-                    fontFamily = RobotoMono,
-                    fontSize = 15.sp,
-                    color = K.Border,
-                )
-            }
-            BasicTextField(
-                value = input,
-                onValueChange = { input = it; error = null },
-                singleLine = true,
-                enabled = !busy,
-                cursorBrush = SolidColor(K.Accent),
-                textStyle =
-                    LocalTextStyle.current.merge(
-                        TextStyle(fontFamily = RobotoMono, fontSize = 15.sp, color = K.Text),
-                    ),
-                keyboardOptions =
-                    androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions =
-                    androidx.compose.foundation.text.KeyboardActions(onGo = { connect() }),
-                modifier = Modifier.fillMaxWidth(),
+        when (step) {
+            1 -> StepCode(
+                input = input,
+                busy = busy,
+                error = error,
+                onInput = { input = it; error = null },
+                onPaste = { input = clipboardText(context) ?: input },
+                onNext = { connect() },
+                onBack = onBack,
             )
-        }
 
-        if (error != null) {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = error!!,
-                fontFamily = Montserrat,
-                fontWeight = FontWeight.Light,
-                fontSize = 14.sp,
-                color = K.Warn,
+            2 -> StepPermission(
+                onNext = {
+                    GlobalEventBus.tryEmit(UiEvent.RequestStartService)
+                    step = 3
+                },
             )
-        }
 
-        Spacer(modifier = Modifier.height(28.dp))
-
-        Box(
-            modifier =
-                Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .background(
-                        if (input.isBlank() || busy) K.Surface else K.Accent,
-                        RoundedCornerShape(14.dp),
-                    )
-                    .clickable(enabled = input.isNotBlank() && !busy) { connect() },
-            contentAlignment = Alignment.Center,
-        ) {
-            if (busy) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    color = K.Accent,
-                    strokeWidth = 2.dp,
-                )
-            } else {
-                Text(
-                    text = "ПОДКЛЮЧИТЬСЯ",
-                    fontFamily = RobotoMono,
-                    fontSize = 13.sp,
-                    letterSpacing = 1.6.sp,
-                    color = if (input.isBlank()) K.Dim else K.Bg,
-                )
-            }
+            else -> StepDone(onDone = onDone)
         }
     }
+}
+
+@Composable
+private fun StepDots(step: Int) {
+    val colors = K
+    Row(modifier = Modifier.padding(bottom = 24.dp)) {
+        repeat(3) { index ->
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .size(width = 26.dp, height = 3.dp)
+                    .background(
+                        if (index < step) colors.Accent else colors.Surface2,
+                        RoundedCornerShape(2.dp),
+                    ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StepHeader(icon: ImageVector, title: String, text: String) {
+    val colors = K
+    Spacer(Modifier.height(20.dp))
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = colors.Accent,
+        modifier = Modifier.size(40.dp),
+    )
+    Spacer(Modifier.height(20.dp))
+    Text(
+        text = title,
+        fontFamily = Montserrat,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 21.sp,
+        letterSpacing = (-0.4).sp,
+        color = colors.Text,
+        textAlign = TextAlign.Center,
+    )
+    Spacer(Modifier.height(10.dp))
+    Text(
+        text = text,
+        fontFamily = Montserrat,
+        fontSize = 14.sp,
+        color = colors.Dim,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun ColumnScope.StepCode(
+    input: String,
+    busy: Boolean,
+    error: String?,
+    onInput: (String) -> Unit,
+    onPaste: () -> Unit,
+    onNext: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val colors = K
+    StepHeader(
+        icon = Icons.Outlined.Lock,
+        title = "Введите код",
+        text = "Код вам дал Вова. Один раз. Дальше всё само.",
+    )
+
+    Spacer(Modifier.height(26.dp))
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                1.dp,
+                if (error != null) colors.Bad else colors.Border,
+                RoundedCornerShape(KDim.RadiusM),
+            )
+            .background(colors.Surface, RoundedCornerShape(KDim.RadiusM))
+            .padding(horizontal = 18.dp, vertical = 17.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (input.isEmpty()) {
+            Text(
+                text = "код или ссылка",
+                fontFamily = RobotoMono,
+                fontSize = 15.sp,
+                color = colors.Dim2,
+            )
+        }
+        BasicTextField(
+            value = input,
+            onValueChange = onInput,
+            singleLine = true,
+            enabled = !busy,
+            cursorBrush = SolidColor(colors.Accent),
+            textStyle = TextStyle(
+                fontFamily = RobotoMono,
+                fontSize = 16.sp,
+                letterSpacing = 1.6.sp,
+                color = colors.Text,
+                textAlign = TextAlign.Center,
+            ),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { onNext() }),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+
+    if (error != null) {
+        Spacer(Modifier.height(12.dp))
+        Text(
+            text = error,
+            fontFamily = Montserrat,
+            fontSize = 13.sp,
+            color = colors.Bad,
+            textAlign = TextAlign.Center,
+        )
+    }
+
+    Spacer(Modifier.height(10.dp))
+    KButton(text = "Вставить из буфера", onClick = onPaste, ghost = true)
+
+    Spacer(Modifier.weight(1f))
+    if (busy) {
+        Box(
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(24.dp),
+                color = colors.Accent,
+                strokeWidth = 2.dp,
+            )
+        }
+    } else {
+        KButton(text = "Продолжить", onClick = onNext, enabled = input.isNotBlank())
+    }
+    Spacer(Modifier.height(8.dp))
+    KButton(text = "Назад", onClick = onBack, ghost = true)
+    Spacer(Modifier.height(20.dp))
+}
+
+@Composable
+private fun ColumnScope.StepPermission(onNext: () -> Unit) {
+    val colors = K
+    StepHeader(
+        icon = Icons.Outlined.Shield,
+        title = "Ответьте «да» два раза",
+        text = "Телефон задаст два вопроса по-английски: про уведомления и про " +
+            "защищённое соединение. Это спрашивает сам Android, соглашайтесь на оба.",
+    )
+
+    Spacer(Modifier.height(24.dp))
+    // показываем оба запроса в том порядке, в каком они реально прилетают
+    SystemAsk(
+        title = "Allow Kelevra to send you notifications?",
+        yes = "Allow",
+        no = "Don't allow",
+    )
+    Spacer(Modifier.height(10.dp))
+    SystemAsk(
+        title = "Kelevra wants to set up a VPN connection…",
+        yes = "OK",
+        no = "Cancel",
+    )
+
+    Spacer(Modifier.weight(1f))
+    KButton(text = "Понятно", onClick = onNext)
+    Spacer(Modifier.height(20.dp))
+}
+
+/** Образец системного запроса: человек узнаёт его, когда тот прилетит. */
+@Composable
+private fun SystemAsk(title: String, yes: String, no: String) {
+    val colors = K
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(colors.Surface2, RoundedCornerShape(KDim.RadiusS))
+            .padding(14.dp),
+    ) {
+        Text(
+            text = title,
+            fontFamily = Montserrat,
+            fontSize = 13.sp,
+            color = colors.Dim,
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Spacer(Modifier.weight(1f))
+            Text(text = no, fontFamily = Montserrat, fontSize = 13.sp, color = colors.Dim2)
+            Spacer(Modifier.size(16.dp))
+            Text(
+                text = yes,
+                fontFamily = Montserrat,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 13.sp,
+                color = colors.Accent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ColumnScope.StepDone(onDone: () -> Unit) {
+    StepHeader(
+        icon = Icons.Outlined.CheckCircle,
+        title = "Готово",
+        text = "Сеть включена и будет включаться сама.\nБольше сюда заходить не нужно.",
+    )
+    Spacer(Modifier.weight(1f))
+    KButton(text = "Открыть", onClick = onDone)
+    Spacer(Modifier.height(20.dp))
+}
+
+/** Код часто присылают сообщением: вставка из буфера избавляет от ручного ввода. */
+private fun clipboardText(context: Context): String? {
+    val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+    return manager?.primaryClip?.getItemAt(0)?.text?.toString()?.trim()?.takeIf { it.isNotBlank() }
 }
 
 /** Понятный текст вместо стектрейса: человек должен понять, что делать дальше. */
