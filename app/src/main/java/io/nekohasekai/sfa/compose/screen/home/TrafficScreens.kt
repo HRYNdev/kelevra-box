@@ -154,7 +154,11 @@ fun JournalScreen(onBack: () -> Unit, serviceStatus: Status, modifier: Modifier 
     Column(modifier = modifier.fillMaxSize().background(colors.Bg)) {
         KScreenHeader(
             title = "Журнал",
-            subtitle = if (state.logs.isEmpty()) "Пока пусто" else "${state.logs.size} " + plural(state.logs.size, "строка", "строки", "строк"),
+            subtitle = when {
+                state.logs.isNotEmpty() -> "${state.logs.size} " + plural(state.logs.size, "строка", "строки", "строк")
+                serviceStatus == Status.Started -> "Пока пусто"
+                else -> "Журнал ведётся, пока сеть включена"
+            },
             onBack = onBack,
         )
         LazyColumn(
