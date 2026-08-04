@@ -1,65 +1,71 @@
 package io.nekohasekai.sfa.compose.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
-private val DarkColorScheme =
-    darkColorScheme(
-        primary = K.Accent,
-        secondary = K.SurfaceHi,
-        tertiary = K.Accent,
-        background = K.Bg,
-        surface = K.Surface,
-        surfaceContainer = K.Surface,
-        surfaceContainerHigh = K.SurfaceHi,
-        primaryContainer = K.SurfaceHi,
-    )
+private fun schemeOf(c: KColors) =
+    if (c.isDark) {
+        darkColorScheme(
+            primary = c.Accent,
+            onPrimary = c.Bg,
+            secondary = c.Accent2,
+            tertiary = c.Accent,
+            background = c.Bg,
+            onBackground = c.Text,
+            surface = c.Surface,
+            onSurface = c.Text,
+            surfaceVariant = c.Surface2,
+            onSurfaceVariant = c.Dim,
+            surfaceContainer = c.Surface,
+            surfaceContainerHigh = c.Surface2,
+            primaryContainer = c.Surface2,
+            outline = c.Border,
+            error = c.Bad,
+        )
+    } else {
+        lightColorScheme(
+            primary = c.Accent,
+            onPrimary = androidx.compose.ui.graphics.Color.White,
+            secondary = c.Accent2,
+            tertiary = c.Accent,
+            background = c.Bg,
+            onBackground = c.Text,
+            surface = c.Surface,
+            onSurface = c.Text,
+            surfaceVariant = c.Surface2,
+            onSurfaceVariant = c.Dim,
+            surfaceContainer = c.Surface,
+            surfaceContainerHigh = c.Surface2,
+            primaryContainer = c.Surface2,
+            outline = c.Border,
+            error = c.Bad,
+        )
+    }
 
-private val LightColorScheme =
-    lightColorScheme(
-        primary = KelevraAccentDark,
-        secondary = KelevraAccent,
-        tertiary = K.Accent,
-    )
-
+/**
+ * Тема приложения. Светлая и тёмная — по настройке системы; подстройку под обои
+ * телефона не делаем, свой узнаваемый вид важнее.
+ */
 @Composable
-fun SFATheme(
-    // приложение всегда тёмное: светлая тема ломает вид системных панелей
-    darkTheme: Boolean = true,
-    // Dynamic color is available on Android 12+
-    // подстройку под обои телефона отключаем: свой узнаваемый вид важнее
-    dynamicColor: Boolean = false,
-    content: @Composable () -> Unit,
-) {
-    val colorScheme =
-        when {
-            dynamicColor && Build.VERSION.SDK_INT >= 31 -> {
-                val context = LocalContext.current
-                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            }
-
-            darkTheme -> DarkColorScheme
-            else -> LightColorScheme
-        }
+fun SFATheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+    val colors = if (darkTheme) KDark else KLight
+    val colorScheme = schemeOf(colors)
 
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window ?: return@SideEffect
-            window.statusBarColor = colorScheme.surface.toArgb()
-            window.navigationBarColor = colorScheme.background.toArgb()
+            window.statusBarColor = colors.Bg.toArgb()
+            window.navigationBarColor = colors.Bg2.toArgb()
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !darkTheme
                 isAppearanceLightNavigationBars = !darkTheme
@@ -67,10 +73,12 @@ fun SFATheme(
         }
     }
 
-    MaterialTheme(
-        colorScheme = colorScheme,
-        typography = KelevraTypography,
-        shapes = Shapes,
-        content = content,
-    )
+    CompositionLocalProvider(LocalKColors provides colors) {
+        MaterialTheme(
+            colorScheme = colorScheme,
+            typography = KelevraTypography,
+            shapes = Shapes,
+            content = content,
+        )
+    }
 }

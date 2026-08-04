@@ -2,7 +2,6 @@ package io.nekohasekai.sfa.compose.screen.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,198 +12,216 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MailOutline
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.BuildConfig
-import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.theme.K
+import io.nekohasekai.sfa.compose.theme.KCard
+import io.nekohasekai.sfa.compose.theme.KDim
+import io.nekohasekai.sfa.compose.theme.KDivider
+import io.nekohasekai.sfa.compose.theme.KGroupTitle
+import io.nekohasekai.sfa.compose.theme.KRowItem
+import io.nekohasekai.sfa.compose.theme.KSwitch
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
 
+/** Человеческое имя режима маршрутизации вместо clash-терминов. */
+fun routeModeTitle(mode: String): String = when (mode.lowercase()) {
+    "rule" -> "Только заблокированные сайты"
+    "global" -> "Весь трафик через сеть"
+    "direct" -> "Напрямую, без сети"
+    else -> mode
+}
+
 /**
- * Настройки в том же языке, что и главный: navy, моно-лейблы капсом,
- * 1px-линии вместо карточек, один cyan-акцент, стрелка вместо шеврона.
+ * Настройки: только то, что нужно обычному человеку. Всё техническое —
+ * за строкой «Расширенные настройки», жалоба — конвертом в шапке.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SimpleSettingsScreen(
     autoStart: Boolean,
     onAutoStartChange: (Boolean) -> Unit,
+    routeMode: String,
+    routeModes: List<String>,
+    onRouteMode: (String) -> Unit,
+    notifications: Boolean,
+    onNotificationsChange: (Boolean) -> Unit,
+    subscriptionName: String?,
     onConnectByCode: () -> Unit,
     onAppsBypass: () -> Unit,
     onCheck: () -> Unit,
     onAdvanced: () -> Unit,
+    onComplaint: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val colors = K
+    var showModes by remember { mutableStateOf(false) }
+
     Column(
-        modifier = modifier.fillMaxSize().background(K.Bg).verticalScroll(rememberScrollState()),
+        modifier = modifier
+            .fillMaxSize()
+            .background(colors.Bg)
+            .verticalScroll(rememberScrollState()),
     ) {
-        Spacer(modifier = Modifier.height(34.dp))
+        Spacer(Modifier.height(12.dp))
 
-        Text(
-            text = stringResource(R.string.title_settings).uppercase(),
-            style = MaterialTheme.typography.labelMedium,
-            color = K.Dim,
-            modifier = Modifier.padding(horizontal = 24.dp),
-        )
-
-        Spacer(modifier = Modifier.height(26.dp))
-
-        SectionLabel(stringResource(R.string.settings_group_network))
-        Line()
-        Item(
-            title = stringResource(R.string.settings_connect_title),
-            value = stringResource(R.string.settings_connect_hint),
-            onClick = onConnectByCode,
-        )
-        Line()
-        Item(
-            title = stringResource(R.string.settings_apps_title),
-            value = stringResource(R.string.settings_apps_hint),
-            onClick = onAppsBypass,
-        )
-        Line()
-
-        Spacer(modifier = Modifier.height(30.dp))
-
-        SectionLabel(stringResource(R.string.settings_group_behavior))
-        Line()
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = stringResource(R.string.settings_autostart_title),
-                    fontFamily = Montserrat,
-                    fontWeight = FontWeight.Normal,
-                    fontSize = 15.sp,
-                    color = K.Text,
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = stringResource(R.string.settings_autostart_hint),
-                    fontFamily = Montserrat,
-                    fontWeight = FontWeight.Light,
-                    fontSize = 13.sp,
-                    color = K.Dim,
-                )
-            }
-            Switch(
-                checked = autoStart,
-                onCheckedChange = onAutoStartChange,
-                colors =
-                    SwitchDefaults.colors(
-                        checkedThumbColor = K.Bg,
-                        checkedTrackColor = K.Accent,
-                        uncheckedThumbColor = K.Dim,
-                        uncheckedTrackColor = K.Surface,
-                        uncheckedBorderColor = K.Border,
-                    ),
+            Text(
+                text = "Настройки",
+                fontFamily = Montserrat,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 21.sp,
+                letterSpacing = (-0.4).sp,
+                color = colors.Text,
+                modifier = Modifier.weight(1f),
+            )
+            // «Столкнулись с проблемой? Опишите её, и мы исправим»
+            Icon(
+                imageVector = Icons.Outlined.MailOutline,
+                contentDescription = "Сообщить о проблеме",
+                tint = colors.Dim,
+                modifier = Modifier
+                    .size(22.dp)
+                    .clickable { onComplaint() },
             )
         }
-        Line()
 
-        Spacer(modifier = Modifier.height(30.dp))
+        Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad)) {
+            KGroupTitle("Сеть")
+            KCard {
+                KRowItem(
+                    title = "Автозапуск",
+                    subtitle = "Сеть поднимется вместе с телефоном",
+                    trailing = { KSwitch(autoStart, onAutoStartChange) },
+                )
+                KDivider()
+                KRowItem(
+                    title = "Маршрутизация",
+                    subtitle = if (routeMode.isBlank()) "Настроится при включении" else routeModeTitle(routeMode),
+                    chevron = routeModes.size > 1,
+                    onClick = { if (routeModes.size > 1) showModes = true },
+                )
+                KDivider()
+                KRowItem(
+                    title = "Приложения мимо сети",
+                    subtitle = "Банки и госуслуги идут напрямую",
+                    chevron = true,
+                    onClick = onAppsBypass,
+                )
+            }
 
-        SectionLabel(stringResource(R.string.settings_group_service))
-        Line()
-        Item(
-            title = stringResource(R.string.title_diagnostics),
-            value = stringResource(R.string.settings_check_hint),
-            onClick = onCheck,
-        )
-        Line()
-        Item(
-            title = stringResource(R.string.settings_advanced),
-            value = "",
-            onClick = onAdvanced,
-            dimmed = true,
-        )
-        Line()
+            KGroupTitle("Приложение")
+            KCard {
+                KRowItem(
+                    title = "Уведомления",
+                    subtitle = "Показывать состояние сети в шторке",
+                    trailing = { KSwitch(notifications, onNotificationsChange) },
+                )
+                KDivider()
+                KRowItem(
+                    title = "Проверка",
+                    subtitle = "Посмотреть, что работает, а что нет",
+                    chevron = true,
+                    onClick = onCheck,
+                )
+            }
 
-        Spacer(modifier = Modifier.height(34.dp))
+            KGroupTitle("Подписка")
+            KCard {
+                KRowItem(
+                    title = subscriptionName ?: "Подключить по коду",
+                    subtitle = if (subscriptionName != null) "Заменить другим кодом" else null,
+                    chevron = true,
+                    onClick = onConnectByCode,
+                )
+            }
 
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(K.Border))
-            Spacer(modifier = Modifier.size(8.dp))
+            Spacer(Modifier.height(18.dp))
+            KCard(onClick = onAdvanced) {
+                KRowItem(title = "Расширенные настройки", chevron = true)
+            }
+
+            Spacer(Modifier.height(20.dp))
             Text(
                 text = "KELEVRA ${BuildConfig.VERSION_NAME}",
                 fontFamily = RobotoMono,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 letterSpacing = 1.4.sp,
-                color = K.Border,
+                color = colors.Dim2,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
             )
+            Spacer(Modifier.height(24.dp))
         }
-
-        Spacer(modifier = Modifier.height(30.dp))
     }
-}
 
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelMedium,
-        color = K.Accent,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
-    )
-}
-
-@Composable
-private fun Line() {
-    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).height(1.dp).background(K.Border))
-}
-
-@Composable
-private fun Item(
-    title: String,
-    value: String,
-    onClick: () -> Unit,
-    dimmed: Boolean = false,
-) {
-    Row(
-        modifier =
-            Modifier
-                .fillMaxWidth()
-                .clickable { onClick() }
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontFamily = Montserrat,
-                fontWeight = FontWeight.Normal,
-                fontSize = 15.sp,
-                color = if (dimmed) K.Dim else K.Text,
-            )
-            if (value.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(3.dp))
+    if (showModes) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showModes = false },
+            sheetState = sheetState,
+            containerColor = colors.Bg2,
+            contentColor = colors.Text,
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {
                 Text(
-                    text = value,
+                    text = "Что идёт через сеть",
                     fontFamily = Montserrat,
-                    fontWeight = FontWeight.Light,
-                    fontSize = 13.sp,
-                    color = K.Dim,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp,
+                    color = colors.Text,
+                    modifier = Modifier.padding(bottom = 12.dp),
                 )
+                routeModes.forEach { mode ->
+                    KCard(
+                        onClick = {
+                            onRouteMode(mode)
+                            showModes = false
+                        },
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = routeModeTitle(mode),
+                                fontFamily = Montserrat,
+                                fontWeight = if (mode == routeMode) FontWeight.SemiBold else FontWeight.Normal,
+                                fontSize = 15.sp,
+                                color = colors.Text,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (mode == routeMode) {
+                                Text(text = "✓", fontSize = 15.sp, color = colors.Accent)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                Spacer(Modifier.height(20.dp))
             }
         }
-        Text(text = "→", fontFamily = RobotoMono, fontSize = 14.sp, color = K.Accent)
     }
+}
+
+/** Полоска-заглушка, чтобы список не прилипал к краю экрана. */
+@Composable
+private fun Tail() {
+    Box(Modifier.fillMaxWidth().height(0.dp))
 }

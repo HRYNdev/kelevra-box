@@ -15,6 +15,7 @@ import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.database.TypedProfile
 import io.nekohasekai.sfa.utils.AppLifecycleObserver
 import io.nekohasekai.sfa.utils.CommandClient
+import android.util.Log
 import io.nekohasekai.sfa.utils.CommandTarget
 import io.nekohasekai.sfa.utils.HTTPClient
 import io.nekohasekai.sfa.utils.RemoteControlManager
@@ -63,6 +64,8 @@ data class DashboardUiState(
     val activeOutbound: String? = null,
     // каналы для главного экрана: имя, задержка, выбран ли
     val channelRows: List<Triple<String, Int, Boolean>> = emptyList(),
+    // группа, внутри которой человек выбирает выход руками
+    val channelGroupTag: String? = null,
     val deprecatedNotes: List<DeprecatedNote> = emptyList(),
     val showDeprecatedDialog: Boolean = false,
     val showAddProfileSheet: Boolean = false,
@@ -687,7 +690,20 @@ class DashboardViewModel :
                     groupsCount = newGroups.size,
                     activeOutbound = active,
                     channelRows = rows,
+                    channelGroupTag = autoGroup?.tag,
                 )
+            }
+        }
+    }
+
+    /** Выбор выхода руками с главного экрана. */
+    fun selectChannel(itemTag: String) {
+        val groupTag = uiState.value.channelGroupTag ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                CommandTarget.standaloneClient().selectOutbound(groupTag, itemTag)
+            } catch (e: Exception) {
+                Log.w("DashboardViewModel", "select outbound: ${e.message}")
             }
         }
     }

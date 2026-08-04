@@ -33,8 +33,9 @@ object Kelevra {
     fun normalizeSubscription(input: String): String {
         val raw = input.trim()
         if (raw.isEmpty()) return raw
+        // короткий код -> свой сборщик конфигов: панель отдаёт формат старого ядра
         if (!raw.contains("://")) {
-            return "https://$SUBSCRIPTION_HOST/${raw.trim('/')}$CONFIG_SUFFIX"
+            return "https://$SUBSCRIPTION_HOST/k/${raw.trim('/')}"
         }
         val cleaned = raw.trimEnd('/')
         // ссылки нашего сборщика (/k/<код>) уже готовые — суффикс им не нужен
