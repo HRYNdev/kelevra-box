@@ -18,6 +18,8 @@ data class SubscriptionInfo(
     val expires: String?,
     val limitBytes: Long,
     val usedBytes: Long,
+    /** имя канала -> транспорт, которым он ходит */
+    val transports: Map<String, String> = emptyMap(),
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -80,6 +82,15 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             expires = json.optString("expires").takeIf { it.isNotBlank() && it != "null" },
             limitBytes = json.optLong("limit_bytes"),
             usedBytes = json.optLong("used_bytes"),
+            transports = buildMap {
+                val list = json.optJSONArray("channels") ?: return@buildMap
+                for (i in 0 until list.length()) {
+                    val item = list.optJSONObject(i) ?: continue
+                    val name = item.optString("name")
+                    val transport = item.optString("transport")
+                    if (name.isNotBlank() && transport.isNotBlank()) put(name, transport)
+                }
+            },
         )
     }.getOrNull()
 }
