@@ -83,7 +83,7 @@ fun AdvancedScreen(
             KCard {
                 KRowItem(
                     title = "Приложения мимо сети",
-                    subtitle = "Банки, госуслуги и МТС идут напрямую",
+                    subtitle = "Приложения, работающие в обход сети",
                     chevron = true,
                     onClick = onAppsBypass,
                 )
@@ -93,7 +93,7 @@ fun AdvancedScreen(
             KCard {
                 KRowItem(
                     title = "Проверка сети",
-                    subtitle = "Что открывается, а что нет",
+                    subtitle = "Доступ к сайтам и правилам",
                     chevron = true,
                     onClick = onCheck,
                 )
@@ -103,7 +103,7 @@ fun AdvancedScreen(
                     subtitle = if (connectionsCount > 0) {
                         "$connectionsCount " + plural(connectionsCount, "активное", "активных", "активных")
                     } else {
-                        "Куда идёт трафик прямо сейчас"
+                        "Текущие подключения"
                     },
                     chevron = true,
                     onClick = onConnections,

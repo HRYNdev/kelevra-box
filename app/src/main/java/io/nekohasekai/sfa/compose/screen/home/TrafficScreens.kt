@@ -92,13 +92,13 @@ fun ConnectionsScreen(onBack: () -> Unit, serviceStatus: Status, modifier: Modif
     Column(modifier = modifier.fillMaxSize().background(colors.Bg)) {
         KScreenHeader(
             title = "Соединения",
-            subtitle = if (active.isEmpty()) "Сейчас соединений нет" else "${active.size} " + plural(active.size, "активное", "активных", "активных"),
+            subtitle = if (active.isEmpty()) "Активных подключений нет" else "${active.size} " + plural(active.size, "активное", "активных", "активных"),
             onBack = onBack,
         )
         if (active.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "Пусто. Включите сеть и откройте любое приложение.",
+                    text = "Активных подключений нет",
                     fontFamily = Montserrat,
                     fontSize = 14.sp,
                     color = colors.Dim2,
@@ -119,7 +119,7 @@ fun ConnectionsScreen(onBack: () -> Unit, serviceStatus: Status, modifier: Modif
                                 )
                                 Text(
                                     text = buildString {
-                                        append(conn.outbound.ifBlank { "напрямую" })
+                                        append(conn.outbound.ifBlank { "прямое подключение" })
                                         if (conn.network.isNotBlank()) append(" · ${conn.network}")
                                     },
                                     fontFamily = RobotoMono,

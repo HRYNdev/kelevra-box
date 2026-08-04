@@ -45,7 +45,7 @@ import io.nekohasekai.sfa.compose.theme.RobotoMono
 fun routeModeTitle(mode: String): String = when (mode.lowercase()) {
     "rule" -> "Только заблокированные сайты"
     "global" -> "Весь трафик через сеть"
-    "direct" -> "Напрямую, без сети"
+    "direct" -> "Без маршрутизации"
     else -> mode
 }
 
@@ -111,7 +111,7 @@ fun SimpleSettingsScreen(
             KCard {
                 KRowItem(
                     title = "Автозапуск",
-                    subtitle = "Сеть поднимется вместе с телефоном",
+                    subtitle = "Подключение восстанавливается при включении телефона",
                     trailing = { KSwitch(autoStart, onAutoStartChange) },
                 )
                 // пункт появляется только когда ядро реально отдало режимы:
@@ -128,7 +128,7 @@ fun SimpleSettingsScreen(
                 KDivider()
                 KRowItem(
                     title = "Приложения мимо сети",
-                    subtitle = "Банки и госуслуги идут напрямую",
+                    subtitle = "Приложения, работающие в обход сети",
                     chevron = true,
                     onClick = onAppsBypass,
                 )
@@ -138,13 +138,13 @@ fun SimpleSettingsScreen(
             KCard {
                 KRowItem(
                     title = "Уведомления",
-                    subtitle = "Показывать состояние сети в шторке",
+                    subtitle = "Состояние подключения в панели уведомлений",
                     trailing = { KSwitch(notifications, onNotificationsChange) },
                 )
                 KDivider()
                 KRowItem(
                     title = "Проверка",
-                    subtitle = "Посмотреть, что работает, а что нет",
+                    subtitle = "Доступ к сайтам и правилам",
                     chevron = true,
                     onClick = onCheck,
                 )
@@ -153,8 +153,8 @@ fun SimpleSettingsScreen(
             KGroupTitle("Подписка")
             KCard {
                 KRowItem(
-                    title = subscriptionName ?: "Подключить по коду",
-                    subtitle = if (subscriptionName != null) "Заменить другим кодом" else null,
+                    title = "Подключить по коду",
+                    subtitle = "Изменить код доступа",
                     chevron = true,
                     onClick = onConnectByCode,
                 )
@@ -188,7 +188,7 @@ fun SimpleSettingsScreen(
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {
                 Text(
-                    text = "Что идёт через сеть",
+                    text = "Режим маршрутизации",
                     fontFamily = Montserrat,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 16.sp,
