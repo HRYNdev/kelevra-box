@@ -677,7 +677,14 @@ class DashboardViewModel :
             var active = newGroups.firstOrNull()?.selected?.takeIf { it.isNotBlank() }
             var guard = 0
             while (active != null && byTag.containsKey(active) && guard++ < 4) {
-                active = byTag[active]?.selected?.takeIf { it.isNotBlank() }
+                val group = byTag[active]
+                val chosen = group?.selected?.takeIf { it.isNotBlank() }
+                // группа автовыбора отдаёт пустой selected, пока сама не решила;
+                // тогда показываем самый быстрый канал — именно его она и возьмёт
+                active = chosen ?: group?.items?.toList()
+                    ?.filter { it.urlTestDelay > 0 }
+                    ?.minByOrNull { it.urlTestDelay }
+                    ?.tag
             }
             // строки каналов берём из группы автовыбора: там реальные выходы с задержкой
             val autoGroup = newGroups.firstOrNull { it.items.toList().size > 1 } ?: newGroups.firstOrNull()

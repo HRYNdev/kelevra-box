@@ -98,9 +98,11 @@ fun HomeScreen(
         running -> activeOutbound
         else -> null
     }
+    // транспорт активного выхода знает только сервер: ядро наверх его не отдаёт
+    val activeTransport = transport ?: subscription?.transports?.get(activeOutbound)
     val meta = buildString {
         if (running) {
-            if (!transport.isNullOrBlank()) append(transport)
+            if (!activeTransport.isNullOrBlank()) append(activeTransport)
             if (activeDelay > 0) {
                 if (isNotEmpty()) append(" · ")
                 append("$activeDelay мс")
