@@ -661,6 +661,7 @@ fun SFANavHost(
                 onAppsBypass = { navController.navigate("settings/profile_override/manage") },
                 onConnections = { navController.navigate("advanced/connections") },
                 onCheck = { navController.navigate("settings/diagnostics") },
+                onLog = { navController.navigate("advanced/log") },
             )
         }
 
