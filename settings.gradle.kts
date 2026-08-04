@@ -3,6 +3,7 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
+        maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
     }
 }
 dependencyResolutionManagement {
@@ -12,10 +13,13 @@ dependencyResolutionManagement {
         mavenCentral()
         maven { url = uri("https://jitpack.io") }
         maven { url = uri("https://api.xposed.info/") }
+        maven { url = uri("https://maven.pkg.jetbrains.space/public/p/compose/dev") }
     }
 }
 rootProject.name = "sing-box"
 include(":app")
+// десктопный клиент: собирается отдельно, на сборку APK не влияет
+include(":desktop")
 include(":libxposed-api")
 project(":libxposed-api").projectDir = file("third_party/libxposed-api")
 include(":terminal-emulator")
