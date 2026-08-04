@@ -120,8 +120,12 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
     }
 
     override fun updateStatus(status: StatusMessage) {
-        val content =
+        // нули в шторке выглядят как поломка: пока трафика нет, показываем состояние
+        val content = if (status.uplink == 0L && status.downlink == 0L) {
+            service.getString(R.string.status_started)
+        } else {
             Libbox.formatBytes(status.uplink) + "/s ↑\t" + Libbox.formatBytes(status.downlink) + "/s ↓"
+        }
         Application.notificationManager.notify(
             notificationId,
             notificationBuilder.setContentText(content).build(),
