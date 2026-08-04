@@ -800,7 +800,8 @@ class MainActivity :
         val isLogRoute = currentRootRoute == Screen.Log.route
 
         // свои экраны поверх вкладок: подключение по коду и жалоба
-        val isOwnFullScreen = currentRoute == "connect" || currentRoute == "complaint"
+        val isOwnFullScreen = currentRoute == "connect" || currentRoute == "complaint" ||
+            currentRoute?.startsWith("advanced/") == true
         val isSubScreen =
             isSettingsSubScreen || isToolsSubScreen || isConnectionsDetail || isProfileRoute || isOwnFullScreen
         // Get LogViewModel instance if we're on the Log screen
@@ -891,6 +892,8 @@ class MainActivity :
                 // без этого сторож маршрутов выкидывает свои экраны обратно на главный
                 add("connect")
                 add("complaint")
+                add("advanced/log")
+                add("advanced/connections")
                 add(Screen.Log.route)
                 add(Screen.Tools.route)
                 add(Screen.Settings.route)
