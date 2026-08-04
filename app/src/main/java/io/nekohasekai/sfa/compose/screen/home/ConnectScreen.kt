@@ -198,7 +198,7 @@ private fun ColumnScope.StepCode(
     StepHeader(
         icon = Icons.Outlined.Lock,
         title = "Введите код",
-        text = "Введите код доступа. Один раз. Дальше всё само.",
+        text = "Код вводится один раз. Дальнейшая настройка произойдёт автоматически.",
     )
 
     Spacer(Modifier.height(26.dp))
@@ -216,7 +216,7 @@ private fun ColumnScope.StepCode(
     ) {
         if (input.isEmpty()) {
             Text(
-                text = "код или ссылка",
+                text = "код доступа",
                 fontFamily = RobotoMono,
                 fontSize = 15.sp,
                 color = colors.Dim2,
@@ -280,9 +280,9 @@ private fun ColumnScope.StepPermission(onNext: () -> Unit) {
     val colors = K
     StepHeader(
         icon = Icons.Outlined.Shield,
-        title = "Ответьте «да» два раза",
-        text = "Телефон задаст два вопроса по-английски: про уведомления и про " +
-            "защищённое соединение. Это спрашивает сам Android, соглашайтесь на оба.",
+        title = "Разрешения",
+        text = "Android запросит разрешение на уведомления и на защищённое соединение. " +
+            "Оба запроса нужно подтвердить.",
     )
 
     Spacer(Modifier.height(24.dp))
@@ -359,9 +359,9 @@ private fun humanError(e: Throwable): String {
     val text = (e.message ?: "").lowercase()
     return when {
         "unable to resolve host" in text || "failed to connect" in text || "timeout" in text ->
-            "Нет связи с сервером. Проверьте интернет и попробуйте ещё раз."
-        "404" in text || "not found" in text -> "Такого кода нет. Проверьте, правильно ли он введён."
-        else -> "Не получилось подключиться. Проверьте код и интернет."
+            "Нет связи с сервером. Проверьте подключение и повторите."
+        "404" in text || "not found" in text -> "Код не найден. Проверьте правильность ввода."
+        else -> "Не удалось подключиться. Проверьте код и подключение."
     }
 }
 
@@ -379,7 +379,7 @@ private suspend fun importByCode(code: String) {
             autoUpdateInterval = 60
             lastUpdated = Date()
         }
-    val profile = Profile(name = "Своя сеть", typed = typed).apply { userOrder = ProfileManager.nextOrder() }
+    val profile = Profile(name = "Kelevra", typed = typed).apply { userOrder = ProfileManager.nextOrder() }
 
     val app = io.nekohasekai.sfa.Application.application
     val dir = File(app.filesDir, "configs").also { it.mkdirs() }

@@ -117,7 +117,7 @@ fun AppsBypassScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     color = colors.Text,
                 )
                 Text(
-                    text = "Выбранные ходят напрямую, без туннеля",
+                    text = "Выбранные приложения работают в обход сети",
                     fontFamily = Montserrat,
                     fontSize = 12.sp,
                     color = colors.Dim,
@@ -134,7 +134,7 @@ fun AppsBypassScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         ) {
             if (query.isEmpty()) {
                 Text(
-                    text = "Поиск по названию",
+                    text = "Поиск",
                     fontFamily = Montserrat,
                     fontSize = 14.sp,
                     color = colors.Dim2,
@@ -157,7 +157,7 @@ fun AppsBypassScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = if (selected.isEmpty()) "Ничего не выбрано" else "Выбрано: ${selected.size}",
+                text = if (selected.isEmpty()) "Ни одно приложение не выбрано" else "Выбрано: ${selected.size}",
                 fontFamily = RobotoMono,
                 fontSize = 11.sp,
                 letterSpacing = 0.6.sp,
@@ -165,7 +165,7 @@ fun AppsBypassScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 modifier = Modifier.weight(1f),
             )
             Text(
-                text = if (showSystem) "скрыть системные" else "показать системные",
+                text = if (showSystem) "Скрыть системные" else "Показать системные",
                 fontFamily = Montserrat,
                 fontSize = 12.sp,
                 color = colors.Accent,

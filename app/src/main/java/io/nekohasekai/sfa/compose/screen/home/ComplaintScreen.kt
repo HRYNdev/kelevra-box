@@ -48,7 +48,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * «Столкнулись с проблемой? Опишите её, и мы исправим».
+ * Сообщение о проблеме.
  *
  * К тексту сама прикладывается техническая справка: без неё человек не сможет
  * рассказать то, что нужно для разбора, а сочинять её он не должен.
@@ -118,7 +118,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
 
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad)) {
             Text(
-                text = "Столкнулись с проблемой? Опишите её, и мы исправим.",
+                text = "Опишите, что работает не так. К сообщению будет приложена техническая информация о подключении.",
                 fontFamily = Montserrat,
                 fontSize = 14.sp,
                 color = colors.Dim,
@@ -135,7 +135,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
             ) {
                 if (text.isEmpty()) {
                     Text(
-                        text = "Например: не открывается озон, когда я на мобильном интернете",
+                        text = "Например: сайт не открывается при мобильном интернете",
                         fontFamily = Montserrat,
                         fontSize = 14.sp,
                         color = colors.Dim2,
@@ -160,7 +160,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
                 horizontalArrangement = Arrangement.Start,
             ) {
                 Text(
-                    text = "К сообщению приложится техническая справка",
+                    text = "К сообщению прилагается техническая информация",
                     fontFamily = Montserrat,
                     fontSize = 13.sp,
                     color = colors.Dim,
@@ -178,7 +178,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
             }
 
             KButton(
-                text = if (sending) "Отправляю…" else "Отправить",
+                text = if (sending) "Отправка…" else "Отправить",
                 enabled = text.isNotBlank() && !sending,
                 onClick = {
                     sending = true
@@ -190,7 +190,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
                         sending = false
                         result.fold(
                             onSuccess = { ticket = it },
-                            onFailure = { error = "Не получилось отправить. Проверьте связь и попробуйте ещё раз." },
+                            onFailure = { error = "Не удалось отправить. Проверьте подключение и повторите." },
                         )
                     }
                 },
