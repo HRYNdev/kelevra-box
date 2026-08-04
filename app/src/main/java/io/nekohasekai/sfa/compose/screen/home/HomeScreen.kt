@@ -17,6 +17,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,8 +71,6 @@ fun HomeScreen(
     channels: List<ChannelRow>,
     hasProfile: Boolean,
     transport: String? = null,
-    subscriptionName: String? = null,
-    subscriptionNote: String? = null,
     onToggle: () -> Unit,
     onSelectChannel: (String) -> Unit,
     onConnect: () -> Unit,
@@ -81,6 +80,11 @@ fun HomeScreen(
     val running = serviceStatus == Status.Started
     val busy = serviceStatus == Status.Starting || serviceStatus == Status.Stopping
     var showExits by remember { mutableStateOf(false) }
+    var subscription by remember { mutableStateOf<SubscriptionInfo?>(null) }
+
+    LaunchedEffect(hasProfile, running) {
+        if (hasProfile) subscription = loadSubscription()
+    }
 
     val state = when {
         busy -> DialState.Busy
@@ -156,12 +160,13 @@ fun HomeScreen(
                 Spacer(Modifier.height(KDim.Gap))
             }
 
-            if (!subscriptionName.isNullOrBlank()) {
+            val sub = subscription
+            if (sub != null) {
                 KCard {
                     KRowItem(
                         label = "Подписка",
-                        title = subscriptionName,
-                        subtitle = subscriptionNote,
+                        title = sub.name,
+                        subtitle = sub.note,
                     )
                 }
             }
