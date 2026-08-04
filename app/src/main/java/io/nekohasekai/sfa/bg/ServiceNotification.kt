@@ -94,7 +94,7 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
         service.startForeground(
             notificationId,
             notificationBuilder
-                .setContentTitle(lastProfileName.takeIf { it.isNotBlank() } ?: service.getString(R.string.app_name))
+                .setContentTitle(service.getString(R.string.app_name))
                 .setContentText(service.getString(contentTextId)).build(),
         )
     }
