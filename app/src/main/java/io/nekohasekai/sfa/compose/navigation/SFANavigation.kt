@@ -25,6 +25,7 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
 import io.nekohasekai.sfa.compose.screen.home.AdvancedScreen
+import io.nekohasekai.sfa.compose.screen.home.AppsBypassScreen
 import io.nekohasekai.sfa.compose.screen.home.ChannelRow
 import io.nekohasekai.sfa.compose.screen.home.ComplaintScreen
 import io.nekohasekai.sfa.compose.screen.home.ConnectScreen
@@ -595,6 +596,34 @@ fun SFANavHost(
             )
         }
 
+        // журнал и соединения как подэкраны расширенных: корневые вкладки ломали
+        // стек возврата и попадали под сторож маршрутов
+        composable(
+            route = "advanced/log",
+            enterTransition = slideInFromRight,
+            exitTransition = slideOutToLeft,
+            popEnterTransition = slideInFromLeft,
+            popExitTransition = slideOutToRight,
+        ) {
+            LogScreen(serviceStatus = serviceStatus, showStartFab = false, showStatusBar = false)
+        }
+
+        composable(
+            route = "advanced/connections",
+            enterTransition = slideInFromRight,
+            exitTransition = slideOutToLeft,
+            popEnterTransition = slideInFromLeft,
+            popExitTransition = slideOutToRight,
+        ) {
+            ConnectionsPage(
+                serviceStatus = serviceStatus,
+                showTitle = true,
+                showTopBar = true,
+                onConnectionClick = { id -> navController.navigate("connections/detail/" + Uri.encode(id)) },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+
         // жалоба: текст + техническая справка уходят на свой сервер
         composable(
             route = "complaint",
@@ -633,10 +662,9 @@ fun SFANavHost(
                 onBack = { navController.popBackStack() },
                 connectionsCount = uiState?.connectionsCount ?: 0,
                 onAppsBypass = { navController.navigate("settings/profile_override/manage") },
-                onLog = { navController.navigate(Screen.Log.route) },
-                onConnections = { navController.navigate(Screen.Connections.route) },
+                onLog = { navController.navigate("advanced/log") },
+                onConnections = { navController.navigate("advanced/connections") },
                 onCheck = { navController.navigate("settings/diagnostics") },
-                onCore = { navController.navigate("settings/core") },
             )
         }
 
@@ -708,7 +736,9 @@ fun SFANavHost(
             popEnterTransition = slideInFromLeft,
             popExitTransition = slideOutToRight,
         ) {
-            PerAppProxyScreen(onBack = { navController.navigateUp() }, serviceStatus = serviceStatus)
+            // свой экран вместо чужого: тот показывал системные службы вперемешку
+            // с приложениями и подписывал всё по-английски
+            AppsBypassScreen(onBack = { navController.navigateUp() })
         }
 
         composable(
