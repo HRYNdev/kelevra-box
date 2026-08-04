@@ -66,6 +66,8 @@ data class DashboardUiState(
     val channelRows: List<Triple<String, Int, Boolean>> = emptyList(),
     // группа, внутри которой человек выбирает выход руками
     val channelGroupTag: String? = null,
+    // какой канал внутри узла сейчас активен: по нему определяется транспорт
+    val activeChannel: String? = null,
     val deprecatedNotes: List<DeprecatedNote> = emptyList(),
     val showDeprecatedDialog: Boolean = false,
     val showAddProfileSheet: Boolean = false,
@@ -671,33 +673,27 @@ class DashboardViewModel :
     override fun updateGroups(newGroups: MutableList<OutboundGroup>) {
         viewModelScope.launch(Dispatchers.Main) {
             val hasGroups = newGroups.isNotEmpty()
-            // Человеку нужен реальный канал, а не название группы: если выбрана
-            // группа автовыбора — разворачиваем её и показываем, что выбрано внутри.
-            val byTag = newGroups.associateBy { it.tag }
-            var active = newGroups.firstOrNull()?.selected?.takeIf { it.isNotBlank() }
-            var guard = 0
-            while (active != null && byTag.containsKey(active) && guard++ < 4) {
-                val group = byTag[active]
-                val chosen = group?.selected?.takeIf { it.isNotBlank() }
-                // группа автовыбора отдаёт пустой selected, пока сама не решила;
-                // тогда показываем самый быстрый канал — именно его она и возьмёт
-                active = chosen ?: group?.items?.toList()
-                    ?.filter { it.urlTestDelay > 0 }
-                    ?.minByOrNull { it.urlTestDelay }
-                    ?.tag
+            // Ядро отдаёт наверх только группы с выбором внутри. Каждая такая группа —
+            // это УЗЕЛ («Нидерланды»), а внутри неё транспорты («прямой», «запасной»).
+            // Человеку показываем узлы; каким транспортом узел ходит — деталь.
+            val nodes = newGroups.map { group ->
+                val items = group.items.toList()
+                val chosen = items.firstOrNull { it.tag == group.selected }
+                    ?: items.filter { it.urlTestDelay > 0 }.minByOrNull { it.urlTestDelay }
+                Triple(group.tag, chosen?.urlTestDelay ?: 0, chosen?.tag)
             }
-            // строки каналов берём из группы автовыбора: там реальные выходы с задержкой
-            val autoGroup = newGroups.firstOrNull { it.items.toList().size > 1 } ?: newGroups.firstOrNull()
-            val rows = autoGroup?.items?.toList().orEmpty().map { item ->
-                Triple(item.tag, item.urlTestDelay, item.tag == autoGroup?.selected)
-            }
+            val activeNode = nodes.firstOrNull()
             updateState {
                 copy(
                     hasGroups = hasGroups,
                     groupsCount = newGroups.size,
-                    activeOutbound = active,
-                    channelRows = rows,
-                    channelGroupTag = autoGroup?.tag,
+                    activeOutbound = activeNode?.first,
+                    // транспорт активного узла: имя выбранного канала внутри него
+                    activeChannel = activeNode?.third,
+                    channelRows = nodes.map { (tag, delay, _) ->
+                        Triple(tag, delay, tag == activeNode?.first)
+                    },
+                    channelGroupTag = newGroups.firstOrNull()?.tag,
                 )
             }
         }
