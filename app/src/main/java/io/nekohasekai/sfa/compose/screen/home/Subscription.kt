@@ -1,0 +1,85 @@
+package io.nekohasekai.sfa.compose.screen.home
+
+import io.nekohasekai.sfa.database.ProfileManager
+import io.nekohasekai.sfa.database.Settings
+import io.nekohasekai.sfa.database.TypedProfile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Locale
+
+/** Сводка о подписке для главного экрана. */
+data class SubscriptionInfo(
+    val name: String,
+    val active: Boolean,
+    val expires: String?,
+    val limitBytes: Long,
+    val usedBytes: Long,
+) {
+    /** Одна строка под именем: срок и трафик, если они вообще заданы. */
+    val note: String
+        get() {
+            val parts = mutableListOf<String>()
+            expires?.let { parts += "до ${humanDate(it)}" }
+            if (limitBytes > 0) {
+                parts += "${gigabytes(usedBytes)} из ${gigabytes(limitBytes)} ГБ"
+            } else {
+                parts += "без ограничений"
+            }
+            return parts.joinToString(" · ")
+        }
+}
+
+private fun gigabytes(bytes: Long): String = String.format(Locale.US, "%.0f", bytes / 1024.0 / 1024.0 / 1024.0)
+
+private val MONTHS = listOf(
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+
+/** «2026-09-12» -> «12 сентября»: дату человек читает словами, не цифрами. */
+private fun humanDate(iso: String): String = runCatching {
+    val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(iso) ?: return iso
+    val cal = java.util.Calendar.getInstance().apply { time = date }
+    "${cal.get(java.util.Calendar.DAY_OF_MONTH)} ${MONTHS[cal.get(java.util.Calendar.MONTH)]}"
+}.getOrDefault(iso)
+
+/**
+ * Тянет сводку с того же сервера, что отдаёт конфиг: /k/<код>/info.
+ *
+ * Код нигде отдельно не хранится — он уже зашит в адрес подписки выбранного
+ * профиля, оттуда его и берём.
+ */
+suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) {
+    runCatching {
+        val id = Settings.selectedProfile
+        if (id == -1L) return@runCatching null
+        val profile = ProfileManager.get(id) ?: return@runCatching null
+        if (profile.typed.type != TypedProfile.Type.Remote) return@runCatching null
+        val remote = profile.typed.remoteURL.trimEnd('/')
+        if (!remote.contains("/k/")) return@runCatching null
+
+        val conn = URL("$remote/info").openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 10000
+        conn.readTimeout = 10000
+        conn.setRequestProperty("User-Agent", "kelevra")
+        val code = conn.responseCode
+        val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
+            ?.bufferedReader()?.readText().orEmpty()
+        conn.disconnect()
+        if (code !in 200..299) return@runCatching null
+
+        val json = JSONObject(text)
+        SubscriptionInfo(
+            name = json.optString("name"),
+            active = json.optBoolean("active"),
+            expires = json.optString("expires").takeIf { it.isNotBlank() && it != "null" },
+            limitBytes = json.optLong("limit_bytes"),
+            usedBytes = json.optLong("used_bytes"),
+        )
+    }.getOrNull()
+}
