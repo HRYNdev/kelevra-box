@@ -1,45 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Иконка Kelevra: то же кольцо, что и на главном экране приложения.
+  Adaptive-icon обрезает края, поэтому кольцо держим в центральной трети.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="1024"
-    android:viewportHeight="1024">
-    <group android:translateY="-25">
-        <path
-            android:pathData="M512,262 754.5,402 512,542 269.5,402Z"
-            android:fillColor="#42555F" />
-        <path
-            android:pathData="M269.5,402 512,542 512,812 269.5,672Z"
-            android:fillColor="#232F37" />
-        <path
-            android:pathData="M512,542 754.5,402 754.5,672 512,812Z"
-            android:fillColor="#34444F" />
-        <path
-            android:pathData="M390.75,472 633.25,332"
-            android:strokeColor="#141E24"
-            android:strokeWidth="4" />
-        <path
-            android:pathData="M512,262 754.5,402"
-            android:strokeColor="#66808D"
-            android:strokeWidth="2.5" />
-        <path
-            android:pathData="M512,262 269.5,402"
-            android:strokeColor="#5A737F"
-            android:strokeWidth="2.5" />
-        <path
-            android:pathData="M512,542 512,812"
-            android:strokeColor="#445963"
-            android:strokeWidth="2" />
-        <path
-            android:pathData="M356.8,351.6 390.75,332 633.25,472 599.3,491.6Z"
-            android:fillColor="#99AAB5" />
-        <path
-            android:pathData="M390.75,332 424.7,312.4 667.2,452.4 633.25,472Z"
-            android:fillColor="#E1E8ED" />
-        <path
-            android:pathData="M599.3,491.6 633.25,472 633.25,592 599.3,611.6Z"
-            android:fillColor="#8296A1" />
-        <path
-            android:pathData="M633.25,472 667.2,452.4 667.2,572.4 633.25,592Z"
-            android:fillColor="#CCD6DD" />
-    </group>
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M54,54m-27,0a27,27 0,1 1,54 0a27,27 0,1 1,-54 0"
+        android:strokeWidth="4"
+        android:strokeAlpha="1"
+        android:fillColor="#00000000">
+        <aapt:attr xmlns:aapt="http://schemas.android.com/aapt" name="android:strokeColor">
+            <gradient
+                android:startX="27" android:startY="27"
+                android:endX="81" android:endY="81"
+                android:type="linear">
+                <item android:offset="0" android:color="#FF35D0A5" />
+                <item android:offset="1" android:color="#FF2BA6FF" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:pathData="M54,54m-19,0a19,19 0,1 1,38 0a19,19 0,1 1,-38 0"
+        android:fillAlpha="0.16">
+        <aapt:attr xmlns:aapt="http://schemas.android.com/aapt" name="android:fillColor">
+            <gradient
+                android:centerX="54" android:centerY="54" android:gradientRadius="19"
+                android:type="radial">
+                <item android:offset="0" android:color="#8035D0A5" />
+                <item android:offset="1" android:color="#0035D0A5" />
+            </gradient>
+        </aapt:attr>
+    </path>
 </vector>
