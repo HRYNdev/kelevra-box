@@ -71,6 +71,7 @@ fun HomeScreen(
     channels: List<ChannelRow>,
     hasProfile: Boolean,
     transport: String? = null,
+    activeChannel: String? = null,
     onToggle: () -> Unit,
     onSelectChannel: (String) -> Unit,
     onConnect: () -> Unit,
@@ -99,7 +100,7 @@ fun HomeScreen(
         else -> null
     }
     // транспорт активного выхода знает только сервер: ядро наверх его не отдаёт
-    val activeTransport = transport ?: subscription?.transports?.get(activeOutbound)
+    val activeTransport = transport ?: subscription?.transports?.get(activeChannel)
     val meta = buildString {
         if (running) {
             if (!activeTransport.isNullOrBlank()) append(activeTransport)
