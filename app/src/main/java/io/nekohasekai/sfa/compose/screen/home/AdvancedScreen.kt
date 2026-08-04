@@ -49,6 +49,7 @@ fun AdvancedScreen(
     onAppsBypass: () -> Unit,
     onConnections: () -> Unit,
     onCheck: () -> Unit,
+    onLog: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -108,9 +109,13 @@ fun AdvancedScreen(
                     chevron = true,
                     onClick = onConnections,
                 )
-                // «Журнал» убран: логи ядра до приложения не доезжают даже при
-                // включённом логировании в конфиге. Мёртвый пункт хуже отсутствующего;
-                // вернуть, когда подписка на лог-канал заработает
+                KDivider()
+                KRowItem(
+                    title = "Журнал",
+                    subtitle = "Подробный лог работы",
+                    chevron = true,
+                    onClick = onLog,
+                )
             }
 
             Spacer(Modifier.height(22.dp))
