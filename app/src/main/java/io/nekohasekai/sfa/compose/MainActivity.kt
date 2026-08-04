@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material.icons.filled.UnfoldMore
+import androidx.compose.material.icons.outlined.RadioButtonChecked
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -124,6 +126,8 @@ import io.nekohasekai.sfa.compose.screen.tools.OpenVPNStatusViewModel
 import io.nekohasekai.sfa.compose.screen.tools.TailscaleSSHSharedViewModel
 import io.nekohasekai.sfa.compose.screen.tools.TailscaleStatusViewModel
 import io.nekohasekai.sfa.compose.screen.usbip.USBIPStatusViewModel
+import io.nekohasekai.sfa.compose.theme.KTab
+import io.nekohasekai.sfa.compose.theme.KTabBar
 import io.nekohasekai.sfa.compose.theme.SFATheme
 import io.nekohasekai.sfa.compose.topbar.LocalTopBarController
 import io.nekohasekai.sfa.compose.topbar.TopBarController
@@ -795,7 +799,10 @@ class MainActivity :
         val isGroupsRoute = currentRootRoute == Screen.Groups.route
         val isLogRoute = currentRootRoute == Screen.Log.route
 
-        val isSubScreen = isSettingsSubScreen || isToolsSubScreen || isConnectionsDetail || isProfileRoute
+        // свои экраны поверх вкладок: подключение по коду и жалоба
+        val isOwnFullScreen = currentRoute == "connect" || currentRoute == "complaint"
+        val isSubScreen =
+            isSettingsSubScreen || isToolsSubScreen || isConnectionsDetail || isProfileRoute || isOwnFullScreen
         // Get LogViewModel instance if we're on the Log screen
         val logViewModel: LogViewModel? =
             if (isLogRoute) {
@@ -881,6 +888,9 @@ class MainActivity :
         val allowedRoutes =
             buildSet {
                 add(Screen.Dashboard.route)
+                // без этого сторож маршрутов выкидывает свои экраны обратно на главный
+                add("connect")
+                add("complaint")
                 add(Screen.Log.route)
                 add(Screen.Tools.route)
                 add(Screen.Settings.route)
@@ -968,7 +978,9 @@ class MainActivity :
                 val serviceRunning =
                     currentServiceStatus == Status.Started || currentServiceStatus == Status.Starting
                 val showStatusBar = isRemote || serviceRunning || currentServiceStatus == Status.Stopping
-                val showStartFab = !isRemote && !serviceRunning && dashboardUiState.selectedProfileId != -1L
+                // плавающей кнопки нет: включение живёт в круге на главном экране,
+                // вторая кнопка в углу только сбивает
+                val showStartFab = false
 
                 SFANavHost(
                     navController = navController,
@@ -996,36 +1008,8 @@ class MainActivity :
                     openVPNStatusViewModel = openVPNStatusViewModel,
                     modifier = Modifier.fillMaxSize(),
                 )
-                if (!useNavigationRail) {
-                    if (isRemote) {
-                        RemoteStatusBar(
-                            visible = !isSubScreen,
-                            serverName = remoteServer?.displayName ?: "",
-                            isConnected = remoteConnected,
-                            startTime = remoteStartedAt,
-                            groupsCount = dashboardUiState.groupsCount,
-                            hasGroups = dashboardUiState.hasGroups,
-                            onGroupsClick = { showGroupsSheet = true },
-                            connectionsCount = dashboardUiState.connectionsCount,
-                            onConnectionsClick = { showConnectionsSheet = true },
-                            onDisconnectClick = { RemoteControlManager.exitRemoteControl() },
-                            modifier = Modifier.align(Alignment.BottomCenter),
-                        )
-                    } else {
-                        ServiceStatusBar(
-                            visible = showStatusBar && !isSubScreen,
-                            serviceStatus = currentServiceStatus,
-                            startTime = dashboardUiState.serviceStartTime,
-                            groupsCount = dashboardUiState.groupsCount,
-                            hasGroups = dashboardUiState.hasGroups,
-                            onGroupsClick = { showGroupsSheet = true },
-                            connectionsCount = dashboardUiState.connectionsCount,
-                            onConnectionsClick = { showConnectionsSheet = true },
-                            onStopClick = { dashboardViewModel.toggleService() },
-                            modifier = Modifier.align(Alignment.BottomCenter),
-                        )
-                    }
-                }
+                // полоса состояния снизу — чужой элемент sing-box: дублирует круг
+                // и лезет на наши вкладки. Убрана вместе с остальным чужим.
 
                 val showPadFab = useNavigationRail && !isSubScreen && (showStartFab || showStatusBar)
                 if (useNavigationRail) {
@@ -1141,31 +1125,9 @@ class MainActivity :
                             )
                         }
                     }
-                } else {
-                    // Start FAB (shown when service is stopped and a profile is selected)
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = !isRemote &&
-                            currentServiceStatus == Status.Stopped &&
-                            dashboardUiState.selectedProfileId != -1L &&
-                            !isSubScreen,
-                        enter = scaleIn(),
-                        exit = scaleOut(),
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(16.dp),
-                    ) {
-                        FloatingActionButton(
-                            onClick = { startService() },
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = stringResource(R.string.action_start),
-                            )
-                        }
-                    }
                 }
+                // на телефоне плавающей кнопки нет: включение живёт в круге,
+                // вторая кнопка в углу дублирует его и сбивает
             }
         }
 
@@ -1237,44 +1199,27 @@ class MainActivity :
                     topBar = topBarContent,
                     bottomBar = {
                         if (!isSubScreen) {
-                            val hasUpdate by UpdateState.hasUpdate
-                            NavigationBar {
-                                bottomNavigationScreens.forEach { screen ->
-                                    NavigationBarItem(
-                                        icon = {
-                                            if (screen == Screen.Settings && hasUpdate) {
-                                                BadgedBox(badge = { Badge(containerColor = MaterialTheme.colorScheme.primary) }) {
-                                                    Icon(screen.icon, contentDescription = null)
-                                                }
-                                            } else if (screen == Screen.Tools && toolsUnreadCount > 0) {
-                                                BadgedBox(badge = { Badge(containerColor = MaterialTheme.colorScheme.error) { Text("$toolsUnreadCount") } }) {
-                                                    Icon(screen.icon, contentDescription = null)
-                                                }
-                                            } else {
-                                                Icon(screen.icon, contentDescription = null)
-                                            }
-                                        },
-                                        label = { Text(stringResource(screen.titleRes)) },
-                                        selected =
-                                        currentDestination?.hierarchy?.any {
-                                            it.route == screen.route
-                                        } == true,
-                                        onClick = {
-                                            navController.navigate(screen.route) {
-                                                // Pop up to the start destination of the graph to
-                                                // avoid building up a large stack of destinations
-                                                popUpTo(navController.graph.findStartDestination().id) {
-                                                    saveState = true
-                                                }
-                                                // Avoid multiple copies of the same destination
-                                                launchSingleTop = true
-                                                // Restore state when reselecting a previously selected item
-                                                restoreState = true
-                                            }
-                                        },
-                                    )
-                                }
-                            }
+                            // своя панель: две вкладки в языке продукта, без материаловского вида
+                            val tabs = listOf(
+                                KTab(stringResource(R.string.title_dashboard), Icons.Outlined.RadioButtonChecked),
+                                KTab(stringResource(R.string.title_settings), Icons.Outlined.Settings),
+                            )
+                            val selectedTab =
+                                if (currentRootRoute == Screen.Settings.route) 1 else 0
+                            KTabBar(
+                                tabs = tabs,
+                                selected = selectedTab,
+                                onSelect = { index ->
+                                    val screen = bottomNavigationScreens[index]
+                                    navController.navigate(screen.route) {
+                                        popUpTo(navController.graph.findStartDestination().id) {
+                                            saveState = true
+                                        }
+                                        launchSingleTop = true
+                                        restoreState = true
+                                    }
+                                },
+                            )
                         }
                     },
                 ) { paddingValues ->

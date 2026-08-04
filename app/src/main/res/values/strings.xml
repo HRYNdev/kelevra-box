@@ -2,91 +2,91 @@
 <resources>
     <!-- App -->
     <string name="app_name" translatable="false">Kelevra</string>
-    <string name="app_version_title">App version</string>
-    <string name="language">Language</string>
-    <string name="system_default">System default</string>
+    <string name="app_version_title">Версия приложения</string>
+    <string name="language">Язык</string>
+    <string name="system_default">Как в системе</string>
 
     <!-- Common Actions -->
-    <string name="ok">OK</string>
-    <string name="cancel">Cancel</string>
-    <string name="save">Save</string>
+    <string name="ok">ОК</string>
+    <string name="cancel">Отмена</string>
+    <string name="save">Сохранить</string>
     <string name="discard">Discard</string>
-    <string name="edit">Edit</string>
-    <string name="close">Close</string>
+    <string name="edit">Изменить</string>
+    <string name="close">Закрыть</string>
     <string name="dismiss">Dismiss</string>
-    <string name="stop">Stop</string>
-    <string name="reset">Reset</string>
+    <string name="stop">Остановить</string>
+    <string name="reset">Сбросить</string>
     <string name="destroy">Destroy</string>
     <string name="clear">Clear</string>
-    <string name="browse">Browse</string>
+    <string name="browse">Выбрать</string>
     <string name="search">Search</string>
-    <string name="action">Action</string>
-    <string name="action_start">Start</string>
+    <string name="action">Действие</string>
+    <string name="action_start">Запустить</string>
     <string name="action_deselect">Deselect</string>
-    <string name="action_reload">Reload</string>
-    <string name="action_restart">Restart</string>
-    <string name="expand">Expand</string>
-    <string name="collapse">Collapse</string>
-    <string name="expand_all">Expand All</string>
-    <string name="collapse_all">Collapse All</string>
+    <string name="action_reload">Перечитать</string>
+    <string name="action_restart">Перезапустить</string>
+    <string name="expand">Развернуть</string>
+    <string name="collapse">Свернуть</string>
+    <string name="expand_all">Развернуть всё</string>
+    <string name="collapse_all">Свернуть всё</string>
     <string name="previous">Previous</string>
     <string name="next">Next</string>
-    <string name="update">Update</string>
-    <string name="read_more">Read More</string>
-    <string name="no_thanks">No, thanks</string>
+    <string name="update">Обновить</string>
+    <string name="read_more">Подробнее</string>
+    <string name="no_thanks">Не нужно</string>
     <string name="options">Options</string>
-    <string name="more_options">More options</string>
+    <string name="more_options">Ещё</string>
 
     <!-- Common States -->
-    <string name="enabled">Enabled</string>
+    <string name="enabled">Включено</string>
     <string name="disabled">Disabled</string>
-    <string name="loading">Loading…</string>
-    <string name="calculating">Calculating...</string>
+    <string name="loading">Загружаю…</string>
+    <string name="calculating">Считаю…</string>
     <string name="auto">Auto</string>
     <string name="success">Success</string>
     <string name="default_text">Default</string>
 
     <!-- Navigation Titles -->
-    <string name="title_dashboard">Dashboard</string>
-    <string name="title_configuration">Profiles</string>
-    <string name="title_log">Logs</string>
-    <string name="title_settings">Settings</string>
-    <string name="title_app_settings">App</string>
+    <string name="title_dashboard">Сеть</string>
+    <string name="title_configuration">Подключения</string>
+    <string name="title_log">Журнал</string>
+    <string name="title_settings">Настройки</string>
+    <string name="title_app_settings">Приложение</string>
     <string name="title_new_profile">New Profile</string>
     <string name="title_edit_profile">Edit Profile</string>
     <string name="title_edit_configuration">Edit Configuration</string>
-    <string name="title_groups">Groups</string>
-    <string name="title_debug">Debug</string>
-    <string name="title_connections">Connections</string>
-    <string name="title_others">Others</string>
+    <string name="title_groups">Каналы</string>
+    <string name="title_debug">Отладка</string>
+    <string name="title_connections">Соединения</string>
+    <string name="title_others">Прочее</string>
     <string name="title_scan_result">Scan Result</string>
 
     <!-- Status -->
     <string name="status_default">Service not started</string>
-    <string name="status_starting">Starting</string>
-    <string name="status_stopping">Stopping</string>
-    <string name="status_started">Started</string>
+    <string name="status_starting">Запускаю</string>
+    <string name="status_stopping">Останавливаю</string>
+    <string name="status_started">Работает</string>
 
     <!-- Dashboard -->
-    <string name="dashboard_items">Dashboard Items</string>
-    <string name="memory">Memory</string>
-    <string name="goroutines">Goroutines</string>
+    <string name="dashboard_items">Что показывать на главной</string>
+    <string name="memory">Память</string>
+    <string name="goroutines">Потоки</string>
     <string name="upload">Upload</string>
-    <string name="download">Download</string>
-    <string name="connections_in">Inbound</string>
-    <string name="connections_out">Outbound</string>
-    <string name="clash_mode">Clash Mode</string>
-    <string name="mode">Mode</string>
-    <string name="system_proxy">System Proxy</string>
-    <string name="url_test">Test</string>
+    <string name="download">Скачать</string>
+    <string name="connections_in">Входящие</string>
+    <string name="connections_out">Исходящие</string>
+    <string name="clash_mode">Режим Clash</string>
+    <string name="mode">Режим</string>
+    <string name="system_proxy">Системный прокси</string>
+    <string name="url_test">Проверить</string>
     <string name="drag_handle_to_reorder">Drag handle to reorder items</string>
-    <string name="drag_to_reorder">Drag to reorder</string>
-    <string name="reset_order">Reset order</string>
+    <string name="drag_to_reorder">Перетащите, чтобы поменять порядок</string>
+    <string name="reset_order">Вернуть порядок</string>
 
     <!-- Connections -->
     <string name="empty_connections">No connections</string>
     <string name="search_connections">Search connections…</string>
-    <string name="close_connections_confirm">Close all connections?</string>
+    <string name="close_connections_confirm">Закрыть все соединения?</string>
     <string name="connection_state_all">All</string>
     <string name="connection_state_active">Active</string>
     <string name="connection_state_closed">Closed</string>
@@ -127,34 +127,34 @@
 
     <!-- Profiles -->
     <string name="no_profiles">No profiles configured</string>
-    <string name="add_profile">Add Profile</string>
-    <string name="update_profile">Update profile</string>
+    <string name="add_profile">Добавить подключение</string>
+    <string name="update_profile">Обновить подключение</string>
     <string name="import_remote_profile">Import remote profile</string>
     <string name="import_remote_profile_message">Are you sure to import remote profile %1$s? You will connect to %2$s to download the configuration.</string>
-    <string name="import_from_file_description">Import configuration from a local file</string>
-    <string name="scan_qr_code_description">Scan a configuration QR code</string>
-    <string name="create_new_profile_description">Create a new profile from scratch</string>
+    <string name="import_from_file_description">Загрузить настройки из файла</string>
+    <string name="scan_qr_code_description">Отсканировать QR-код с настройками</string>
+    <string name="create_new_profile_description">Создать подключение с нуля</string>
     <string name="icloud_profile_unsupported">iCloud profile is not support on current platform</string>
-    <string name="profile_name">Name</string>
+    <string name="profile_name">Название</string>
     <string name="profile_type">Type</string>
     <string name="profile_source">Source</string>
     <string name="profile_url" translatable="false">URL</string>
     <string name="profile_import_file">Import File</string>
     <string name="profile_create">Create</string>
-    <string name="profile_share_url">Share URL as QR Code</string>
-    <string name="profile_input_required">Required</string>
+    <string name="profile_share_url">Показать QR-код</string>
+    <string name="profile_input_required">Обязательное поле</string>
     <string name="profile_update">Update</string>
     <string name="profile_auto_update">Auto Update</string>
     <string name="profile_auto_update_interval">Auto Update Interval (Minutes)</string>
     <string name="profile_auto_update_interval_minimum_hint">Minimum value is 15</string>
-    <string name="profile_type_local">Local</string>
-    <string name="profile_type_remote">Remote</string>
-    <string name="profile_type_remote_updated">Remote • %s</string>
+    <string name="profile_type_local">Локальное</string>
+    <string name="profile_type_remote">По ссылке</string>
+    <string name="profile_type_remote_updated">По ссылке • %s</string>
     <string name="profile_source_create_new">Create New</string>
     <string name="profile_source_import">Import</string>
-    <string name="profile_add_import_file">Import from file</string>
-    <string name="profile_add_scan_qr_code">Scan QR code</string>
-    <string name="profile_add_create_manually">Create Manually</string>
+    <string name="profile_add_import_file">Взять из файла</string>
+    <string name="profile_add_scan_qr_code">Сканировать QR-код</string>
+    <string name="profile_add_create_manually">Создать вручную</string>
     <string name="profile_override">Profile Override</string>
     <string name="basic_information">Basic Information</string>
     <string name="remote_configuration">Remote Configuration</string>
@@ -163,15 +163,15 @@
     <string name="json_viewer">JSON Viewer</string>
     <string name="json_editor">JSON Editor</string>
     <string name="view_configuration">View Configuration</string>
-    <string name="save_as_file">Save As File</string>
-    <string name="share_as_file">Share As File</string>
+    <string name="save_as_file">Сохранить в файл</string>
+    <string name="share_as_file">Отправить файлом</string>
     <string name="save_content_json">Save Content JSON File</string>
     <string name="share_content_json">Share Content JSON File</string>
     <string name="unsaved_changes">Unsaved Changes</string>
     <string name="unsaved_changes_message">You have unsaved changes. Do you want to discard them?</string>
-    <string name="import_profile_confirm_title">Import Profile</string>
-    <string name="import_profile_confirm_message">Import profile \"%s\"?</string>
-    <string name="import_action">Import</string>
+    <string name="import_profile_confirm_title">Загрузить подключение</string>
+    <string name="import_profile_confirm_message">Загрузить подключение «%s»?</string>
+    <string name="import_action">Загрузить</string>
 
     <!-- Groups -->
     <string name="group_selected_title">Selected</string>
@@ -187,38 +187,38 @@
     <string name="no_logs_to_share">No logs to share</string>
     <string name="intent_share_logs">Share Logs</string>
     <string name="selected_count">%d selected</string>
-    <string name="not_selected">Not selected</string>
+    <string name="not_selected">Не выбрано</string>
     <string name="save_to_clipboard">To Clipboard</string>
     <string name="save_to_file">To File</string>
 
     <!-- Settings -->
-    <string name="service">Service</string>
-    <string name="core">Core</string>
-    <string name="core_version_title">Core Version</string>
-    <string name="core_data_size">Data Size</string>
-    <string name="about">About</string>
+    <string name="service">Служба</string>
+    <string name="core">Ядро</string>
+    <string name="core_version_title">Версия ядра</string>
+    <string name="core_data_size">Размер данных</string>
+    <string name="about">О приложении</string>
     <string name="source_code">Source Code</string>
     <string name="sponsor">Sponsor</string>
-    <string name="working_directory">Working Directory</string>
+    <string name="working_directory">Рабочая папка</string>
     <string name="beta_settings">Beta Settings</string>
     <string name="disable_deprecated_warnings">Disable Deprecated Warnings</string>
-    <string name="cache_size">Cache Size</string>
-    <string name="clear_cache">Clear Cache</string>
-    <string name="notification_settings">Notification</string>
-    <string name="enable_notification">Enable Notification</string>
-    <string name="dynamic_notification">Display realtime speed in notification</string>
+    <string name="cache_size">Размер кэша</string>
+    <string name="clear_cache">Очистить кэш</string>
+    <string name="notification_settings">Уведомления</string>
+    <string name="enable_notification">Включить уведомления</string>
+    <string name="dynamic_notification">Показывать скорость в уведомлении</string>
     <string name="disable_notification_description">Due to Android restrictions, you must first grant notification permission, then go to Settings to disable the notification category.</string>
     <string name="disable_notification_description_legacy">Due to Android restrictions, you must first grant notification permission, then go to App Info to disable notifications.</string>
-    <string name="allow_bypass">Allow Bypass</string>
-    <string name="allow_bypass_description">If enabled, applications can bypass this VPN connection and instead use the underlying network directly.</string>
+    <string name="allow_bypass">Разрешать обход</string>
+    <string name="allow_bypass_description">Приложения смогут ходить в интернет напрямую, минуя сеть.</string>
     <string name="android_documentation">Android Documentation</string>
     <string name="auto_redirect">Auto Redirect</string>
     <string name="auto_redirect_description">ROOT permission required</string>
-    <string name="system_http_proxy">System HTTP Proxy</string>
-    <string name="update_settings">Update Settings</string>
+    <string name="system_http_proxy">Системный HTTP-прокси</string>
+    <string name="update_settings">Обновления</string>
 
     <!-- Per-App Proxy -->
-    <string name="per_app_proxy">Per-App Proxy</string>
+    <string name="per_app_proxy">Приложения мимо сети</string>
     <string name="per_app_proxy_mode">Proxy Mode</string>
     <string name="per_app_proxy_mode_include">Include</string>
     <string name="per_app_proxy_mode_include_description">Only selected apps are allowed through the VPN</string>
@@ -246,48 +246,48 @@
     <string name="per_app_proxy_export">Export to clipboard</string>
     <string name="per_app_proxy_scan">Scan</string>
     <string name="per_app_proxy_scan_china_apps">China apps</string>
-    <string name="per_app_proxy_manage">Manage</string>
+    <string name="per_app_proxy_manage">Настроить</string>
     <string name="content_description_app_icon">App icon</string>
-    <string name="per_app_proxy_managed_mode">Managed Mode</string>
-    <string name="per_app_proxy_managed_mode_description">Automatically Exclude China apps</string>
-    <string name="per_app_proxy_package_query_mode">Mode</string>
+    <string name="per_app_proxy_managed_mode">Автоматически</string>
+    <string name="per_app_proxy_managed_mode_description">Самому исключать китайские приложения</string>
+    <string name="per_app_proxy_package_query_mode">Режим</string>
     <string name="per_app_proxy_shizuku_required">When installed from the Play Store, per-app proxy requires Shizuku. Google Play refuses to allow us to use the QUERY_ALL_PACKAGES permission (while not prohibiting other similar apps from doing so), which is required for listing apps.</string>
     <string name="per_app_proxy_root_required">When installed from the Play Store, per-app proxy requires ROOT. Google Play refuses to allow us to use the QUERY_ALL_PACKAGES permission (while not prohibiting other similar apps from doing so), which is required for listing apps.</string>
     <string name="privileged_access_required">Root or Shizuku access required to get the complete app list</string>
 
     <!-- Permissions -->
-    <string name="background_permission">Background permission</string>
-    <string name="background_permission_description">Apply for the necessary permissions in order for the VPN to function properly.\n\nIf you are using a device made by a Chinese company, the card may not disappear after the permission is granted.</string>
-    <string name="request_background_permission">Ignore</string>
-    <string name="location_permission_title">Location permission</string>
+    <string name="background_permission">Работа в фоне</string>
+    <string name="background_permission_description">Выдайте нужные разрешения, чтобы сеть работала стабильно.\n\nНа телефонах китайских производителей карточка может не исчезнуть после выдачи разрешения.</string>
+    <string name="request_background_permission">Пропустить</string>
+    <string name="location_permission_title">Доступ к геопозиции</string>
     <string name="location_permission_description">Your profile contains &lt;strong&gt;&lt;tt&gt;wifi_ssid&lt;/tt&gt; or &lt;tt&gt;wifi_bssid&lt;/tt&gt; routing rules&lt;/strong&gt;. To make them work, sing-box uses the &lt;strong&gt;location&lt;/strong&gt; permission &lt;strong&gt;in the background&lt;/strong&gt; to get information about the connected Wi-Fi network. The information will be used &lt;strong&gt;for routing purposes only&lt;/strong&gt;.</string>
     <string name="location_permission_background_description">On Android 10 and up, &lt;strong&gt;background location&lt;/strong&gt; permission is required. Select &lt;strong&gt;Allow all the time&lt;/strong&gt; to grant the permission.</string>
-    <string name="notification_permission_title">Notification permission</string>
+    <string name="notification_permission_title">Разрешение на уведомления</string>
     <string name="notification_permission_required_description">sing-box is unable to show real-time network speeds without the permission to send notifications. Please grant the permission or disable real-time network speeds notification before starting the service.</string>
     <string name="root_access_required">Root access required</string>
     <string name="root_access_denied">Root access denied</string>
 
     <!-- Updates -->
-    <string name="check_update">Check Update</string>
-    <string name="check_update_automatic">Automatic Update Check</string>
+    <string name="check_update">Проверить обновления</string>
+    <string name="check_update_automatic">Проверять обновления самому</string>
     <string name="check_update_prompt_play">Would you like to enable automatic update checking from **Play Store**?</string>
     <string name="check_update_prompt_github">Would you like to enable automatic update checking from **GitHub**?</string>
-    <string name="update_source">Update Source</string>
+    <string name="update_source">Откуда обновлять</string>
     <string name="update_source_github">GitHub</string>
     <string name="update_source_fdroid">F-Droid</string>
     <string name="github_token">GitHub Token</string>
     <string name="github_token_description">Get higher GitHub API rate limits</string>
-    <string name="update_track">Update Track</string>
-    <string name="update_track_stable">Stable</string>
-    <string name="update_track_beta">Beta</string>
+    <string name="update_track">Ветка обновлений</string>
+    <string name="update_track_stable">Стабильная</string>
+    <string name="update_track_beta">Тестовая</string>
     <string name="update_track_not_supported">Current track does not support update checking yet</string>
     <string name="view_release">View Release</string>
-    <string name="downloading">Downloading…</string>
-    <string name="exporting">Exporting…</string>
-    <string name="no_updates_available">No updates available</string>
+    <string name="downloading">Скачиваю…</string>
+    <string name="exporting">Выгружаю…</string>
+    <string name="no_updates_available">Обновлений нет</string>
     <string name="new_version_available">New version available: %s</string>
-    <string name="auto_update">Auto Update</string>
-    <string name="auto_update_description">Automatically download and install updates in background</string>
+    <string name="auto_update">Обновлять автоматически</string>
+    <string name="auto_update_description">Скачивать и ставить обновления в фоне</string>
     <string name="fdroid_mirror">F-Droid Mirror</string>
     <string name="fdroid_mirror_test_all">Auto Select by Latency</string>
     <string name="fdroid_mirror_testing">Testing…</string>
@@ -303,16 +303,16 @@
     <string name="fdroid_mirror_delete">Delete</string>
 
     <!-- Silent Install -->
-    <string name="silent_install">Silent Install</string>
-    <string name="silent_install_description">Install updates without interaction</string>
+    <string name="silent_install">Ставить без вопросов</string>
+    <string name="silent_install_description">Обновлять без подтверждений</string>
     <string name="silent_install_method">Install Method</string>
     <string name="silent_install_verify_failed">%s is not available or permission denied</string>
     <string name="install_method_package_installer">PackageInstaller</string>
     <string name="install_method_shizuku">Shizuku</string>
     <string name="install_method_root">ROOT</string>
     <string name="package_installer_not_available">Install permission not granted</string>
-    <string name="grant_install_permission">Grant Install Permission</string>
-    <string name="grant_install_permission_description">Allow installing apps from this source</string>
+    <string name="grant_install_permission">Разрешить установку</string>
+    <string name="grant_install_permission_description">Разрешить ставить приложения из этого источника</string>
 
     <!-- Shizuku -->
     <string name="shizuku_not_available">Shizuku is not installed or not running</string>
@@ -346,35 +346,35 @@
     <string name="menu_undo">Undo</string>
     <string name="menu_redo">Redo</string>
     <string name="menu_format">Format</string>
-    <string name="menu_delete">Delete</string>
-    <string name="menu_share">Share</string>
+    <string name="menu_delete">Удалить</string>
+    <string name="menu_share">Поделиться</string>
 
     <!-- Errors -->
-    <string name="error_title">Error</string>
-    <string name="error_missing_vpn_permission">Missiong VPN permission</string>
-    <string name="error_empty_configuration">Empty configuration</string>
+    <string name="error_title">Ошибка</string>
+    <string name="error_missing_vpn_permission">Нет разрешения на VPN</string>
+    <string name="error_empty_configuration">Пустые настройки</string>
     <string name="error_empty_file">Empty file</string>
     <string name="error_decode_profile">Failed to decode profile: %s</string>
     <string name="error_invalid_configuration">Invalid sing-box configuration: %s</string>
-    <string name="error_start_command_server">Start command server</string>
-    <string name="error_create_service">Create service</string>
-    <string name="error_start_service">Start service</string>
+    <string name="error_start_command_server">Не удалось запустить сервер команд</string>
+    <string name="error_create_service">Не удалось создать службу</string>
+    <string name="error_start_service">Не удалось запустить</string>
     <string name="error_deprecated_warning">Deprecated Warning</string>
     <string name="error_deprecated_documentation">Documentation</string>
     <string name="file_manager_missing">Your device lacks an Android standard file selector, please install one, such as Material Files.</string>
-    <string name="no_file_manager">No file manager found</string>
+    <string name="no_file_manager">Не нашёл проводник</string>
 
     <!-- Failed Operations -->
-    <string name="failed_save_profile">Failed to save profile: %s</string>
+    <string name="failed_save_profile">Не удалось сохранить: %s</string>
     <string name="failed_save_logs">Failed to save logs: %s</string>
     <string name="failed_share_logs">Failed to share logs: %s</string>
     <string name="failed_read_configuration">Failed to read configuration: %s</string>
 
     <!-- Success Messages -->
-    <string name="success_profile_saved">Profile saved successfully</string>
+    <string name="success_profile_saved">Сохранено</string>
     <string name="success_logs_saved">Logs saved successfully</string>
     <string name="success_configuration_saved">Configuration saved</string>
-    <string name="copied_to_clipboard">Copied to clipboard</string>
+    <string name="copied_to_clipboard">Скопировано</string>
 
     <!-- Toast Messages -->
     <string name="toast_clipboard_empty">Clipboard is empty</string>
@@ -417,7 +417,7 @@
     <string name="search_placeholder">Find in document</string>
 
     <!-- Content Descriptions (Accessibility) -->
-    <string name="content_description_back">Back</string>
+    <string name="content_description_back">Назад</string>
     <string name="content_description_scroll_to_bottom">Scroll to bottom</string>
     <string name="content_description_exit_selection_mode">Exit selection mode</string>
     <string name="content_description_copy_selected">Copy selected</string>
@@ -429,7 +429,7 @@
     <string name="content_description_search_logs">Search logs</string>
 
     <!-- Tools -->
-    <string name="title_tools">Tools</string>
+    <string name="title_tools">Инструменты</string>
     <string name="title_network">Network</string>
     <string name="network_quality">Network Quality</string>
     <string name="network_quality_url">URL</string>
@@ -555,8 +555,8 @@
     <string name="report_configuration">Configuration</string>
     <string name="report_origin_local">Local</string>
     <string name="service_not_started">Service not started</string>
-    <string name="service_reload_required">Reload service to apply changes</string>
-    <string name="service_restart_required">Restart service to apply changes</string>
+    <string name="service_reload_required">Перечитайте настройки, чтобы применить</string>
+    <string name="service_restart_required">Перезапустите, чтобы применить</string>
 
     <!-- Crash Report -->
     <string name="crash_report">Crash Report</string>
@@ -612,23 +612,23 @@
     <string name="privilege_module_restart_channel">LSPosed Module</string>
 
     <!-- Remote Control -->
-    <string name="remote_control">Remote Control</string>
+    <string name="remote_control">Удалённое управление</string>
     <string name="remote_servers">Servers</string>
-    <string name="remote_no_servers">No servers</string>
-    <string name="remote_new_server">New Server</string>
-    <string name="remote_edit_server">Edit Server</string>
+    <string name="remote_no_servers">Серверов нет</string>
+    <string name="remote_new_server">Новый сервер</string>
+    <string name="remote_edit_server">Изменить сервер</string>
     <string name="remote_local_device">Local Device</string>
     <string name="remote_manage_servers">Manage Servers…</string>
-    <string name="remote_secret">Secret</string>
-    <string name="remote_optional">Optional</string>
-    <string name="remote_connecting">Connecting…</string>
-    <string name="remote_disconnect">Disconnect</string>
+    <string name="remote_secret">Пароль</string>
+    <string name="remote_optional">Необязательно</string>
+    <string name="remote_connecting">Подключаюсь…</string>
+    <string name="remote_disconnect">Отключиться</string>
     <string name="remote_invalid_url">Invalid server URL: %1$s, expected host:port, http://host:port or https://host:port</string>
     <string name="remote_connect_failed">Failed to connect to remote server %1$s</string>
     <string name="remote_disconnected_from">Disconnected from remote server %1$s</string>
-    <string name="remote_checking">Checking…</string>
-    <string name="remote_available">Available</string>
-    <string name="remote_unavailable">Unavailable</string>
+    <string name="remote_checking">Проверяю…</string>
+    <string name="remote_available">Доступен</string>
+    <string name="remote_unavailable">Недоступен</string>
 
     <string name="title_services">Services</string>
     <string name="title_usbip">USB/IP</string>
@@ -693,40 +693,40 @@
     <string name="endpoint_browser_navigation_failed">Browser navigation failed: %1$s</string>
     <string name="endpoint_browser_too_many_windows">The authentication page opened too many browser windows.</string>
     <string name="endpoint_browser_profile_unavailable">Browser authentication is unavailable on this device.</string>
-    <string name="profile_add_by_code">Connect by code</string>
-    <string name="profile_add_by_code_description">Enter access code or subscription link</string>
-    <string name="profile_add_by_code_hint">Enter the access code you were given, or paste a full subscription link.</string>
-    <string name="profile_add_by_code_label">Code or link</string>
-    <string name="profile_add_by_code_confirm">Connect</string>
-    <string name="state_protected">Protected</string>
-    <string name="state_connecting">Connecting…</string>
-    <string name="state_stopping">Stopping…</string>
-    <string name="state_off">Off</string>
-    <string name="card_status">Status</string>
-    <string name="title_diagnostics">Diagnostics</string>
-    <string name="diagnostics_run">Run checks</string>
-    <string name="first_run_hint">Enter the access code you were given — the rest is automatic.</string>
-    <string name="state_via">Via %1$s</string>
+    <string name="profile_add_by_code">Подключиться по коду</string>
+    <string name="profile_add_by_code_description">Введите код доступа или ссылку</string>
+    <string name="profile_add_by_code_hint">Введите код доступа, который вам дали, или вставьте ссылку целиком.</string>
+    <string name="profile_add_by_code_label">Код или ссылка</string>
+    <string name="profile_add_by_code_confirm">Подключиться</string>
+    <string name="state_protected">Включено</string>
+    <string name="state_connecting">Включаю…</string>
+    <string name="state_stopping">Выключаю…</string>
+    <string name="state_off">Выключено</string>
+    <string name="card_status">Состояние</string>
+    <string name="title_diagnostics">Проверка</string>
+    <string name="diagnostics_run">Проверить</string>
+    <string name="first_run_hint">Введите код доступа, который вам дали — дальше всё само.</string>
+    <string name="state_via">Через %1$s</string>
     <string name="home_tap_to_choose">Tap to choose exit</string>
-    <string name="settings_connect_title">Connection</string>
-    <string name="settings_connect_hint">Enter access code</string>
-    <string name="settings_autostart_title">Start with phone</string>
-    <string name="settings_autostart_hint">Turn on automatically after reboot</string>
-    <string name="settings_apps_title">Apps outside the network</string>
-    <string name="settings_apps_hint">Banks and state services go directly</string>
-    <string name="settings_check_hint">See what works and what does not</string>
-    <string name="settings_advanced">Advanced (for debugging)</string>
-    <string name="home_not_connected">not connected</string>
+    <string name="settings_connect_title">Подключение</string>
+    <string name="settings_connect_hint">Ввести код доступа</string>
+    <string name="settings_autostart_title">Включать вместе с телефоном</string>
+    <string name="settings_autostart_hint">Сеть поднимется сама после перезагрузки</string>
+    <string name="settings_apps_title">Приложения мимо сети</string>
+    <string name="settings_apps_hint">Банки и госуслуги идут напрямую</string>
+    <string name="settings_check_hint">Посмотреть, что работает, а что нет</string>
+    <string name="settings_advanced">Дополнительно</string>
+    <string name="home_not_connected">сеть выключена</string>
     <string name="home_turn_on">Turn on</string>
     <string name="home_turn_off">Turn off</string>
-    <string name="home_channels">Channels</string>
+    <string name="home_channels">КАНАЛЫ</string>
     <string name="home_uptime">Working %1$s</string>
-    <string name="app_eyebrow">YOUR NETWORK</string>
+    <string name="app_eyebrow">СВОЯ СЕТЬ</string>
     <string name="home_btn_on">[ TURN ON ]</string>
     <string name="home_btn_off">[ TURN OFF ]</string>
     <string name="home_btn_connect">[ CONNECT ]</string>
-    <string name="home_circle_connect">Connect</string>
-    <string name="settings_group_network">NETWORK</string>
-    <string name="settings_group_behavior">BEHAVIOR</string>
-    <string name="settings_group_service">SERVICE</string>
+    <string name="home_circle_connect">Подключить</string>
+    <string name="settings_group_network">СЕТЬ</string>
+    <string name="settings_group_behavior">ПОВЕДЕНИЕ</string>
+    <string name="settings_group_service">ОБСЛУЖИВАНИЕ</string>
 </resources>
