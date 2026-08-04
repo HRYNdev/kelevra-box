@@ -22,6 +22,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.runtime.remember
+import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KCard
@@ -47,7 +49,6 @@ fun AdvancedScreen(
     onLog: () -> Unit,
     onConnections: () -> Unit,
     onCheck: () -> Unit,
-    onCore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -86,13 +87,6 @@ fun AdvancedScreen(
                     chevron = true,
                     onClick = onAppsBypass,
                 )
-                KDivider()
-                KRowItem(
-                    title = "Ядро",
-                    subtitle = "Как работает соединение внутри",
-                    chevron = true,
-                    onClick = onCore,
-                )
             }
 
             KGroupTitle("Диагностика")
@@ -120,6 +114,17 @@ fun AdvancedScreen(
             }
 
             Spacer(Modifier.height(22.dp))
+            // версия ядра строкой: отдельный экран для неё вёл в чужие настройки
+            // с «Beta Settings» и кнопкой, стирающей данные
+            Text(
+                text = "ЯДРО ${remember { Libbox.version() }}",
+                fontFamily = RobotoMono,
+                fontSize = 10.sp,
+                letterSpacing = 1.4.sp,
+                color = colors.Dim2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(6.dp))
             Text(
                 text = "KELEVRA ${BuildConfig.VERSION_NAME}",
                 fontFamily = RobotoMono,
