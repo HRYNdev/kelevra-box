@@ -24,6 +24,7 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsPage
 import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
+import io.nekohasekai.sfa.compose.screen.home.AdvancedScreen
 import io.nekohasekai.sfa.compose.screen.home.ChannelRow
 import io.nekohasekai.sfa.compose.screen.home.ComplaintScreen
 import io.nekohasekai.sfa.compose.screen.home.ConnectScreen
@@ -624,9 +625,19 @@ fun SFANavHost(
             )
         }
 
-        // прежний экран настроек остаётся: там ядро, правила, профили
+        // свои расширенные настройки вместо экрана настроек sing-box:
+        // тот тащил за собой чужие разделы и ссылки на чужой проект
         composable("settings/all") {
-            SettingsScreen(navController = navController)
+            val uiState = dashboardViewModel?.uiState?.collectAsState()?.value
+            AdvancedScreen(
+                onBack = { navController.popBackStack() },
+                connectionsCount = uiState?.connectionsCount ?: 0,
+                onAppsBypass = { navController.navigate("settings/profile_override/manage") },
+                onLog = { navController.navigate(Screen.Log.route) },
+                onConnections = { navController.navigate(Screen.Connections.route) },
+                onCheck = { navController.navigate("settings/diagnostics") },
+                onCore = { navController.navigate("settings/core") },
+            )
         }
 
         // Settings subscreens with slide animations
