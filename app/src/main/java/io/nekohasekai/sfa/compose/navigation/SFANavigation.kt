@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -22,6 +25,8 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
 import io.nekohasekai.sfa.compose.screen.home.ChannelRow
+import io.nekohasekai.sfa.compose.screen.home.ComplaintScreen
+import io.nekohasekai.sfa.compose.screen.home.ConnectScreen
 import io.nekohasekai.sfa.compose.screen.home.HomeScreen
 import io.nekohasekai.sfa.compose.screen.home.SimpleSettingsScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.GroupsCard
@@ -122,20 +127,13 @@ fun SFANavHost(
                 HomeScreen(
                     serviceStatus = serviceStatus,
                     activeOutbound = uiState.activeOutbound,
-                    uptimeText = uiState.serviceStartTime?.let { start ->
-                        val mins = ((System.currentTimeMillis() - start) / 60000).coerceAtLeast(0)
-                        if (mins >= 60) "${mins / 60} ч ${mins % 60} мин" else "$mins мин"
-                    },
                     channels = uiState.channelRows.map { (name, delay, sel) ->
                         ChannelRow(name = name, delayMs = delay, selected = sel)
                     },
                     hasProfile = uiState.selectedProfileId != -1L,
                     onToggle = { onToggleService() },
-                    onChannelClick = {
-                        if (uiState.hasGroups) navController.navigate(Screen.Groups.route)
-                    },
-                    onConnect = { onOpenNewProfile(NewProfileArgs()) },
-                    onOpenSettings = { navController.navigate(Screen.Settings.route) },
+                    onSelectChannel = { tag -> dashboardViewModel.selectChannel(tag) },
+                    onConnect = { navController.navigate("connect") },
                 )
             } else {
                 Unit
@@ -570,13 +568,59 @@ fun SFANavHost(
         }
 
         composable(Screen.Settings.route) {
+            val uiState = dashboardViewModel?.uiState?.collectAsState()?.value
+            var autoStart by remember { mutableStateOf(Settings.startedByUser) }
+            var notifications by remember { mutableStateOf(Settings.dynamicNotification) }
             SimpleSettingsScreen(
-                autoStart = Settings.startedByUser,
-                onAutoStartChange = { Settings.startedByUser = it },
-                onConnectByCode = { onOpenNewProfile(NewProfileArgs()) },
+                autoStart = autoStart,
+                onAutoStartChange = {
+                    autoStart = it
+                    Settings.startedByUser = it
+                },
+                routeMode = uiState?.selectedClashMode.orEmpty(),
+                routeModes = uiState?.clashModes.orEmpty(),
+                onRouteMode = { mode -> dashboardViewModel?.selectClashMode(mode) },
+                notifications = notifications,
+                onNotificationsChange = {
+                    notifications = it
+                    Settings.dynamicNotification = it
+                },
+                subscriptionName = null,
+                onConnectByCode = { navController.navigate("connect") },
                 onAppsBypass = { navController.navigate("settings/profile_override/manage") },
                 onCheck = { navController.navigate("settings/diagnostics") },
                 onAdvanced = { navController.navigate("settings/all") },
+                onComplaint = { navController.navigate("complaint") },
+            )
+        }
+
+        // жалоба: текст + техническая справка уходят на свой сервер
+        composable(
+            route = "complaint",
+            enterTransition = slideInFromRight,
+            exitTransition = slideOutToLeft,
+            popEnterTransition = slideInFromLeft,
+            popExitTransition = slideOutToRight,
+        ) {
+            val uiState = dashboardViewModel?.uiState?.collectAsState()?.value
+            ComplaintScreen(
+                onBack = { navController.popBackStack() },
+                serviceRunning = serviceStatus == Status.Started,
+                activeOutbound = uiState?.activeOutbound,
+            )
+        }
+
+        // свой экран подключения: код -> всё само, без конструктора профилей
+        composable(
+            route = "connect",
+            enterTransition = slideInFromRight,
+            exitTransition = slideOutToLeft,
+            popEnterTransition = slideInFromLeft,
+            popExitTransition = slideOutToRight,
+        ) {
+            ConnectScreen(
+                onDone = { navController.popBackStack(Screen.Dashboard.route, false) },
+                onBack = { navController.popBackStack() },
             )
         }
 

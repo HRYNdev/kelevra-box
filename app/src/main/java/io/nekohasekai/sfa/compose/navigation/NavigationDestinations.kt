@@ -53,4 +53,5 @@ sealed class Screen(val route: String, @StringRes val titleRes: Int, val icon: I
 // из настроек, но не занимают половину нижней панели.
 // Нижней панели нет: главный экран сам ведёт в настройки, а вкладка-дубль
 // на два экрана только занимает место.
-val bottomNavigationScreens = emptyList<Screen>()
+// Две вкладки и только две: сеть и настройки. Всё остальное живёт внутри них.
+val bottomNavigationScreens = listOf(Screen.Dashboard, Screen.Settings)
