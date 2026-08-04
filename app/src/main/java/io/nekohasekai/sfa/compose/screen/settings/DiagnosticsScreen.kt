@@ -85,29 +85,29 @@ fun DiagnosticsScreen(onBack: () -> Unit = {}) {
         remember {
             listOf(
                 Check(
-                    title = "Раздача правил",
-                    hint = "Наборы доменов и рекламы доступны напрямую, мимо туннеля",
+                    title = "Доступ к правилам",
+                    hint = "Списки правил загружаются с сервера",
                 ) {
                     val body = HTTPClient().use { it.getString("https://${Kelevra.SUBSCRIPTION_HOST}/rules/main-domains.srs") }
-                    if (body.isEmpty()) throw Exception("пустой ответ") else "набор получен"
+                    if (body.isEmpty()) throw Exception("пустой ответ") else "список получен"
                 },
                 Check(
-                    title = "Заблокированное открывается",
-                    hint = "Проверяем сайт из наших наборов через туннель",
+                    title = "Доступ через сеть",
+                    hint = "Сайт из списка правил открывается через сеть",
                 ) {
                     HTTPClient().use { it.getString("https://rutracker.org/forum/index.php") }
-                    "открылся"
+                    "доступен"
                 },
                 Check(
-                    title = "Российское идёт напрямую",
-                    hint = "Госуслуги и банки не должны ходить через туннель",
+                    title = "Прямой доступ",
+                    hint = "Российские сайты открываются в обход сети",
                 ) {
                     HTTPClient().use { it.getString("https://www.gosuslugi.ru/robots.txt") }
-                    "открылся напрямую"
+                    "доступен напрямую"
                 },
                 Check(
-                    title = "Реклама режется",
-                    hint = "Рекламный домен должен НЕ открыться",
+                    title = "Блокировка рекламы",
+                    hint = "Рекламные домены не открываются",
                 ) {
                     val failed =
                         try {
@@ -116,7 +116,7 @@ fun DiagnosticsScreen(onBack: () -> Unit = {}) {
                         } catch (e: Exception) {
                             true
                         }
-                    if (failed) "заблокирован" else throw Exception("реклама грузится")
+                    if (failed) "блокируется" else throw Exception("не блокируется")
                 },
             )
         }
@@ -146,7 +146,7 @@ fun DiagnosticsScreen(onBack: () -> Unit = {}) {
                 .verticalScroll(rememberScrollState())
                 .padding(vertical = 8.dp),
     ) {
-        KScreenHeader(title = "Проверка сети", subtitle = "Что открывается, а что нет", onBack = onBack)
+        KScreenHeader(title = "Проверка сети", subtitle = "Доступ к сайтам и правилам", onBack = onBack)
         KCard(modifier = Modifier.padding(horizontal = KDim.Pad, vertical = 8.dp)) {
             Column {
                 checks.forEachIndexed { index, check ->
@@ -156,7 +156,7 @@ fun DiagnosticsScreen(onBack: () -> Unit = {}) {
                         title = check.title,
                         subtitle = when (state) {
                             is CheckState.Done -> state.detail
-                            CheckState.Running -> "проверяю…"
+                            CheckState.Running -> "проверка…"
                             CheckState.Idle -> check.hint
                         },
                         trailing = {
