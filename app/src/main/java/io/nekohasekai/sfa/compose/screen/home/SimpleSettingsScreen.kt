@@ -114,13 +114,17 @@ fun SimpleSettingsScreen(
                     subtitle = "Сеть поднимется вместе с телефоном",
                     trailing = { KSwitch(autoStart, onAutoStartChange) },
                 )
-                KDivider()
-                KRowItem(
-                    title = "Маршрутизация",
-                    subtitle = if (routeMode.isBlank()) "Настроится при включении" else routeModeTitle(routeMode),
-                    chevron = routeModes.size > 1,
-                    onClick = { if (routeModes.size > 1) showModes = true },
-                )
+                // пункт появляется только когда ядро реально отдало режимы:
+                // мёртвая строка, которую нельзя изменить, хуже её отсутствия
+                if (routeModes.size > 1) {
+                    KDivider()
+                    KRowItem(
+                        title = "Маршрутизация",
+                        subtitle = routeModeTitle(routeMode),
+                        chevron = true,
+                        onClick = { showModes = true },
+                    )
+                }
                 KDivider()
                 KRowItem(
                     title = "Приложения мимо сети",

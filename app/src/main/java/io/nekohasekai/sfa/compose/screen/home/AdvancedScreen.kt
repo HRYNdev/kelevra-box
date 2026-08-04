@@ -31,6 +31,7 @@ import io.nekohasekai.sfa.compose.theme.KDim
 import io.nekohasekai.sfa.compose.theme.KDivider
 import io.nekohasekai.sfa.compose.theme.KGroupTitle
 import io.nekohasekai.sfa.compose.theme.KRowItem
+import io.nekohasekai.sfa.compose.theme.plural
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
 
@@ -46,7 +47,6 @@ fun AdvancedScreen(
     onBack: () -> Unit,
     connectionsCount: Int,
     onAppsBypass: () -> Unit,
-    onLog: () -> Unit,
     onConnections: () -> Unit,
     onCheck: () -> Unit,
     modifier: Modifier = Modifier,
@@ -100,17 +100,17 @@ fun AdvancedScreen(
                 KDivider()
                 KRowItem(
                     title = "Соединения",
-                    subtitle = if (connectionsCount > 0) "$connectionsCount активных" else "Куда идёт трафик прямо сейчас",
+                    subtitle = if (connectionsCount > 0) {
+                        "$connectionsCount " + plural(connectionsCount, "активное", "активных", "активных")
+                    } else {
+                        "Куда идёт трафик прямо сейчас"
+                    },
                     chevron = true,
                     onClick = onConnections,
                 )
-                KDivider()
-                KRowItem(
-                    title = "Журнал",
-                    subtitle = "Подробный лог работы",
-                    chevron = true,
-                    onClick = onLog,
-                )
+                // «Журнал» убран: логи ядра до приложения не доезжают даже при
+                // включённом логировании в конфиге. Мёртвый пункт хуже отсутствующего;
+                // вернуть, когда подписка на лог-канал заработает
             }
 
             Spacer(Modifier.height(22.dp))
