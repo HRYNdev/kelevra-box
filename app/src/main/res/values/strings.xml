@@ -62,7 +62,7 @@
     <string name="title_scan_result">Scan Result</string>
 
     <!-- Status -->
-    <string name="status_default">Service not started</string>
+    <string name="status_default">Сеть выключена</string>
     <string name="status_starting">Запускаю</string>
     <string name="status_stopping">Останавливаю</string>
     <string name="status_started">Работает</string>
@@ -84,7 +84,7 @@
     <string name="reset_order">Вернуть порядок</string>
 
     <!-- Connections -->
-    <string name="empty_connections">No connections</string>
+    <string name="empty_connections">Активных подключений нет</string>
     <string name="search_connections">Search connections…</string>
     <string name="close_connections_confirm">Закрыть все соединения?</string>
     <string name="connection_state_all">All</string>
@@ -129,8 +129,8 @@
     <string name="no_profiles">No profiles configured</string>
     <string name="add_profile">Добавить подключение</string>
     <string name="update_profile">Обновить подключение</string>
-    <string name="import_remote_profile">Import remote profile</string>
-    <string name="import_remote_profile_message">Are you sure to import remote profile %1$s? You will connect to %2$s to download the configuration.</string>
+    <string name="import_remote_profile">Подключение по ссылке</string>
+    <string name="import_remote_profile_message">Подключиться по ссылке %1$s? Настройки будут загружены с %2$s.</string>
     <string name="import_from_file_description">Загрузить настройки из файла</string>
     <string name="scan_qr_code_description">Отсканировать QR-код с настройками</string>
     <string name="create_new_profile_description">Создать подключение с нуля</string>
@@ -260,10 +260,10 @@
     <string name="background_permission_description">Выдайте нужные разрешения, чтобы сеть работала стабильно.\n\nНа телефонах китайских производителей карточка может не исчезнуть после выдачи разрешения.</string>
     <string name="request_background_permission">Пропустить</string>
     <string name="location_permission_title">Доступ к геопозиции</string>
-    <string name="location_permission_description">Your profile contains &lt;strong&gt;&lt;tt&gt;wifi_ssid&lt;/tt&gt; or &lt;tt&gt;wifi_bssid&lt;/tt&gt; routing rules&lt;/strong&gt;. To make them work, sing-box uses the &lt;strong&gt;location&lt;/strong&gt; permission &lt;strong&gt;in the background&lt;/strong&gt; to get information about the connected Wi-Fi network. The information will be used &lt;strong&gt;for routing purposes only&lt;/strong&gt;.</string>
-    <string name="location_permission_background_description">On Android 10 and up, &lt;strong&gt;background location&lt;/strong&gt; permission is required. Select &lt;strong&gt;Allow all the time&lt;/strong&gt; to grant the permission.</string>
+    <string name="location_permission_description">В правилах маршрутизации используется имя Wi-Fi сети. Чтобы они работали, нужен доступ к геолокации: он используется только для определения текущей сети.</string>
+    <string name="location_permission_background_description">На Android 10 и новее нужен доступ к геолокации в фоне. Выберите «Разрешать всегда».</string>
     <string name="notification_permission_title">Разрешение на уведомления</string>
-    <string name="notification_permission_required_description">sing-box is unable to show real-time network speeds without the permission to send notifications. Please grant the permission or disable real-time network speeds notification before starting the service.</string>
+    <string name="notification_permission_required_description">Без разрешения на уведомления приложение не сможет показывать состояние сети. Разрешите уведомления или отключите их показ в настройках.</string>
     <string name="root_access_required">Root access required</string>
     <string name="root_access_denied">Root access denied</string>
 
