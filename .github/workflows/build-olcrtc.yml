@@ -1,0 +1,223 @@
+# Экспериментальная параллельная сборка ядра: sing-box + olcrtc в ОДНОМ .aar.
+# Основной build.yml (make lib_android) не трогает — откат бесплатный, просто не запускать этот файл.
+#
+# Почему одно ядро, а не два .aar: gomobile кладёт в каждый .aar свой Go-рантайм и
+# свои классы go.*; два таких .aar в одном APK = дублирующиеся классы и два рантайма
+# в процессе. Поэтому оба пакета биндятся одной командой из одного Go-модуля (cores/).
+name: build-olcrtc
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_repo:
+        description: "Репозиторий ядра sing-box"
+        required: false
+        default: "SagerNet/sing-box"
+      core_ref:
+        description: "Тег/ветка ядра sing-box"
+        required: false
+        default: "v1.14.0-beta.4"
+      olcrtc_ref:
+        description: "Ветка/тег olcrtc"
+        required: false
+        default: "master"
+      bind_target:
+        description: "Цель gomobile: android (все ABI) или android/arm64 (быстро)"
+        required: false
+        default: "android/arm64"
+      build_apk:
+        description: "Собирать APK после ядра (true/false)"
+        required: false
+        default: "false"
+  push:
+    branches: [feat/olcrtc-core]
+
+concurrency:
+  group: build-olcrtc-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: "28.0.13004108"
+  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+  CORE_REPO: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
+  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'master' }}
+  BIND_TARGET: ${{ github.event.inputs.bind_target || 'android/arm64' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: sing-box-for-android
+          submodules: recursive
+
+      - name: Checkout sing-box core
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
+          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          path: sing-box
+          fetch-depth: 0 # нужны теги: версия ядра берётся из git describe
+
+      - name: Checkout olcrtc
+        uses: actions/checkout@v4
+        with:
+          repository: openlibrecommunity/olcrtc
+          ref: ${{ github.event.inputs.olcrtc_ref || 'master' }}
+          path: olcrtc
+
+      # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: olcrtc/go.mod
+          cache: false
+
+      - name: Кеш Go-модулей
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: gomod-olcrtc-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-${{ hashFiles('sing-box-for-android/cores/go.mod') }}
+          restore-keys: |
+            gomod-olcrtc-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-
+            gomod-olcrtc-
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17" # gomobile/gobind в апстриме проверяют 17; держим ту же связку
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager --install "ndk;$NDK_VERSION"
+
+      - name: Патч ядра (xhttp)
+        run: python3 sing-box-for-android/core-xhttp/apply.py sing-box
+
+      - name: Install gomobile
+        working-directory: sing-box
+        run: make lib_install
+
+      # replace на локальные чекауты: абсолютными путями, чтобы не зависеть от раскладки
+      - name: Подготовка модуля cores
+        working-directory: sing-box-for-android/cores
+        run: |
+          go mod edit -replace=github.com/sagernet/sing-box="$GITHUB_WORKSPACE/sing-box"
+          go mod edit -replace=github.com/openlibrecommunity/olcrtc="$GITHUB_WORKSPACE/olcrtc"
+          go mod tidy
+          echo "--- go.mod ---"
+          cat go.mod | head -20
+          go list -m all | wc -l
+
+      - name: Создать app/libs
+        run: mkdir -p sing-box-for-android/app/libs
+
+      - name: Build объединённое ядро
+        working-directory: sing-box-for-android/cores
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          export PATH="$PATH:$(go env GOPATH)/bin"
+
+          # версия ядра ровно как её считает build_shared.ReadTag (тег без ведущей v)
+          VERSION=$(cd "$GITHUB_WORKSPACE/sing-box" && git describe --tags | sed 's/^v//')
+          echo "версия ядра: $VERSION"
+
+          # теги 1:1 из cmd/internal/build_libbox/main.go (sharedTags), вариант non-legacy
+          TAGS="with_gvisor,with_quic,with_wireguard,with_utls,with_naive_outbound,with_clash_api,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0,with_tailscale,ts_omit_logtail,ts_omit_ssh,ts_omit_drive,ts_omit_taildrop,ts_omit_webclient,ts_omit_doctor,ts_omit_capture,ts_omit_kube,ts_omit_aws,ts_omit_synology,ts_omit_bird"
+          LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$VERSION -X runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1 -checklinkname=0 -s -w -buildid="
+
+          set -x
+          gomobile bind -v \
+            -o ../app/libs/libbox.aar \
+            -target "$BIND_TARGET" \
+            -androidapi 24 \
+            -javapkg=io.nekohasekai \
+            -libname=box \
+            -trimpath \
+            -buildvcs=false \
+            -ldflags "$LDFLAGS" \
+            -tags "$TAGS" \
+            github.com/sagernet/sing-box/experimental/libbox \
+            github.com/openlibrecommunity/olcrtc/mobile
+
+      # главное доказательство: оба ядра и ОДНА нативная библиотека внутри одного .aar
+      - name: Проверка содержимого .aar
+        working-directory: sing-box-for-android
+        run: |
+          AAR=app/libs/libbox.aar
+          ls -la app/libs/
+          echo "=== содержимое .aar ==="
+          unzip -l "$AAR"
+          echo "=== нативные библиотеки ==="
+          unzip -l "$AAR" | grep -E '\.so$' || true
+          SO_NAMES=$(unzip -l "$AAR" | grep -oE '[^/ ]+\.so$' | sort -u)
+          echo "уникальные имена .so: $SO_NAMES"
+          test "$(echo "$SO_NAMES" | wc -l)" -eq 1 || { echo "ОШИБКА: в .aar больше одной нативной библиотеки"; exit 1; }
+          echo "=== классы ==="
+          mkdir -p /tmp/aar && unzip -o -q "$AAR" classes.jar -d /tmp/aar
+          unzip -l /tmp/aar/classes.jar > /tmp/classes.txt
+          echo "-- sing-box (libbox) --"
+          grep -E 'io/nekohasekai/libbox/' /tmp/classes.txt | head -10
+          echo "-- olcrtc (mobile) --"
+          grep -E 'io/nekohasekai/mobile/' /tmp/classes.txt | head -10
+          echo "-- go runtime --"
+          grep -cE ' go/' /tmp/classes.txt || true
+          LIBBOX=$(grep -cE 'io/nekohasekai/libbox/.*\.class' /tmp/classes.txt || true)
+          OLCRTC=$(grep -cE 'io/nekohasekai/mobile/.*\.class' /tmp/classes.txt || true)
+          echo "классов libbox: $LIBBOX, классов olcrtc/mobile: $OLCRTC"
+          test "$LIBBOX" -gt 0 || { echo "ОШИБКА: нет классов sing-box"; exit 1; }
+          test "$OLCRTC" -gt 0 || { echo "ОШИБКА: нет классов olcrtc"; exit 1; }
+
+      - name: Проверка что транспорт xhttp внутри
+        working-directory: sing-box-for-android
+        run: |
+          mkdir -p /tmp/socheck && unzip -o -q app/libs/libbox.aar 'jni/*/*.so' -d /tmp/socheck
+          SO=$(find /tmp/socheck -name '*.so' | head -1)
+          grep -qa 'v2rayxhttp' "$SO" && echo "транспорт xhttp внутри ядра: есть" || { echo "ОШИБКА: ядро собрано без патча xhttp"; exit 1; }
+
+      - name: Upload core
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbox-olcrtc
+          path: sing-box-for-android/app/libs/*.aar
+          if-no-files-found: error
+
+      - name: Подготовка подписи
+        if: github.event.inputs.build_apk == 'true'
+        working-directory: sing-box-for-android
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
+          printf 'KEYSTORE_PASS=%s\nALIAS_NAME=%s\nALIAS_PASS=%s\n' "$KEYSTORE_PASS" "$KEY_ALIAS" "$KEYSTORE_PASS" > /tmp/local.properties
+          echo "LOCAL_PROPERTIES=$(base64 -w0 /tmp/local.properties)" >> $GITHUB_ENV
+          rm -f /tmp/local.properties
+          test -s app/release.keystore
+
+      - name: Build APK
+        if: github.event.inputs.build_apk == 'true'
+        working-directory: sing-box-for-android
+        env:
+          KELEVRA_BUILD: ${{ github.run_number }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleOtherRelease --no-daemon --stacktrace -Pabi=arm64-v8a
+
+      - name: Upload APK
+        if: github.event.inputs.build_apk == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: kelevra-apk-olcrtc
+          path: sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
+          if-no-files-found: error
