@@ -149,6 +149,16 @@ object DefaultNetworkListener {
             runBlocking { networkActor.send(NetworkMessage.Update(network)) }
         }
 
+        /**
+         * Адрес и DNS-серверы приезжают на новую сеть отдельным событием, уже после
+         * [onAvailable]. Для того, кто спрашивает саму сеть (например, «дома ли мы» по
+         * подменным адресам от домашнего роутера), это и есть момент, когда спрашивать
+         * стало осмысленно, — поэтому будим слушателей и на него.
+         */
+        override fun onLinkPropertiesChanged(network: Network, linkProperties: android.net.LinkProperties) {
+            runBlocking { networkActor.send(NetworkMessage.Update(network)) }
+        }
+
         override fun onLost(network: Network) = runBlocking {
             networkActor.send(
                 NetworkMessage.Lost(
