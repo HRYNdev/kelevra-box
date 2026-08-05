@@ -102,6 +102,52 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
     private var lastProfileName = ""
 
+    /**
+     * Туннель погашен автоматом: ядро и tun сняты, а сам сервис жив.
+     *
+     * Живой сервис здесь — не мелочь, а условие всей затеи. Он держит подписку на смену
+     * сети, поэтому уход из дома виден бесплатно, и он же держит выданное разрешение на
+     * VPN, поэтому второй раз его не спрашивают.
+     */
+    @Volatile
+    private var tunnelSuspended = false
+
+    private val tunnelLock = Any()
+
+    /**
+     * Нужна ли комната прямо сейчас.
+     *
+     * Раньше ядро olcRTC поднималось вместе с сервисом и держало видеозвонок круглосуточно.
+     * Это и батарея, и — важнее — постоянная сессия в чужой комнате, тогда как вся защита
+     * схемы держится ровно на обратном: звонок живёт столько, сколько нужен. Теперь решение
+     * принимает автомат (или человек, выбравший комнату руками), а сервис только исполняет.
+     */
+    @Volatile
+    private var roomWanted = false
+
+    /** Что автомат умеет сделать с сервисом. Больше он ни во что не лезет. */
+    private val autoModeHost = object : AutoMode.Host {
+        override fun suspendTunnel(reason: String): Boolean = this@BoxService.suspendTunnel(reason)
+
+        override fun resumeTunnel(reason: String): Boolean = this@BoxService.resumeTunnel(reason)
+
+        override fun tunnelLive(): Boolean = !tunnelSuspended
+
+        override fun profileConfig(): String? = runCatching {
+            val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) } ?: return null
+            File(profile.typed.path).readText()
+        }.getOrNull()
+
+        override fun selectExit(group: String, tag: String) {
+            // Локальный клиент к своему же командному серверу: тот же путь, которым
+            // выход переключает человек с главного экрана.
+            Libbox.newStandaloneCommandClient().selectOutbound(group, tag)
+        }
+
+        override fun setRoomWanted(wanted: Boolean, reason: String): Boolean =
+            this@BoxService.setRoomWanted(wanted, reason)
+    }
+
     private suspend fun startService() {
         try {
             withContext(Dispatchers.Main) {
@@ -132,10 +178,33 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
 
             DefaultNetworkMonitor.start()
+            // Автомат слушает ту же смену сети, что и sing-box. Отдельного колбэка не
+            // заводим: он стоит денег, а этот уже зарегистрирован.
+            DefaultNetworkListener.start(AutoMode) { AutoMode.onNetworkChanged() }
 
-            // olcRTC поднимаем ДО sing-box: для sing-box это обычный socks-outbound
-            // на 127.0.0.1, и он должен быть уже жив к моменту старта ядра.
-            startOlcRtcIfEnabled()
+            // Дома обход делает роутер, и своя обёртка поверх него только грузит телефон.
+            // Смотрим ДО старта ядра: поднять туннель и через секунду погасить — хуже,
+            // чем не поднимать вовсе.
+            if (AutoMode.homeRightNow()) {
+                tunnelSuspended = true
+                status.postValue(Status.Started)
+                withContext(Dispatchers.Main) {
+                    notification.show(lastProfileName, R.string.status_home)
+                }
+                AutoMode.start(autoModeHost, AutoMode.Situation.Home)
+                return
+            }
+
+            // Комната на старте НЕ поднимается — она нужна не всегда, а держать чужой
+            // видеозвонок круглосуточно и есть то, чего схема избегает. Единственное
+            // исключение: человек уже выбрал комнату руками, и этот выбор пережил
+            // перезапуск сервиса — тогда поднимаем сразу, ДО sing-box, потому что для
+            // sing-box это обычный socks-outbound на 127.0.0.1.
+            roomWanted = !Settings.autoModeEnabled && Settings.autoModeManualRoom
+            if (roomWanted) {
+                Log.i(TAG, "комната выбрана человеком — поднимаю её до старта ядра")
+                startOlcRtcIfEnabled()
+            }
 
             try {
                 commandServer.startOrReloadService(
@@ -168,6 +237,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 notification.show(lastProfileName, R.string.status_started)
             }
             notification.start()
+            AutoMode.start(autoModeHost)
         } catch (e: Exception) {
             stopAndAlert(Alert.StartService, e.message)
             return
@@ -286,6 +356,121 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     /**
+     * Гасит ядро и tun, оставляя сервис жить.
+     *
+     * Именно этим отличается от остановки: `stopSelf` убил бы и подписку на смену сети,
+     * а тогда возвращение туннеля при уходе из дома пришлось бы чем-то будить.
+     *
+     * @return false, если уже погашено — автомату это значит «ничего не делал».
+     */
+    private fun suspendTunnel(reason: String): Boolean {
+        synchronized(tunnelLock) {
+            if (tunnelSuspended) return false
+            Log.i(TAG, "туннель гасим: $reason")
+            // Комната без туннеля бессмысленна: дома обход делает роутер.
+            roomWanted = false
+            stopOlcRtc()
+            val pfd = fileDescriptor
+            if (pfd != null) {
+                runCatching { pfd.close() }
+                fileDescriptor = null
+            }
+            closeService()
+            tunnelSuspended = true
+        }
+        runBlocking(Dispatchers.Main) { notification.show(lastProfileName, R.string.status_home) }
+        return true
+    }
+
+    /** @return false, если туннель и так был поднят. */
+    private fun resumeTunnel(reason: String): Boolean {
+        synchronized(tunnelLock) {
+            if (!tunnelSuspended) return false
+            Log.i(TAG, "туннель поднимаем: $reason")
+        }
+        return try {
+            // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно.
+            if (roomWanted) startOlcRtcIfEnabled()
+            restartCore()
+            synchronized(tunnelLock) { tunnelSuspended = false }
+            runBlocking(Dispatchers.Main) { notification.show(lastProfileName, R.string.status_started) }
+            true
+        } catch (e: Exception) {
+            // Сервис не роняем: сеть могла ещё не устояться, следующий заход попробует снова.
+            Log.w(TAG, "туннель не поднялся ($reason): ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Пересобирает ядро с текущим конфигом. В отличие от [serviceReload0] не роняет
+     * сервис при неудаче: сюда приходят из автомата, где неудача — это просто «ещё раз
+     * через минуту», а не повод выключить всё.
+     */
+    private fun restartCore() {
+        val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) }
+            ?: error("профиль не выбран")
+        val content = File(profile.typed.path).readText()
+        if (content.isBlank()) error("конфиг пуст")
+        lastProfileName = profile.name
+        commandServer.startOrReloadService(
+            effectiveConfig(content),
+            OverrideOptions().apply {
+                autoRedirect = Settings.autoRedirect
+                applyPerAppProxy()
+            },
+        )
+    }
+
+    /**
+     * Поднимает или гасит ядро комнаты по требованию.
+     *
+     * Вызов идемпотентный: если комната уже в нужном состоянии, ничего не происходит и
+     * возвращается false. Это важно — автомат зовёт этот метод каждым заходом, и мигать
+     * видеозвонком от повторного «оставь как есть» нельзя.
+     *
+     * Ядро мало поднять (и мало погасить): пока комната работает, конфигу нужен запрет
+     * QUIC — через SOCKS5 комнаты UDP не ходит. Значит правка живёт ровно столько же,
+     * сколько сама комната, и пересборка ядра обязательна в обе стороны.
+     *
+     * @return true, если состояние действительно поменяли и ядро sing-box пересобрано.
+     */
+    private fun setRoomWanted(wanted: Boolean, reason: String): Boolean {
+        if (wanted && !Settings.olcrtcEnabled) return false
+        synchronized(tunnelLock) {
+            if (tunnelSuspended) {
+                // Дома туннеля нет, поднимать комнату некуда и незачем.
+                roomWanted = false
+                return false
+            }
+            val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
+            roomWanted = wanted
+            if (wanted == up) return false
+
+            if (wanted) {
+                Log.i(TAG, "комната нужна ($reason) — поднимаю ядро")
+                startOlcRtcIfEnabled()
+                if (OlcRtcCore.state !is OlcRtcCore.State.Ready) {
+                    Log.w(TAG, "комната не встала: ${OlcRtcCore.lastError}")
+                    roomWanted = false
+                    return false
+                }
+            } else {
+                Log.i(TAG, "комната больше не нужна ($reason) — гашу ядро")
+                stopOlcRtc()
+            }
+
+            return runCatching {
+                restartCore()
+                true
+            }.getOrElse {
+                Log.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
+                false
+            }
+        }
+    }
+
+    /**
      * Гасим ПОСЛЕ sing-box: пока он жив, он может ходить в этот socks.
      *
      * Присмотр снимаем первым: иначе обычная остановка выглядит для него как упавший
@@ -392,12 +577,16 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             receiverRegistered = false
         }
         notification.close()
+        // Автомат снимаем первым: иначе обычное выключение выглядит для него как
+        // обстановка, в которой надо срочно что-то поднять.
+        AutoMode.stop()
         GlobalScope.launch(Dispatchers.IO) {
             val pfd = fileDescriptor
             if (pfd != null) {
                 pfd.close()
                 fileDescriptor = null
             }
+            DefaultNetworkListener.stop(AutoMode)
             DefaultNetworkMonitor.stop()
             closeService()
             commandServer.apply {
@@ -423,11 +612,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
     private suspend fun stopAndAlert(type: Alert, message: String? = null) {
         Settings.startedByUser = false
+        AutoMode.stop()
         val pfd = fileDescriptor
         if (pfd != null) {
             pfd.close()
             fileDescriptor = null
         }
+        DefaultNetworkListener.stop(AutoMode)
         DefaultNetworkMonitor.stop()
         if (::commandServer.isInitialized) {
             closeService()

@@ -52,8 +52,8 @@ import kotlinx.coroutines.launch
  * Выход через комнату olcRTC.
  *
  * Параметры комнаты приезжают с сервера вместе с остальной подпиской. Поля ниже —
- * переопределение для отладки: пустое поле означает «как у сети». Токен WB личный,
- * на сервер не кладётся и живёт только здесь.
+ * переопределение для отладки: пустое поле означает «как у сети». Токен WB сеть тоже
+ * раздаёт (владельцу кода), поле здесь — тот же перебивающий запасной вариант.
  */
 @Composable
 fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -120,11 +120,7 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 KDivider()
                 KRowItem(title = "Комната", subtitle = roomSummary())
                 KDivider()
-                KRowItem(
-                    title = "Токен WB",
-                    subtitle = "Личный, на сервер не кладётся. " +
-                        if (wbToken.isBlank()) "Не задан — в комнату пустят только гостем." else "Задан.",
-                )
+                KRowItem(title = "Токен WB", subtitle = tokenText())
                 Spacer(Modifier.height(10.dp))
                 OlcRtcField("токен WB", wbToken, secret = true) {
                     wbToken = it
@@ -215,6 +211,13 @@ private fun sourceText(): String = when (OlcRtcParams.source) {
 
     OlcRtcParams.Source.Mixed -> "сеть, часть перебита вручную"
     OlcRtcParams.Source.None -> "нет: сеть комнату не раздаёт, руками тоже не задано"
+}
+
+/** Токен наружу не показываем: только откуда он и какой длины. */
+private fun tokenText(): String = when (OlcRtcParams.wbTokenSource) {
+    OlcRtcParams.Source.Server -> "задан сетью, ${OlcRtcParams.wbTokenLength} симв."
+    OlcRtcParams.Source.Manual -> "задан вручную, ${OlcRtcParams.wbTokenLength} симв."
+    else -> "не задан — в комнату пустят только гостем"
 }
 
 /** Короткая сводка того, с чем реально пойдём в комнату. Секретов нет: ключ — только факт. */

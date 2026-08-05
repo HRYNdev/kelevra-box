@@ -351,6 +351,10 @@ dependencies {
     "androidTestOtherImplementation"(composeBom24)
     "androidTestOtherLegacyImplementation"(composeBom21)
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    // Чистая логика автовыбора выхода проверяется на JVM, без эмулятора.
+    testImplementation("junit:junit:4.13.2")
+    // В android.jar org.json — заглушка, которая бросает. Для JVM-тестов нужна настоящая.
+    testImplementation("org.json:json:20250107")
 
     // Common Compose-related libraries
     implementation("sh.calvin.reorderable:reorderable:3.1.0")
