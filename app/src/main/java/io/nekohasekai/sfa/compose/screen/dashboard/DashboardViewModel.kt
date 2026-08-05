@@ -673,27 +673,37 @@ class DashboardViewModel :
     override fun updateGroups(newGroups: MutableList<OutboundGroup>) {
         viewModelScope.launch(Dispatchers.Main) {
             val hasGroups = newGroups.isNotEmpty()
-            // Ядро отдаёт наверх только группы с выбором внутри. Каждая такая группа —
-            // это УЗЕЛ («Нидерланды»), а внутри неё транспорты («прямой», «запасной»).
-            // Человеку показываем узлы; каким транспортом узел ходит — деталь.
-            val nodes = newGroups.map { group ->
-                val items = group.items.toList()
-                val chosen = items.firstOrNull { it.tag == group.selected }
-                    ?: items.filter { it.urlTestDelay > 0 }.minByOrNull { it.urlTestDelay }
-                Triple(group.tag, chosen?.urlTestDelay ?: 0, chosen?.tag)
-            }
-            val activeNode = nodes.firstOrNull()
+            // Выход человек выбирает в одной группе — селекторе («Соединение»). Её пункты
+            // и есть выходы: «Нидерланды», «Комната». Остальные группы (urltest внутри
+            // узла) — это транспорты, они человеку не показываются.
+            //
+            // Раньше здесь выходами считались сами группы. Работало по совпадению: имя
+            // узла в селекторе совпадало с именем его urltest-группы. Комната такой
+            // группой не является и в списке не появлялась вообще.
+            val chooser = newGroups.firstOrNull { it.selectable } ?: newGroups.firstOrNull()
+            val exits = chooser?.items?.toList().orEmpty()
+            val activeExit = exits.firstOrNull { it.tag == chooser?.selected }
+                ?: exits.filter { it.urlTestDelay > 0 }.minByOrNull { it.urlTestDelay }
+            // Транспорт активного выхода: если выход сам является группой, берём то,
+            // что выбрано внутри неё.
+            val activeTransport = newGroups.firstOrNull { it.tag == activeExit?.tag }
+                ?.let { node ->
+                    val items = node.items.toList()
+                    (
+                        items.firstOrNull { it.tag == node.selected }
+                            ?: items.filter { it.urlTestDelay > 0 }.minByOrNull { it.urlTestDelay }
+                        )?.tag
+                }
             updateState {
                 copy(
                     hasGroups = hasGroups,
                     groupsCount = newGroups.size,
-                    activeOutbound = activeNode?.first,
-                    // транспорт активного узла: имя выбранного канала внутри него
-                    activeChannel = activeNode?.third,
-                    channelRows = nodes.map { (tag, delay, _) ->
-                        Triple(tag, delay, tag == activeNode?.first)
+                    activeOutbound = activeExit?.tag,
+                    activeChannel = activeTransport ?: activeExit?.tag,
+                    channelRows = exits.map { item ->
+                        Triple(item.tag, item.urlTestDelay, item.tag == activeExit?.tag)
                     },
-                    channelGroupTag = newGroups.firstOrNull()?.tag,
+                    channelGroupTag = chooser?.tag,
                 )
             }
         }
