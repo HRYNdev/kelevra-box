@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.bg.OlcRtcCore
 import io.nekohasekai.sfa.bg.OlcRtcParams
+import io.nekohasekai.sfa.bg.OlcRtcWatchdog
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDim
@@ -46,7 +47,6 @@ import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * Выход через комнату olcRTC.
@@ -73,15 +73,15 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
     // Состояние тянем не из статики один раз, а перечитываем: канал живёт своей жизнью,
     // и экран должен показывать её, а не момент открытия.
+    //
+    // Сам экран канал НЕ проверяет: владелец проверки один — [OlcRtcWatchdog], он же по
+    // её результату поднимает ядро. Два параллельных SOCKS-запроса дали бы лишний трафик
+    // через комнату и сбили бы присмотру счёт отказов. Здесь только чтение.
     var status by remember { mutableStateOf(currentStatus()) }
     LaunchedEffect(enabled) {
         while (true) {
-            val port = OlcRtcParams.socksPort
-            if (OlcRtcCore.isRunning() && OlcRtcCore.state is OlcRtcCore.State.Ready) {
-                withContext(Dispatchers.IO) { OlcRtcCore.probe(port) }
-            }
             status = currentStatus()
-            delay(5_000)
+            delay(1_000)
         }
     }
 
@@ -185,20 +185,27 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
  * и идут ли через него данные. «Поднят» без прошедших байтов — это ещё не выход,
  * поэтому такой случай назван своими словами, а не спрятан за общим «поднят».
  */
-private fun currentStatus(): String = when (val state = OlcRtcCore.state) {
-    is OlcRtcCore.State.Unavailable -> "в этой сборке ядра olcRTC нет"
-    is OlcRtcCore.State.Starting -> "поднимается"
-    is OlcRtcCore.State.Failed -> "не поднят: ${state.reason}"
-    is OlcRtcCore.State.Idle -> if (Settings.olcrtcEnabled) "не запускался" else "выключен"
-    is OlcRtcCore.State.Ready -> if (!OlcRtcCore.isRunning()) {
-        "не поднят: ядро вышло"
-    } else {
-        when (val health = OlcRtcCore.health) {
-            is OlcRtcCore.Health.Live -> "данные идут, ответ за ${health.latencyMs} мс"
-            is OlcRtcCore.Health.Dead -> "поднят, но данные не идут: ${health.reason}"
-            OlcRtcCore.Health.Unknown -> "поднят, канал ещё не проверен"
+private fun currentStatus(): String {
+    val base = when (val state = OlcRtcCore.state) {
+        is OlcRtcCore.State.Unavailable -> "в этой сборке ядра olcRTC нет"
+        is OlcRtcCore.State.Starting -> "поднимается"
+        is OlcRtcCore.State.Failed -> "не поднят: ${state.reason}"
+        is OlcRtcCore.State.Idle -> if (Settings.olcrtcEnabled) "не запускался" else "выключен"
+        is OlcRtcCore.State.Ready -> if (!OlcRtcCore.isRunning()) {
+            "не поднят: ядро вышло"
+        } else {
+            when (val health = OlcRtcCore.health) {
+                is OlcRtcCore.Health.Live -> "данные идут, ответ за ${health.latencyMs} мс"
+                is OlcRtcCore.Health.Dead -> "поднят, но данные не идут: ${health.reason}"
+                OlcRtcCore.Health.Unknown -> "поднят, канал ещё не проверен"
+            }
         }
     }
+    // Подъёмы прячутся от человека только если их не было: сессия, где канал падал
+    // и вставал, выглядит иначе, чем ровная.
+    val watchdog = OlcRtcWatchdog.note.takeIf { it.isNotBlank() }
+        ?: if (OlcRtcWatchdog.restarts > 0) "подъёмов за сессию: ${OlcRtcWatchdog.restarts}" else null
+    return if (watchdog == null) base else "$base · $watchdog"
 }
 
 private fun sourceText(): String = when (OlcRtcParams.source) {
