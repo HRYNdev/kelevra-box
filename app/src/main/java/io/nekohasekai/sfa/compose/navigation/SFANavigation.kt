@@ -32,6 +32,7 @@ import io.nekohasekai.sfa.compose.screen.home.ChannelRow
 import io.nekohasekai.sfa.compose.screen.home.ComplaintScreen
 import io.nekohasekai.sfa.compose.screen.home.ConnectScreen
 import io.nekohasekai.sfa.compose.screen.home.HomeScreen
+import io.nekohasekai.sfa.compose.screen.home.OlcRtcScreen
 import io.nekohasekai.sfa.compose.screen.home.SimpleSettingsScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.GroupsCard
 import io.nekohasekai.sfa.compose.screen.dashboard.groups.GroupsViewModel
@@ -662,7 +663,19 @@ fun SFANavHost(
                 onConnections = { navController.navigate("advanced/connections") },
                 onCheck = { navController.navigate("settings/diagnostics") },
                 onLog = { navController.navigate("advanced/log") },
+                onOlcRtc = { navController.navigate("advanced/olcrtc") },
             )
+        }
+
+        // параметры выхода olcRTC: пока руками, позже приедут с сервера
+        composable(
+            route = "advanced/olcrtc",
+            enterTransition = slideInFromRight,
+            exitTransition = slideOutToLeft,
+            popEnterTransition = slideInFromLeft,
+            popExitTransition = slideOutToRight,
+        ) {
+            OlcRtcScreen(onBack = { navController.popBackStack() })
         }
 
         // Settings subscreens with slide animations

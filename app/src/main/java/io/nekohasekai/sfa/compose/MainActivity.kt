@@ -894,6 +894,7 @@ class MainActivity :
                 add("complaint")
                 add("advanced/log")
                 add("advanced/connections")
+                add("advanced/olcrtc")
                 add(Screen.Log.route)
                 add(Screen.Tools.route)
                 add(Screen.Settings.route)
