@@ -10,6 +10,11 @@
 package kelevracores
 
 import (
+	// gobind ищет github.com/sagernet/gomobile/bind в графе ГЛАВНОГО модуля;
+	// без этого импорта — "unable to import bind: no Go package". Так же сделано в апстриме
+	// (cmd/internal/build_libbox/main.go).
+	_ "github.com/sagernet/gomobile"
+
 	_ "github.com/openlibrecommunity/olcrtc/mobile"
 	_ "github.com/sagernet/sing-box/experimental/libbox"
 )
