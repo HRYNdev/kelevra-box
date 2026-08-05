@@ -22,6 +22,8 @@ data class SubscriptionInfo(
     val transports: Map<String, String> = emptyMap(),
     /** приложения, которые сеть по умолчанию пускает мимо туннеля */
     val bypassPackages: List<String> = emptyList(),
+    /** параметры комнаты olcRTC, если сеть их раздаёт; токен сюда не входит */
+    val olcrtc: JSONObject? = null,
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -102,6 +104,8 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
                 val arr = json.optJSONArray("bypass_packages") ?: return@buildList
                 for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
             },
+            // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
+            olcrtc = json.optJSONObject("olcrtc"),
             transports = buildMap {
                 val list = json.optJSONArray("channels") ?: return@buildMap
                 for (i in 0 until list.length()) {
