@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.bg.AutoMode
 import io.nekohasekai.sfa.bg.OlcRtcCore
-import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.compose.theme.DialState
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KBadge
@@ -95,16 +94,15 @@ fun HomeScreen(
     val running = serviceStatus == Status.Started
     val busy = serviceStatus == Status.Starting || serviceStatus == Status.Stopping
     var showExits by remember { mutableStateOf(false) }
-    var subscription by remember { mutableStateOf<SubscriptionInfo?>(null) }
+    // Сводку держит общий объект: её же обновляет кнопка в расширенных, и карточка
+    // должна показать новое сразу, без перезахода в приложение.
+    val subscription by SubscriptionRefresh.info.collectAsState()
     val auto by AutoMode.state.collectAsState()
 
     LaunchedEffect(hasProfile, running) {
         if (hasProfile) {
-            subscription = loadSubscription()
-            subscription?.bypassPackages?.let { applyBypassPackages(it) }
-            // Сеть не ответила — старые параметры комнаты остаются; ответила без блока
-            // olcrtc — стираем, чтобы не держать протухшую комнату.
-            subscription?.let { OlcRtcParams.applyServer(it.olcrtc) }
+            SubscriptionRefresh.loadInfo()
+            SubscriptionRefresh.loadLocal()
         }
     }
 
