@@ -161,6 +161,88 @@ class AutoModeLogicTest {
         assertEquals(Situation.Main, gate.current)
     }
 
+    @Test
+    fun `внутри серии после смены сети подтверждений нужно на одно меньше`() {
+        val gate = AutoModeGate(3)
+        gate.reset(Situation.Main)
+
+        // Первое наблюдение — то самое, на котором сеть и сменилась: принимается сразу.
+        // Здесь проверяем следующие за ним: они уже не «доказанная смена», но и держаться
+        // за старый вердикт всеми тремя заходами незачем — сеть под ним другая.
+        assertFalse(gate.offer(Situation.Home, hurried = true))
+        assertTrue(gate.offer(Situation.Home, hurried = true))
+        assertEquals(Situation.Home, gate.current)
+    }
+
+    @Test
+    fun `серия ускоряет перепроверку, но метаться не разрешает`() {
+        val gate = AutoModeGate(3)
+        gate.reset(Situation.Main)
+
+        // Одиночного наблюдения мало и внутри серии тоже.
+        assertFalse(gate.offer(Situation.Room, hurried = true))
+        assertEquals(Situation.Main, gate.current)
+        // И разные наблюдения по-прежнему не складываются.
+        assertFalse(gate.offer(Situation.Searching, hurried = true))
+        assertEquals(Situation.Main, gate.current)
+    }
+
+    // ------------------------------------------------- серия проверок после смены сети
+
+    @Test
+    fun `серия начинается сразу и первый шаг короткий`() {
+        val burst = AutoModeBurst(AutoMode.BURST_STEPS)
+        assertFalse(burst.active)
+
+        burst.restart()
+        assertTrue(burst.active)
+        // Заход, на котором сеть сменилась, «ничего не поменял» по определению —
+        // обрывать серию на нём нельзя, иначе перепроверки не будет вовсе.
+        assertEquals(1_000L, burst.next(settled = true))
+    }
+
+    @Test
+    fun `устоялось — серия обрывается, лишних проб нет`() {
+        val burst = AutoModeBurst(AutoMode.BURST_STEPS)
+        burst.restart()
+
+        assertEquals(1_000L, burst.next(settled = true))
+        assertEquals(null, burst.next(settled = true))
+        assertFalse(burst.active)
+    }
+
+    @Test
+    fun `пока не устоялось — серия идёт до конца с растущими паузами`() {
+        val burst = AutoModeBurst(AutoMode.BURST_STEPS)
+        burst.restart()
+
+        val seen = generateSequence { burst.next(settled = false) }.toList()
+        assertEquals(AutoMode.BURST_STEPS.toList(), seen)
+        assertFalse("серия обязана кончаться сама", burst.active)
+    }
+
+    @Test
+    fun `новая смена сети начинает серию заново`() {
+        val burst = AutoModeBurst(AutoMode.BURST_STEPS)
+        burst.restart()
+        burst.next(settled = false)
+        burst.next(settled = false)
+
+        burst.restart()
+        assertEquals(1_000L, burst.next(settled = false))
+    }
+
+    @Test
+    fun `серия успевает раньше обычного ритма`() {
+        // Смысл серии в том, чтобы возвращение домой замечалось секундами, а не
+        // следующим плановым заходом. Если она растянется до тех же пяти минут,
+        // от неё не останется ничего.
+        val steps = AutoMode.BURST_STEPS.toList()
+        assertEquals("паузы обязаны расти", steps.sorted(), steps)
+        assertTrue("первая проверка почти сразу", steps.first() <= 1_000L)
+        assertTrue("вся серия короче одного планового захода", steps.sum() < 60_000L)
+    }
+
     // ------------------------------------------------------------ разбор конфига
 
     /** Ровно та раскладка, которую отдаёт сервер: селектор с комнатой и узлом внутри. */

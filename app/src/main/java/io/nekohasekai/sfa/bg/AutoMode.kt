@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.bg
 
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import io.nekohasekai.sfa.Application
@@ -31,7 +32,9 @@ import java.util.concurrent.TimeUnit
  *  1. [Situation.Home] — обход уже делает роутер. Признак однозначный и проверен живьём:
  *     домашний DNS отдаёт для проксируемых доменов подменные адреса из 198.18.0.0/15
  *     (`youtube.com → 198.18.3.9`), а для российских — настоящие (`gosuslugi.ru → 213.59.254.7`).
- *     Спрашиваем СИСТЕМНЫМ резолвером физической сети, не через свой туннель.
+ *     Спрашиваем СИСТЕМНЫМ резолвером физической сети, не через свой туннель, и **мимо
+ *     кеша** ([HomeProbe]): кеш помнит ответы прошлой сети и первые секунды после вайфая
+ *     врёт «не дома».
  *     Действие: **туннель гасим** — вторая обёртка поверх роутера только грузит телефон.
  *  2. [Situation.Main] — основной канал поднимается. Действие: работаем им.
  *  3. [Situation.Room] — основной канал не поднимается вообще (при белом списке адрес
@@ -43,6 +46,11 @@ import java.util.concurrent.TimeUnit
  * наблюдений подряд: одиночный отказ — флуктуация, тот же принцип, что в [OlcRtcWatchdog].
  * Исключение одно и оно осознанное: **смена сети** (вайфай↔мобильный, другая точка) —
  * это доказанное изменение обстановки, после неё первое же наблюдение принимается сразу.
+ *
+ * Почему смена сети не заканчивается одним наблюдением. Система объявляет новую сеть
+ * раньше, чем на ней заработает всё остальное, поэтому за первым наблюдением идёт
+ * серия перепроверок ([AutoModeBurst]: 1, 3, 8, 20 секунд), которая обрывается, как
+ * только обстановка устоялась.
  *
  * Почему не жжёт батарею. Ритм зависит от того, где мы стоим: пока ничего не работает —
  * часто, но с растущей паузой; когда встали на рабочий выход — редко; из комнаты назад
@@ -181,6 +189,16 @@ object AutoMode {
     /** Ленивый возврат: из комнаты на быстрый канал смотрим редко. */
     private const val ROUND_ROOM_MILLIS = 15 * 60_000L
 
+    /**
+     * Паузы серии перепроверок после смены сети.
+     *
+     * Первая — почти сразу: вайфай к этому моменту обычно уже раздал адрес и DNS.
+     * Дальше растут, потому что если за двадцать секунд обстановка не устоялась,
+     * то дело не в том, что мы рано посмотрели. Серия обрывается сама, как только
+     * заход перестал что-либо менять — см. [AutoModeBurst].
+     */
+    internal val BURST_STEPS = longArrayOf(1_000L, 3_000L, 8_000L, 20_000L)
+
     private val lock = Object()
 
     @Volatile
@@ -199,6 +217,19 @@ object AutoMode {
     @Volatile
     private var networkChanged = false
 
+    /**
+     * Сеть, про которую нам в последний раз сказали. Нужна, чтобы отличить настоящую
+     * смену сети от мелочи: колбэк приходит и на изменение уровня сигнала, а гонять
+     * на такое полный круг проб (да ещё и принимать его вердикт без подтверждений)
+     * значит и жечь батарею, и обесценивать саму защиту от дёрганья.
+     */
+    @Volatile
+    private var lastNetwork: Network? = null
+
+    /** Была ли та сеть проверена системой: подтверждение интернета — это тоже событие. */
+    @Volatile
+    private var lastValidated = false
+
     /** Автомат выключен человеком: ничего не проверяем и таймер не заводим. */
     @Volatile
     private var idle = false
@@ -213,7 +244,12 @@ object AutoMode {
     private var pendingSwitch = false
 
     private val gate = AutoModeGate(CONFIRMATIONS)
+    private val burst = AutoModeBurst(BURST_STEPS)
     private var searchingRounds = 0
+
+    /** Итог последнего захода: ничего не поменялось и подтверждений никто не ждёт. */
+    @Volatile
+    private var settled = false
 
     /** Что выбрали последним: не дёргаем ядро одним и тем же выбором. */
     private var selected: String? = null
@@ -251,6 +287,10 @@ object AutoMode {
             // Сервис только что поднялся — обстановка по определению «только что изменилась»,
             // и первое наблюдение можно принять сразу, не выжидая три захода.
             networkChanged = true
+            lastNetwork = DefaultNetworkMonitor.defaultNetwork
+            lastValidated = lastNetwork?.let(::validated) ?: false
+            burst.cancel()
+            settled = false
             idle = false
             pendingSwitch = false
             roomTriedAt = 0L
@@ -288,10 +328,27 @@ object AutoMode {
         Log.i(TAG, "автомат выключен")
     }
 
-    /** Сеть сменилась. Колбэк приходит из системного потока — только будим свой. */
-    fun onNetworkChanged() {
+    /**
+     * Системе есть что сказать про сеть по умолчанию. Колбэк приходит из системного
+     * потока — только будим свой.
+     *
+     * Приходит он на три разных события: появилась новая сеть, основной стала другая,
+     * система подтвердила на ней интернет. Плюс на всякую мелочь вроде уровня сигнала —
+     * а вот на неё будить автомат нельзя: полный круг проб стоит батареи, и хуже того,
+     * каждое такое «событие» принималось бы без подтверждений, то есть защита от
+     * дёрганья работала бы только на бумаге. Поэтому реагируем на смену самой сети
+     * и на смену её проверенности, а не на каждый чих.
+     *
+     * @param network сеть, которую система считает основной; null — её не стало.
+     */
+    fun onNetworkChanged(network: Network?) {
         if (!active) return
+        val nowValidated = network?.let(::validated) ?: false
+        if (network == lastNetwork && nowValidated == lastValidated) return
+        lastNetwork = network
+        lastValidated = nowValidated
         networkChanged = true
+        Log.i(TAG, "сеть сменилась: ${describe(network)}")
         synchronized(lock) { lock.notifyAll() }
     }
 
@@ -350,10 +407,15 @@ object AutoMode {
                 _state.value.situation
             }
             if (!active) return
+            // Серия перепроверок после смены сети идёт вперёд обычного ритма и обрывается
+            // сама, как только обстановка устоялась.
+            val hurry = burst.next(settled)
+            if (hurry != null) Log.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
             waitNext(
                 when {
                     // Автомат выключен человеком — таймер не нужен, ждём его же переключателя.
                     idle -> Long.MAX_VALUE
+                    hurry != null -> hurry
                     // Идёт набор подтверждений — досматриваем быстро, а не через пять минут.
                     pendingSwitch -> ROUND_SEARCHING_MILLIS
                     else -> delayFor(situation)
@@ -385,6 +447,8 @@ object AutoMode {
                 manualExit?.let { choose(host, it) }
             }
             idle = true
+            burst.cancel()
+            settled = true
             _state.value = State(auto = false, situation = Situation.Unknown)
             return Situation.Unknown
         }
@@ -394,13 +458,15 @@ object AutoMode {
         if (trustOnce) {
             networkChanged = false
             searchingRounds = 0
+            burst.restart()
             Log.i(TAG, "сеть сменилась — перепроверяю обстановку")
         }
 
         val was = gate.current
         val observed = observe(host)
-        val changed = gate.offer(observed, trustOnce)
+        val changed = gate.offer(observed, trust = trustOnce, hurried = burst.active && !trustOnce)
         pendingSwitch = gate.pending
+        settled = !changed && !gate.pending
 
         when {
             changed -> {
@@ -580,9 +646,30 @@ object AutoMode {
     /**
      * Физическая сеть — та, что под нашим туннелем. Именно её резолвер и её маршруты
      * отвечают на вопрос «что вокруг», поэтому VPN-сети отбрасываем.
+     *
+     * Спрашиваем в первую очередь **систему**, какую сеть она сама считает основной.
+     * Перебор всех сетей — только запасной путь, и не зря: когда телефон возвращается
+     * домой, мобильная сеть не исчезает в ту же секунду, а висит рядом с вайфаем ещё
+     * до полуминуты, тоже проверенная. Перебор в такой момент честно находит проверенную
+     * сеть — только не ту: пробы уходили в мобильную, домашний резолвер никто не
+     * спрашивал, и «дома» не наступало, пока мобильную не погасят. Система же знает,
+     * какая сеть стала основной, сразу.
      */
+    private fun physicalNetwork(): Network? = systemDefault() ?: anyPhysical()
+
+    /** Сеть, которую основной считает система. null — она VPN или её нет. */
+    private fun systemDefault(): Network? {
+        DefaultNetworkMonitor.defaultNetwork?.takeIf(::physical)?.let { return it }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching { Application.connectivity.activeNetwork }.getOrNull()
+                ?.takeIf(::physical)
+                ?.let { return it }
+        }
+        return null
+    }
+
     @Suppress("DEPRECATION")
-    private fun physicalNetwork(): Network? {
+    private fun anyPhysical(): Network? {
         val manager = Application.connectivity
         val networks = runCatching { manager.allNetworks }.getOrElse { return null }
         var fallback: Network? = null
@@ -596,6 +683,38 @@ object AutoMode {
             if (fallback == null) fallback = network
         }
         return fallback
+    }
+
+    /** Годится ли сеть на роль «того, что вокруг»: не наш туннель и вообще про интернет. */
+    private fun physical(network: Network): Boolean {
+        val caps = runCatching { Application.connectivity.getNetworkCapabilities(network) }.getOrNull()
+            ?: return false
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun validated(network: Network): Boolean =
+        runCatching { Application.connectivity.getNetworkCapabilities(network) }.getOrNull()
+            ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
+
+    /** Как назвать сеть в логе: без этого «сеть сменилась» ничего не говорит. */
+    private fun describe(network: Network?): String {
+        if (network == null) return "сети нет"
+        val caps = runCatching { Application.connectivity.getNetworkCapabilities(network) }.getOrNull()
+            ?: return "$network (о ней ничего не известно)"
+        val transport = when {
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "вайфай"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "мобильная"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "кабель"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
+            else -> "какая-то"
+        }
+        val checked = if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+            "проверена"
+        } else {
+            "ещё не проверена"
+        }
+        return "$transport $network, $checked"
     }
 
     /**
@@ -620,7 +739,7 @@ object AutoMode {
             val home = hits >= HOME_HITS && !controlFake
             Log.i(
                 TAG,
-                "проба дома: подменных $hits из ${HOME_DOMAINS.size}, " +
+                "проба дома по сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
                     "контрольный $HOME_CONTROL ${if (controlFake) "тоже подменён" else "настоящий"} → " +
                     if (home) "дома" else "не дома",
             )
@@ -630,15 +749,14 @@ object AutoMode {
         }
     }
 
-    private fun resolvesToFakeIp(network: Network, host: String): Boolean = runCatching {
-        network.getAllByName(host).any { address ->
+    private fun resolvesToFakeIp(network: Network, host: String): Boolean =
+        HomeProbe.addresses(network, host, DNS_BUDGET_MILLIS).any { address ->
             val bytes = address.address
             if (bytes.size != 4) return@any false
             var value = 0L
             for (b in bytes) value = (value shl 8) or (b.toLong() and 0xFF)
             value in FAKE_IP_FIRST..FAKE_IP_LAST
         }
-    }.getOrElse { false }
 
     /**
      * Работает ли основной канал. Две пробы, и вторая — главная.
