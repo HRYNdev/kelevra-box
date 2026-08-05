@@ -153,11 +153,21 @@ object Settings {
     var olcrtcSrvClientId by dataStore.string(SettingsKey.OLCRTC_SRV_CLIENT_ID) { "" }
     var olcrtcSrvKeyHex by dataStore.string(SettingsKey.OLCRTC_SRV_KEY_HEX) { "" }
     var olcrtcSrvTransport by dataStore.string(SettingsKey.OLCRTC_SRV_TRANSPORT) { "" }
+    var olcrtcSrvWbToken by dataStore.string(SettingsKey.OLCRTC_SRV_WB_TOKEN) { "" }
     var olcrtcSrvSocksPort by dataStore.int(SettingsKey.OLCRTC_SRV_SOCKS_PORT) { 0 }
     var olcrtcSrvVp8Fps by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_FPS) { 0 }
     var olcrtcSrvVp8BatchSize by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_BATCH_SIZE) { 0 }
 
     var olcrtcDeviceId by dataStore.string(SettingsKey.OLCRTC_DEVICE_ID) { "" }
+
+    // Выход выбирается сам. Человеку это ничего не запрещает: он выбирает выход руками,
+    // и тем самым автомат выключается — до тех пор, пока не выберет «Автоматически».
+    var autoModeEnabled by dataStore.boolean(SettingsKey.AUTO_MODE_ENABLED) { true }
+
+    // Комната поднимается по требованию, а не висит всегда. Если её выбрал человек руками,
+    // выбор должен пережить перезапуск сервиса — иначе после перезагрузки телефона комната
+    // окажется выбранной, но не поднятой.
+    var autoModeManualRoom by dataStore.boolean(SettingsKey.AUTO_MODE_MANUAL_ROOM) { false }
 
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
