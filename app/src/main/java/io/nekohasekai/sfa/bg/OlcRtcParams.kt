@@ -11,8 +11,9 @@ import java.util.UUID
  * `bypass_packages`, и человеку ничего вбивать не надо. Служебный экран остаётся
  * переопределением: заполненное поле перебивает серверное значение, пустое — нет.
  *
- * Токен WB на сервер не кладётся: он личный (свой аккаунт-носитель у каждого),
- * поэтому живёт только в настройках устройства.
+ * Токен WB ходит по тому же правилу, что и остальные поля: сервер отдаёт его в том же
+ * блоке (только владельцу кода), ручное значение перебивает серверное. Единственная
+ * разница — в лог он не попадает даже частями.
  */
 object OlcRtcParams {
     private const val DEFAULT_CARRIER = "wbstream"
@@ -84,6 +85,16 @@ object OlcRtcParams {
             }
         }
 
+    /**
+     * Откуда взялся токен WB — для подписи на служебном экране. Наружу отдаём только
+     * происхождение и длину: сам токен не показываем и не логируем.
+     */
+    val wbTokenSource: Source
+        get() = pick(Settings.olcrtcWbToken, Settings.olcrtcSrvWbToken, "").second
+
+    val wbTokenLength: Int
+        get() = pick(Settings.olcrtcWbToken, Settings.olcrtcSrvWbToken, "").first.length
+
     /** Порт SOCKS, на котором ядро поднимет выход: нужен и конфигу, и проверке связи. */
     val socksPort: Int
         get() = pick(Settings.olcrtcSocksPort, Settings.olcrtcSrvSocksPort, DEFAULT_SOCKS_PORT).first
@@ -96,7 +107,7 @@ object OlcRtcParams {
         keyHex = pick(Settings.olcrtcKeyHex, Settings.olcrtcSrvKeyHex, "").first,
         transport = pick(Settings.olcrtcTransport, Settings.olcrtcSrvTransport, DEFAULT_TRANSPORT).first,
         socksPort = socksPort,
-        wbToken = Settings.olcrtcWbToken,
+        wbToken = pick(Settings.olcrtcWbToken, Settings.olcrtcSrvWbToken, "").first,
         vp8Fps = pick(Settings.olcrtcVp8Fps, Settings.olcrtcSrvVp8Fps, DEFAULT_VP8_FPS).first,
         vp8BatchSize = pick(Settings.olcrtcVp8BatchSize, Settings.olcrtcSrvVp8BatchSize, DEFAULT_VP8_BATCH).first,
     )
@@ -117,6 +128,7 @@ object OlcRtcParams {
                 Settings.olcrtcSrvClientId = ""
                 Settings.olcrtcSrvKeyHex = ""
                 Settings.olcrtcSrvTransport = ""
+                Settings.olcrtcSrvWbToken = ""
                 Settings.olcrtcSrvSocksPort = 0
                 Settings.olcrtcSrvVp8Fps = 0
                 Settings.olcrtcSrvVp8BatchSize = 0
@@ -129,6 +141,9 @@ object OlcRtcParams {
         Settings.olcrtcSrvClientId = json.optString("client_id")
         Settings.olcrtcSrvKeyHex = json.optString("key_hex")
         Settings.olcrtcSrvTransport = json.optString("transport")
+        // Токен приезжает только владельцу кода. Блок без него — не повод трогать
+        // ручной токен: он лежит отдельным полем и остаётся запасным вариантом.
+        Settings.olcrtcSrvWbToken = json.optString("token")
         Settings.olcrtcSrvSocksPort = json.optInt("socks_port")
         Settings.olcrtcSrvVp8Fps = vp8?.optInt("fps") ?: 0
         Settings.olcrtcSrvVp8BatchSize = vp8?.optInt("batch_size") ?: 0
