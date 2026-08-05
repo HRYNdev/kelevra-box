@@ -66,6 +66,7 @@
     <string name="status_starting">Запускаю</string>
     <string name="status_stopping">Останавливаю</string>
     <string name="status_started">Работает</string>
+    <string name="status_home">Дома, обход на роутере</string>
 
     <!-- Dashboard -->
     <string name="dashboard_items">Что показывать на главной</string>
