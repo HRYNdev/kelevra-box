@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.compose.theme.DialState
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KBadge
@@ -87,6 +88,9 @@ fun HomeScreen(
         if (hasProfile) {
             subscription = loadSubscription()
             subscription?.bypassPackages?.let { applyBypassPackages(it) }
+            // Сеть не ответила — старые параметры комнаты остаются; ответила без блока
+            // olcrtc — стираем, чтобы не держать протухшую комнату.
+            subscription?.let { OlcRtcParams.applyServer(it.olcrtc) }
         }
     }
 
