@@ -259,6 +259,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 Log.i(TAG, "olcRTC: выход поднят на 127.0.0.1:${params.socksPort}")
                 // Сразу спрашиваем канал: «поднят» без прошедших байтов — это ещё не выход.
                 OlcRtcCore.probe(params.socksPort)
+                // Комната умирает молча — дальше за каналом следит присмотр и поднимает
+                // ядро сам, если байты перестали ходить.
+                OlcRtcWatchdog.start(protector, requireProtector = vpn != null)
             }
 
             else ->
@@ -282,8 +285,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         return result.content
     }
 
-    /** Гасим ПОСЛЕ sing-box: пока он жив, он может ходить в этот socks. */
+    /**
+     * Гасим ПОСЛЕ sing-box: пока он жив, он может ходить в этот socks.
+     *
+     * Присмотр снимаем первым: иначе обычная остановка выглядит для него как упавший
+     * канал, и он полезет поднимать ядро обратно ровно в момент выключения.
+     */
     private fun stopOlcRtc() {
+        runCatching { OlcRtcWatchdog.stop() }
+            .onFailure { Log.w(TAG, "olcRTC: присмотр не снялся: ${it.message}") }
         runCatching { OlcRtcCore.stop() }
             .onFailure { Log.w(TAG, "olcRTC: остановка сорвалась: ${it.message}") }
     }
