@@ -24,7 +24,7 @@ on:
       bind_target:
         description: "Цель gomobile: android (все ABI) или android/arm64 (быстро)"
         required: false
-        default: "android/arm64"
+        default: "android"
       build_apk:
         description: "Собирать APK после ядра (true/false)"
         required: false
@@ -41,6 +41,7 @@ env:
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
   CORE_REPO: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
   OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'master' }}
+  # push на ветку — быстрая итерация на одном ABI, ручной запуск — все ABI
   BIND_TARGET: ${{ github.event.inputs.bind_target || 'android/arm64' }}
 
 jobs:
