@@ -22,7 +22,7 @@ data class SubscriptionInfo(
     val transports: Map<String, String> = emptyMap(),
     /** приложения, которые сеть по умолчанию пускает мимо туннеля */
     val bypassPackages: List<String> = emptyList(),
-    /** параметры комнаты olcRTC, если сеть их раздаёт; токен сюда не входит */
+    /** параметры комнаты olcRTC, если сеть их раздаёт; токен внутри — только владельцу кода */
     val olcrtc: JSONObject? = null,
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
