@@ -13,6 +13,12 @@ package io.nekohasekai.sfa.bg
  *    подтверждений нечего;
  *  - **сети нет**: действие всё равно «ничего не делать», подтверждать нечего.
  *
+ * Третье послабление мягче: пока идёт серия перепроверок после смены сети
+ * ([offer] с `hurried`, см. [AutoModeBurst]), подтверждений нужно на одно меньше.
+ * Старый вердикт в эти секунды заведомо просрочен — сеть под ним уже другая, —
+ * поэтому держаться за него всеми тремя наблюдениями значит только тянуть время.
+ * Совсем без подтверждений всё равно нельзя: сеть в эти же секунды и настраивается.
+ *
  * Вынесено из [AutoMode] отдельным классом без единого обращения к Android — чтобы
  * поведение «не дёргается» можно было проверить, а не пересказать.
  */
@@ -36,11 +42,15 @@ internal class AutoModeGate(private val confirmations: Int) {
         pending = false
     }
 
+    /** Сколько наблюдений нужно внутри серии перепроверок: на одно меньше обычного. */
+    private val hurriedConfirmations = (confirmations - 1).coerceAtLeast(1)
+
     /**
      * @param trust наблюдение сделано сразу после доказанной смены сети.
+     * @param hurried наблюдение сделано внутри серии перепроверок после смены сети.
      * @return true — обстановка сменилась, пора действовать.
      */
-    fun offer(observed: AutoMode.Situation, trust: Boolean = false): Boolean {
+    fun offer(observed: AutoMode.Situation, trust: Boolean = false, hurried: Boolean = false): Boolean {
         if (observed == current) {
             candidate = observed
             hits = confirmations
@@ -55,7 +65,11 @@ internal class AutoModeGate(private val confirmations: Int) {
             hits = 1
         }
 
-        val needed = if (trust || observed == AutoMode.Situation.NoNetwork) 1 else confirmations
+        val needed = when {
+            trust || observed == AutoMode.Situation.NoNetwork -> 1
+            hurried -> hurriedConfirmations
+            else -> confirmations
+        }
         if (hits < needed) {
             pending = true
             return false
