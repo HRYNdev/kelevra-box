@@ -74,12 +74,19 @@ object SettingsKey {
     const val OLCRTC_SRV_CLIENT_ID = "olcrtc_srv_client_id"
     const val OLCRTC_SRV_KEY_HEX = "olcrtc_srv_key_hex"
     const val OLCRTC_SRV_TRANSPORT = "olcrtc_srv_transport"
+    const val OLCRTC_SRV_WB_TOKEN = "olcrtc_srv_wb_token"
     const val OLCRTC_SRV_SOCKS_PORT = "olcrtc_srv_socks_port"
     const val OLCRTC_SRV_VP8_FPS = "olcrtc_srv_vp8_fps"
     const val OLCRTC_SRV_VP8_BATCH_SIZE = "olcrtc_srv_vp8_batch_size"
 
     /** Своё имя устройства в комнате: сервер его не раздаёт, а совпадать они не должны. */
     const val OLCRTC_DEVICE_ID = "olcrtc_device_id"
+
+    /** Автомат выбирает выход сам. Выключается только выбором выхода руками. */
+    const val AUTO_MODE_ENABLED = "auto_mode_enabled"
+
+    /** Человек выбрал руками именно комнату: её ядро надо поднимать и после перезапуска. */
+    const val AUTO_MODE_MANUAL_ROOM = "auto_mode_manual_room"
 
     // cache
     const val STARTED_BY_USER = "started_by_user"
