@@ -50,6 +50,7 @@ fun AdvancedScreen(
     onConnections: () -> Unit,
     onCheck: () -> Unit,
     onLog: () -> Unit,
+    onOlcRtc: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -87,6 +88,13 @@ fun AdvancedScreen(
                     subtitle = "Приложения, работающие в обход сети",
                     chevron = true,
                     onClick = onAppsBypass,
+                )
+                KDivider()
+                KRowItem(
+                    title = "olcRTC",
+                    subtitle = "Выход через комнату: состояние канала и свой токен",
+                    chevron = true,
+                    onClick = onOlcRtc,
                 )
             }
 
