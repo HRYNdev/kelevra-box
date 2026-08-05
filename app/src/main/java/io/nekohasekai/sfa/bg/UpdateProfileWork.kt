@@ -91,6 +91,16 @@ class UpdateProfileWork {
                     success = false
                 }
             }
+            // Список выходов приезжает конфигом, а состояние подписки, исключения и
+            // параметры комнаты — отдельной сводкой. Раньше расписание тянуло только
+            // конфиг, и новая комната появлялась в телефоне лишь после захода на главный
+            // экран. Сводка тут не обязательна: не пришла — прошлые значения остаются.
+            runCatching {
+                io.nekohasekai.sfa.compose.screen.home.SubscriptionRefresh.loadInfo()
+            }.onFailure {
+                Log.w(TAG, "сводка подписки не обновилась", it)
+            }
+
             if (selectedProfileUpdated) {
                 runCatching {
                     Libbox.newStandaloneCommandClient().serviceReload()

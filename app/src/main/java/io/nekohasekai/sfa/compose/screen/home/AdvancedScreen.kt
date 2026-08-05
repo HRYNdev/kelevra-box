@@ -17,6 +17,11 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -26,6 +31,7 @@ import androidx.compose.runtime.remember
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.compose.theme.K
+import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDim
 import io.nekohasekai.sfa.compose.theme.KDivider
@@ -34,6 +40,7 @@ import io.nekohasekai.sfa.compose.theme.KRowItem
 import io.nekohasekai.sfa.compose.theme.plural
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
+import kotlinx.coroutines.delay
 
 /**
  * Расширенные настройки — свои.
@@ -54,6 +61,20 @@ fun AdvancedScreen(
     modifier: Modifier = Modifier,
 ) {
     val colors = K
+    val refresh by SubscriptionRefresh.state.collectAsState()
+    val summary by SubscriptionRefresh.summary.collectAsState()
+    val lastUpdated by SubscriptionRefresh.lastUpdated.collectAsState()
+
+    // «5 минут назад» стареет само: без тика подпись врала бы, пока экран открыт.
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        SubscriptionRefresh.loadLocal()
+        while (true) {
+            delay(30_000)
+            tick++
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -81,6 +102,43 @@ fun AdvancedScreen(
         }
 
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad)) {
+            // Обновление подписки руками: сама она обновляется по расписанию, но когда
+            // сеть начинает раздавать новое, ждать расписания незачем.
+            KGroupTitle("Подписка")
+            KCard {
+                KRowItem(
+                    title = "Состояние",
+                    subtitle = summary?.words ?: "Пока неизвестно",
+                )
+                KDivider()
+                KRowItem(
+                    title = "Обновление",
+                    // tick участвует в чтении, иначе подпись застынет на времени открытия
+                    subtitle = remember(lastUpdated, tick) { humanAgo(lastUpdated) },
+                )
+                Spacer(Modifier.height(14.dp))
+                KButton(
+                    text = if (refresh is SubscriptionRefresh.State.Running) "Обновляю" else "Обновить",
+                    onClick = { SubscriptionRefresh.request() },
+                    enabled = refresh !is SubscriptionRefresh.State.Running,
+                )
+                val message = when (val current = refresh) {
+                    is SubscriptionRefresh.State.Ok -> current.note to colors.Accent
+                    is SubscriptionRefresh.State.Failed -> current.reason to colors.Bad
+                    else -> null
+                }
+                if (message != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = message.first,
+                        fontFamily = Montserrat,
+                        fontSize = 13.sp,
+                        color = message.second,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
             KGroupTitle("Соединение")
             KCard {
                 KRowItem(
