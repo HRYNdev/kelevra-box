@@ -132,6 +132,33 @@ object Settings {
     var tailscaleSSHFontSize by dataStore.int(SettingsKey.TAILSCALE_SSH_FONT_SIZE) { 14 }
     var tailscaleSSHCustomFontPath by dataStore.string(SettingsKey.TAILSCALE_SSH_CUSTOM_FONT_PATH)
 
+    // olcRTC. Параметры комнаты приезжают с сервера (olcrtcSrv*), ручные значения —
+    // переопределение для отладки: пусто (или 0) значит «не переопределено».
+    // Ядро читает всё это только через OlcRtcParams.resolve(), сама обёртка в настройки не лезет.
+    var olcrtcEnabled by dataStore.boolean(SettingsKey.OLCRTC_ENABLED) { false }
+    var olcrtcCarrier by dataStore.string(SettingsKey.OLCRTC_CARRIER) { "" }
+    var olcrtcRoomId by dataStore.string(SettingsKey.OLCRTC_ROOM_ID) { "" }
+    var olcrtcClientId by dataStore.string(SettingsKey.OLCRTC_CLIENT_ID) { "" }
+    var olcrtcKeyHex by dataStore.string(SettingsKey.OLCRTC_KEY_HEX) { "" }
+    var olcrtcTransport by dataStore.string(SettingsKey.OLCRTC_TRANSPORT) { "" }
+    var olcrtcSocksPort by dataStore.int(SettingsKey.OLCRTC_SOCKS_PORT) { 0 }
+    var olcrtcWbToken by dataStore.string(SettingsKey.OLCRTC_WB_TOKEN) { "" }
+    var olcrtcVp8Fps by dataStore.int(SettingsKey.OLCRTC_VP8_FPS) { 0 }
+    var olcrtcVp8BatchSize by dataStore.int(SettingsKey.OLCRTC_VP8_BATCH_SIZE) { 0 }
+
+    // Пришедшее с сервера: перезаписывается при каждом успешном чтении /k/<код>/info.
+    var olcrtcSrvAvailable by dataStore.boolean(SettingsKey.OLCRTC_SRV_AVAILABLE) { false }
+    var olcrtcSrvCarrier by dataStore.string(SettingsKey.OLCRTC_SRV_CARRIER) { "" }
+    var olcrtcSrvRoomId by dataStore.string(SettingsKey.OLCRTC_SRV_ROOM_ID) { "" }
+    var olcrtcSrvClientId by dataStore.string(SettingsKey.OLCRTC_SRV_CLIENT_ID) { "" }
+    var olcrtcSrvKeyHex by dataStore.string(SettingsKey.OLCRTC_SRV_KEY_HEX) { "" }
+    var olcrtcSrvTransport by dataStore.string(SettingsKey.OLCRTC_SRV_TRANSPORT) { "" }
+    var olcrtcSrvSocksPort by dataStore.int(SettingsKey.OLCRTC_SRV_SOCKS_PORT) { 0 }
+    var olcrtcSrvVp8Fps by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_FPS) { 0 }
+    var olcrtcSrvVp8BatchSize by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_BATCH_SIZE) { 0 }
+
+    var olcrtcDeviceId by dataStore.string(SettingsKey.OLCRTC_DEVICE_ID) { "" }
+
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }
