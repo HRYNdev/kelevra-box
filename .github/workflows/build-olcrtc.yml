@@ -47,6 +47,29 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Два флейвора приложения тянут разные .aar: other → libbox.aar, otherLegacy →
+    # libbox-legacy.aar. Пока legacy собирался без olcrtc, на старых телефонах комнаты
+    # не было вообще. Оба варианта собираются одной раскладкой шагов, различия ровно
+    # те же, что у апстрима в cmd/internal/build_libbox/main.go (v1.14.0-beta.4):
+    # -androidapi 21 и набор тегов без with_naive_outbound.
+    # fail-fast выключен намеренно: legacy может не собраться (API 21 старше того, что
+    # ждёт olcrtc), и это не повод ронять рабочую основную сборку.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: main
+            androidapi: 24
+            aar: libbox.aar
+            artifact: libbox-olcrtc
+            # with_naive_outbound есть только в основном варианте
+            extra_tags: ",with_naive_outbound"
+          - variant: legacy
+            androidapi: 21
+            aar: libbox-legacy.aar
+            artifact: libbox-legacy-olcrtc
+            extra_tags: ""
+    name: build (${{ matrix.variant }})
     steps:
       - name: Checkout app
         uses: actions/checkout@v4
@@ -82,9 +105,10 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: gomod-olcrtc-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-${{ hashFiles('sing-box-for-android/cores/go.mod') }}
+          key: gomod-olcrtc-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-${{ hashFiles('sing-box-for-android/cores/go.mod') }}
           restore-keys: |
-            gomod-olcrtc-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-
+            gomod-olcrtc-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-
+            gomod-olcrtc-${{ matrix.variant }}-
             gomod-olcrtc-
 
       - name: Setup JDK
@@ -132,15 +156,16 @@ jobs:
           VERSION=$(cd "$GITHUB_WORKSPACE/sing-box" && git describe --tags | sed 's/^v//')
           echo "версия ядра: $VERSION"
 
-          # теги 1:1 из cmd/internal/build_libbox/main.go (sharedTags), вариант non-legacy
-          TAGS="with_gvisor,with_quic,with_wireguard,with_utls,with_naive_outbound,with_clash_api,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0,with_tailscale,ts_omit_logtail,ts_omit_ssh,ts_omit_drive,ts_omit_taildrop,ts_omit_webclient,ts_omit_doctor,ts_omit_capture,ts_omit_kube,ts_omit_aws,ts_omit_synology,ts_omit_bird"
+          # теги 1:1 из cmd/internal/build_libbox/main.go (sharedTags); with_naive_outbound
+          # приезжает из матрицы: у legacy апстрим его выкидывает (filterTags).
+          TAGS="with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0,with_tailscale,ts_omit_logtail,ts_omit_ssh,ts_omit_drive,ts_omit_taildrop,ts_omit_webclient,ts_omit_doctor,ts_omit_capture,ts_omit_kube,ts_omit_aws,ts_omit_synology,ts_omit_bird${{ matrix.extra_tags }}"
           LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$VERSION -X runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1 -checklinkname=0 -s -w -buildid="
 
           set -x
           gomobile bind -v \
-            -o ../app/libs/libbox.aar \
+            -o "../app/libs/${{ matrix.aar }}" \
             -target "$BIND_TARGET" \
-            -androidapi 24 \
+            -androidapi ${{ matrix.androidapi }} \
             -javapkg=io.nekohasekai \
             -libname=box \
             -trimpath \
@@ -154,7 +179,7 @@ jobs:
       - name: Проверка содержимого .aar
         working-directory: sing-box-for-android
         run: |
-          AAR=app/libs/libbox.aar
+          AAR=app/libs/${{ matrix.aar }}
           ls -la app/libs/
           echo "=== содержимое .aar ==="
           unzip -l "$AAR"
@@ -181,19 +206,20 @@ jobs:
       - name: Проверка что транспорт xhttp внутри
         working-directory: sing-box-for-android
         run: |
-          mkdir -p /tmp/socheck && unzip -o -q app/libs/libbox.aar 'jni/*/*.so' -d /tmp/socheck
+          mkdir -p /tmp/socheck && unzip -o -q "app/libs/${{ matrix.aar }}" 'jni/*/*.so' -d /tmp/socheck
           SO=$(find /tmp/socheck -name '*.so' | head -1)
           grep -qa 'v2rayxhttp' "$SO" && echo "транспорт xhttp внутри ядра: есть" || { echo "ОШИБКА: ядро собрано без патча xhttp"; exit 1; }
 
       - name: Upload core
         uses: actions/upload-artifact@v4
         with:
-          name: libbox-olcrtc
-          path: sing-box-for-android/app/libs/*.aar
+          name: ${{ matrix.artifact }}
+          path: sing-box-for-android/app/libs/${{ matrix.aar }}
           if-no-files-found: error
 
+      # APK собирается из основного флейвора: ему нужен только libbox.aar
       - name: Подготовка подписи
-        if: github.event.inputs.build_apk == 'true'
+        if: matrix.variant == 'main' && github.event.inputs.build_apk == 'true'
         working-directory: sing-box-for-android
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
@@ -207,7 +233,7 @@ jobs:
           test -s app/release.keystore
 
       - name: Build APK
-        if: github.event.inputs.build_apk == 'true'
+        if: matrix.variant == 'main' && github.event.inputs.build_apk == 'true'
         working-directory: sing-box-for-android
         env:
           KELEVRA_BUILD: ${{ github.run_number }}
@@ -216,7 +242,7 @@ jobs:
           ./gradlew assembleOtherRelease --no-daemon --stacktrace -Pabi=arm64-v8a
 
       - name: Upload APK
-        if: github.event.inputs.build_apk == 'true'
+        if: matrix.variant == 'main' && github.event.inputs.build_apk == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: kelevra-apk-olcrtc
