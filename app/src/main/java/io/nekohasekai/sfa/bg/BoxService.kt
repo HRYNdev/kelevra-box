@@ -180,7 +180,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             DefaultNetworkMonitor.start()
             // Автомат слушает ту же смену сети, что и sing-box. Отдельного колбэка не
             // заводим: он стоит денег, а этот уже зарегистрирован.
-            DefaultNetworkListener.start(AutoMode) { AutoMode.onNetworkChanged() }
+            DefaultNetworkListener.start(AutoMode) { AutoMode.onNetworkChanged(it) }
 
             // Дома обход делает роутер, и своя обёртка поверх него только грузит телефон.
             // Смотрим ДО старта ядра: поднять туннель и через секунду погасить — хуже,
