@@ -53,6 +53,34 @@ object SettingsKey {
     const val TAILSCALE_SSH_FONT_SIZE = "tailscale_ssh_font_size"
     const val TAILSCALE_SSH_CUSTOM_FONT_PATH = "tailscale_ssh_custom_font_path"
 
+    // olcRTC (выход через ядро olcrtc).
+    // Параметры приезжают с сервера в /k/<код>/info (ключи OLCRTC_SRV_*), а эти —
+    // ручное переопределение для отладки: заполнено -> берём его, пусто -> серверное.
+    const val OLCRTC_ENABLED = "olcrtc_enabled"
+    const val OLCRTC_CARRIER = "olcrtc_carrier"
+    const val OLCRTC_ROOM_ID = "olcrtc_room_id"
+    const val OLCRTC_CLIENT_ID = "olcrtc_client_id"
+    const val OLCRTC_KEY_HEX = "olcrtc_key_hex"
+    const val OLCRTC_TRANSPORT = "olcrtc_transport"
+    const val OLCRTC_SOCKS_PORT = "olcrtc_socks_port"
+    const val OLCRTC_WB_TOKEN = "olcrtc_wb_token"
+    const val OLCRTC_VP8_FPS = "olcrtc_vp8_fps"
+    const val OLCRTC_VP8_BATCH_SIZE = "olcrtc_vp8_batch_size"
+
+    // Пришедшее с сервера. Токена здесь нет и не будет: он личный и на сервер не кладётся.
+    const val OLCRTC_SRV_AVAILABLE = "olcrtc_srv_available"
+    const val OLCRTC_SRV_CARRIER = "olcrtc_srv_carrier"
+    const val OLCRTC_SRV_ROOM_ID = "olcrtc_srv_room_id"
+    const val OLCRTC_SRV_CLIENT_ID = "olcrtc_srv_client_id"
+    const val OLCRTC_SRV_KEY_HEX = "olcrtc_srv_key_hex"
+    const val OLCRTC_SRV_TRANSPORT = "olcrtc_srv_transport"
+    const val OLCRTC_SRV_SOCKS_PORT = "olcrtc_srv_socks_port"
+    const val OLCRTC_SRV_VP8_FPS = "olcrtc_srv_vp8_fps"
+    const val OLCRTC_SRV_VP8_BATCH_SIZE = "olcrtc_srv_vp8_batch_size"
+
+    /** Своё имя устройства в комнате: сервер его не раздаёт, а совпадать они не должны. */
+    const val OLCRTC_DEVICE_ID = "olcrtc_device_id"
+
     // cache
     const val STARTED_BY_USER = "started_by_user"
     const val CACHED_UPDATE_INFO = "cached_update_info"

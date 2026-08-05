@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
+import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
@@ -132,21 +133,16 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
             DefaultNetworkMonitor.start()
 
+            // olcRTC поднимаем ДО sing-box: для sing-box это обычный socks-outbound
+            // на 127.0.0.1, и он должен быть уже жив к моменту старта ядра.
+            startOlcRtcIfEnabled()
+
             try {
                 commandServer.startOrReloadService(
-                    content,
+                    effectiveConfig(content),
                     OverrideOptions().apply {
                         autoRedirect = Settings.autoRedirect
-                        if (Vendor.isPerAppProxyAvailable() && Settings.perAppProxyEnabled) {
-                            val appList = Settings.getEffectivePerAppProxyList()
-                            if (Settings.getEffectivePerAppProxyMode() == Settings.PER_APP_PROXY_INCLUDE) {
-                                includePackage =
-                                    PlatformInterfaceWrapper.StringArray((appList + Application.application.packageName).iterator())
-                            } else {
-                                excludePackage =
-                                    PlatformInterfaceWrapper.StringArray((appList - Application.application.packageName).iterator())
-                            }
-                        }
+                        applyPerAppProxy()
                     },
                 )
             } catch (e: Exception) {
@@ -176,6 +172,130 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             stopAndAlert(Alert.StartService, e.message)
             return
         }
+    }
+
+    /**
+     * Раскладка per-app для tun.
+     *
+     * Апстрим намеренно заворачивает собственный пакет в свой же tun и спасается
+     * только через `protect(fd)` на исходящих sing-box. Ядру olcRTC этого мало:
+     * проверено 05.08 на эмуляторе — при поднятом tun медиапоток VP8 умирает через
+     * ~20 с (`readVP8Track ... err=EOF`, дальше `OpenStream failed: timeout` и смерть
+     * по liveness), хотя protect(fd) отработал на каждом сокете. Причина в том, что
+     * ICE-кандидаты привязаны к `0.0.0.0` и адресу физического интерфейса, и защита
+     * отдельного сокета не спасает от пересчёта маршрута при появлении tun.
+     *
+     * Поэтому при включённом olcRTC приложение целиком выводится из туннеля.
+     * Для sing-box это безопасно: его исходящие и так идут через protected-сокеты
+     * (`autoDetectInterfaceControl`), а не через таблицу маршрутов tun.
+     */
+    private fun OverrideOptions.applyPerAppProxy() {
+        val self = Application.application.packageName
+
+        // Ядро olcRTC не переживает собственный tun — выводим весь пакет наружу.
+        val selfOutsideTun = Settings.olcrtcEnabled && service is VpnService
+
+        if (!Vendor.isPerAppProxyAvailable() || !Settings.perAppProxyEnabled) {
+            // Без per-app списка апстрим не задаёт ничего, и приложение остаётся в tun.
+            if (selfOutsideTun) {
+                excludePackage = PlatformInterfaceWrapper.StringArray(listOf(self).iterator())
+                Log.i(TAG, "olcRTC: $self выведен из tun (per-app список выключен)")
+            }
+            return
+        }
+
+        val appList = Settings.getEffectivePerAppProxyList()
+        if (Settings.getEffectivePerAppProxyMode() == Settings.PER_APP_PROXY_INCLUDE) {
+            // Белый список: «вывести из tun» = просто не добавлять себя в него.
+            includePackage =
+                PlatformInterfaceWrapper.StringArray(
+                    (if (selfOutsideTun) appList - self else appList + self).iterator(),
+                )
+        } else {
+            excludePackage =
+                PlatformInterfaceWrapper.StringArray(
+                    (if (selfOutsideTun) appList + self else appList - self).iterator(),
+                )
+        }
+        if (selfOutsideTun) Log.i(TAG, "olcRTC: $self выведен из tun")
+    }
+
+    /**
+     * Поднимает ядро olcRTC, если его включили в настройках.
+     *
+     * Защита от петли. Ядро само ходит наружу по WebRTC, и если его сокеты попадут
+     * в наш же tun, трафик туннеля пойдёт через туннель. Держится это так:
+     *  1. `protect(fd)` на каждый сокет ядра — тот же вызов, что VPNService отдаёт
+     *     sing-box в autoDetectInterfaceControl. Сокет намертво привязывается к
+     *     физической сети, и поднятый позже tun его уже не забирает.
+     *  2. Порядок: ядро стартует до openTun, то есть первые сокеты создаются, когда
+     *     tun ещё не существует.
+     *  3. Само ядро выкидывает интерфейсы tun/ppp/pptp из сбора ICE-кандидатов
+     *     (internal/protect/pionnet.go), так что и кандидатов на нашем tun не будет.
+     *  4. В режиме VPN без protect стартовать запрещено — [OlcRtcCore] откажет сам.
+     *     В режиме без tun (ProxyService) петли нет, protect не нужен.
+     *
+     * Ошибка olcRTC не роняет сервис: этот выход просто не поднимается.
+     */
+    private fun startOlcRtcIfEnabled() {
+        if (!Settings.olcrtcEnabled) return
+
+        val vpn = service as? VpnService
+        if (vpn != null && VpnService.prepare(service) != null) {
+            Log.w(TAG, "olcRTC: разрешение на VPN не выдано, protect(fd) работать не будет")
+        }
+        val protector: ((Int) -> Boolean)? = vpn?.let { { fd: Int -> it.protect(fd) } }
+
+        // Параметры комнаты приезжают с сервера, ручные значения их перебивают.
+        val params = OlcRtcParams.resolve()
+
+        val result =
+            runCatching {
+                OlcRtcCore.start(params, protector, requireProtector = vpn != null)
+            }.getOrElse { OlcRtcCore.State.Failed(it.message ?: it.javaClass.simpleName) }
+
+        when (result) {
+            is OlcRtcCore.State.Ready -> {
+                Log.i(TAG, "olcRTC: выход поднят на 127.0.0.1:${params.socksPort}")
+                // Сразу спрашиваем канал: «поднят» без прошедших байтов — это ещё не выход.
+                OlcRtcCore.probe(params.socksPort)
+                // Комната умирает молча — дальше за каналом следит присмотр и поднимает
+                // ядро сам, если байты перестали ходить.
+                OlcRtcWatchdog.start(protector, requireProtector = vpn != null)
+            }
+
+            else ->
+                // Честно говорим и идём дальше без этого выхода.
+                Log.w(TAG, "olcRTC: выход не поднят (${OlcRtcCore.lastError}), продолжаем без него")
+        }
+    }
+
+    /**
+     * Конфиг, с которым реально стартует sing-box.
+     *
+     * Комната поднялась — добавляем в маршруты отказ по UDP/443 (см. [OlcRtcConfigPatch]).
+     * Выключена или не поднялась — возвращаем ровно то, что лежит в профиле: ни байта
+     * правки. Резать QUIC ради мёртвого выхода незачем, от этого только хуже.
+     * Файл профиля не трогаем в любом случае, правка живёт только в памяти.
+     */
+    private fun effectiveConfig(content: String): String {
+        if (!Settings.olcrtcEnabled || OlcRtcCore.state !is OlcRtcCore.State.Ready) return content
+        val result = OlcRtcConfigPatch.addQuicReject(content, OlcRtcParams.socksPort)
+        OlcRtcConfigPatch.log(result)
+        return result.content
+    }
+
+    /**
+     * Гасим ПОСЛЕ sing-box: пока он жив, он может ходить в этот socks.
+     *
+     * Присмотр снимаем первым: иначе обычная остановка выглядит для него как упавший
+     * канал, и он полезет поднимать ядро обратно ровно в момент выключения.
+     */
+    private fun stopOlcRtc() {
+        runCatching { OlcRtcWatchdog.stop() }
+            .onFailure { Log.w(TAG, "olcRTC: присмотр не снялся: ${it.message}") }
+        runCatching { OlcRtcCore.stop() }
+            .onFailure { Log.w(TAG, "olcRTC: остановка сорвалась: ${it.message}") }
     }
 
     override fun serviceStop() {
@@ -216,17 +336,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         lastProfileName = profile.name
         try {
             commandServer.startOrReloadService(
-                content,
+                effectiveConfig(content),
                 OverrideOptions().apply {
                     autoRedirect = Settings.autoRedirect
-                    if (Vendor.isPerAppProxyAvailable() && Settings.perAppProxyEnabled) {
-                        val appList = Settings.getEffectivePerAppProxyList()
-                        if (Settings.getEffectivePerAppProxyMode() == Settings.PER_APP_PROXY_INCLUDE) {
-                            includePackage = PlatformInterfaceWrapper.StringArray((appList + Application.application.packageName).iterator())
-                        } else {
-                            excludePackage = PlatformInterfaceWrapper.StringArray((appList - Application.application.packageName).iterator())
-                        }
-                    }
+                    applyPerAppProxy()
                 },
             )
         } catch (e: Exception) {
@@ -291,6 +404,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 close()
 //                Seq.destroyRef(refnum)
             }
+            stopOlcRtc()
             Settings.startedByUser = false
             withContext(Dispatchers.Main) {
                 status.value = Status.Stopped
@@ -319,6 +433,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             closeService()
             commandServer.close()
         }
+        stopOlcRtc()
         withContext(Dispatchers.Main) {
             if (receiverRegistered) {
                 service.unregisterReceiver(receiver)
