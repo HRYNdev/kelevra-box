@@ -433,6 +433,18 @@ object AutoMode {
             // если сами же его погасили (иначе выбор руками упрётся в выключенное ядро),
             // и привести комнату в то состояние, которое следует из его выбора.
             if (host.resumeTunnel("автомат выключен человеком")) selected = null
+            // Выбрать выход можно раньше, чем автомат прочитает конфиг: список выходов
+            // экран строит сам, а раскладка появляется только к первому заходу. Тогда
+            // [chooseManually] не с чем было сравнить имя и записал «не комната».
+            // Сверяем ещё раз, как только раскладка есть, иначе выбранная комната
+            // молча оставалась бы непóднятой.
+            manualExit?.let { tag ->
+                val room = layout.room
+                if (room != null && Settings.autoModeManualRoom != (tag == room)) {
+                    Settings.autoModeManualRoom = tag == room
+                    Log.i(TAG, "выбор «$tag» уточнён по раскладке: комната = ${Settings.autoModeManualRoom}")
+                }
+            }
             val wantRoom = Settings.autoModeManualRoom
             val changed = runCatching {
                 host.setRoomWanted(wantRoom, if (wantRoom) "комнату выбрал человек" else "человек выбрал обычный выход")
