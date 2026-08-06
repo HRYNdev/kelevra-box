@@ -4,7 +4,10 @@
 регресс vp8channel проверен. В бой не катилось: нужен пересобранный `.aar` для приложения.
 
 База: `openlibrecommunity/olcrtc`, коммит `513be68` (04.08.2026).
-Патч: `datachannel-fix.patch` — две правки в двух файлах, `git apply` в чистом клоне.
+Патч: `apply.py` — текстовые замены в двух файлах, идемпотентен.
+Запуск: `python3 apply.py <клон olcrtc>`. Формат diff не используется намеренно:
+один потерянный пробел в контекстной строке роняет сборку с «corrupt patch»,
+на этом уже потеряли один прогон CI.
 
 ## Что чинит
 
@@ -64,7 +67,7 @@ Go на узлах нет, собиралось в контейнере на LXC
 
 ```bash
 git clone --depth 1 https://github.com/openlibrecommunity/olcrtc.git src
-git -C src apply /path/to/datachannel-fix.patch
+python3 /path/to/core-olcrtc/apply.py src
 docker run --rm -v /opt/olcbuild:/out -w /out/src golang:1.26.3 bash -c \
   'CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/olcrtc.final ./cmd/olcrtc'
 ```
