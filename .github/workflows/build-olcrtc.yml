@@ -99,12 +99,8 @@ jobs:
       # падает намеренно, чтобы ядро без datachannel не уехало в релиз незамеченным.
       - name: Патч olcrtc (рабочий datachannel)
         run: |
-          cd olcrtc
-          PATCH=../sing-box-for-android/core-olcrtc/datachannel-fix.patch
-          git apply --check "$PATCH"
-          git apply "$PATCH"
-          grep -q 'isBroadcastOnlyTransport' internal/client/client.go || { echo "патч не применился"; exit 1; }
-          echo "патч datachannel наложен"
+          python3 sing-box-for-android/core-olcrtc/apply.py olcrtc
+          grep -q 'isBroadcastOnlyTransport' olcrtc/internal/client/client.go || { echo "патч не применился"; exit 1; }
 
       # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc
       - name: Setup Go
