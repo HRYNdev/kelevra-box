@@ -221,10 +221,13 @@ class DashboardViewModel :
                             profiles = profiles,
                             selectedProfileId = selectedId,
                             selectedProfileName = profiles.find { it.id == selectedId }?.name,
-                            // список выходов из ядра приходит только когда оно работает,
-                            // поэтому до запуска показываем то, что прочитали из конфига
-                            channelRows = if (channelRows.isEmpty()) fallback.rows else channelRows,
-                            channelGroupTag = channelGroupTag ?: fallback.chooser,
+                            // Список выходов из ядра приходит только когда оно работает,
+                            // поэтому пока оно молчит показываем то, что прочитали из конфига.
+                            // Проверять на пустоту нельзя: после смены подписки в списке лежит
+                            // прежний набор от старого конфига (у Вовы так и осталось «2 выхода»
+                            // без комнаты), и новый выход не появился бы никогда.
+                            channelRows = if (!hasGroups && fallback.rows.isNotEmpty()) fallback.rows else channelRows,
+                            channelGroupTag = if (!hasGroups) fallback.chooser ?: channelGroupTag else channelGroupTag,
                         )
                     }
                 }
@@ -552,6 +555,9 @@ class DashboardViewModel :
                         downlinkHistory = List(30) { 0f },
                     )
                 }
+                // Ядро больше не отдаёт выходы — перечитываем их из конфига. Только ПОСЛЕ
+                // сброса hasGroups: иначе перечитывание увидит старый флаг и ничего не заменит.
+                loadProfiles()
             }
 
             else -> {}
