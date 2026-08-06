@@ -4,7 +4,9 @@ import androidx.lifecycle.viewModelScope
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.OutboundGroup
 import io.nekohasekai.libbox.StatusMessage
+import io.nekohasekai.sfa.bg.AutoModeExits
 import io.nekohasekai.sfa.bg.BoxService
+import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.compose.base.BaseViewModel
 import io.nekohasekai.sfa.compose.base.UiEvent
 import io.nekohasekai.sfa.compose.model.toList
@@ -27,6 +29,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONException
@@ -210,6 +213,7 @@ class DashboardViewModel :
             try {
                 val profiles = ProfileManager.list()
                 val selectedId = Settings.selectedProfile
+                val fallback = exitsFromConfig()
 
                 withContext(Dispatchers.Main) {
                     updateState {
@@ -217,6 +221,10 @@ class DashboardViewModel :
                             profiles = profiles,
                             selectedProfileId = selectedId,
                             selectedProfileName = profiles.find { it.id == selectedId }?.name,
+                            // список выходов из ядра приходит только когда оно работает,
+                            // поэтому до запуска показываем то, что прочитали из конфига
+                            channelRows = if (channelRows.isEmpty()) fallback.rows else channelRows,
+                            channelGroupTag = channelGroupTag ?: fallback.chooser,
                         )
                     }
                 }
@@ -225,6 +233,34 @@ class DashboardViewModel :
             }
         }
     }
+
+    /** Выходы, вычитанные из конфига профиля, и селектор, которым они переключаются. */
+    private data class ConfigExits(
+        val rows: List<Triple<String, Int, Boolean>> = emptyList(),
+        val chooser: String? = null,
+    )
+
+    /**
+     * Выходы из конфига — на случай, когда ядро молчит.
+     *
+     * Дома автомат гасит туннель, ядро не запускается и списка выходов не отдаёт. Без
+     * списка карточка выхода мертва: она открывается только при непустом списке. А комната
+     * помечена ручной и сама в автовыборе не участвует — получался замкнутый круг, из-за
+     * которого комнату нельзя было выбрать вообще ни разу. Конфиг знает и селектор, и оба
+     * выхода, поэтому строим список прямо из него.
+     *
+     * Задержки здесь нулевые честно: не измеряя канал, показать их неоткуда.
+     */
+    private fun exitsFromConfig(): ConfigExits = runCatching {
+        val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) } ?: return@runCatching ConfigExits()
+        val layout = AutoModeExits.parse(File(profile.typed.path).readText(), OlcRtcParams.socksPort)
+        val roomChosen = Settings.autoModeManualRoom
+        val rows = listOfNotNull(
+            layout.main?.let { Triple(it, 0, !roomChosen) },
+            layout.room?.let { Triple(it, 0, roomChosen) },
+        )
+        ConfigExits(rows = rows, chooser = layout.chooser)
+    }.getOrElse { ConfigExits() }
 
     private fun checkDeprecatedNotes() {
         viewModelScope.launch(Dispatchers.IO) {
