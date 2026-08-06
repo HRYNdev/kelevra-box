@@ -68,7 +68,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
-          key: libbox-olcrtc-v1-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-${{ hashFiles('sing-box-for-android/cores/go.mod', 'sing-box-for-android/core-xhttp/**') }}
+          key: libbox-olcrtc-v2-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-${{ hashFiles('sing-box-for-android/cores/go.mod', 'sing-box-for-android/core-xhttp/**', 'sing-box-for-android/core-olcrtc/**') }}
 
       - name: Checkout sing-box core
         if: steps.core-cache.outputs.cache-hit != 'true'
@@ -86,6 +86,21 @@ jobs:
           repository: openlibrecommunity/olcrtc
           ref: ${{ env.OLCRTC_REF }}
           path: olcrtc
+
+      # Без этого патча datachannel через WbStream не поднимается вообще: ответ сервера
+      # на рукопожатие теряется, потому что участник LiveKit начинает получать данные
+      # не сразу после входа в комнату. Разбор и замеры → core-olcrtc/README.md.
+      # Патч рассчитан на 513be68; если апстрим уедет и он перестанет ложиться — сборка
+      # падает намеренно, чтобы ядро без datachannel не уехало в релиз незамеченным.
+      - name: Патч olcrtc (рабочий datachannel)
+        if: steps.core-cache.outputs.cache-hit != 'true'
+        run: |
+          cd olcrtc
+          PATCH=../sing-box-for-android/core-olcrtc/datachannel-fix.patch
+          git apply --check "$PATCH"
+          git apply "$PATCH"
+          grep -q 'isBroadcastOnlyTransport' internal/client/client.go || { echo "патч не применился"; exit 1; }
+          echo "патч datachannel наложен"
 
       # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc
       - name: Setup Go
