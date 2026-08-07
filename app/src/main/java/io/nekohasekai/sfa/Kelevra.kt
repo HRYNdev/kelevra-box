@@ -25,6 +25,25 @@ object Kelevra {
     }
 
     /**
+     * Код подписки из любого нашего адреса: и нового (/k/<код>), и старого, который
+     * отдавала панель (/<код>/singbox). Для чужих ссылок — null.
+     *
+     * Нужен, потому что профили, заведённые до своего сборщика, ведут на панель:
+     * такой конфиг приезжает без комнаты, а сводка /info по нему не читается вовсе.
+     */
+    fun subscriptionCode(url: String): String? {
+        val cleaned = url.trim().trimEnd('/')
+        if (!cleaned.contains(SUBSCRIPTION_HOST)) return null
+        val parts = cleaned.substringAfter(SUBSCRIPTION_HOST).split('/').filter { it.isNotBlank() }
+        // /k/<код> и /s/<код> — свои формы, у остальных код идёт первым сегментом
+        val code = if (parts.firstOrNull() in setOf("k", "s")) parts.getOrNull(1) else parts.firstOrNull()
+        return code?.takeIf { it.isNotBlank() && it != CONFIG_SUFFIX.trim('/') }
+    }
+
+    /** Адрес конфига у своего сборщика. */
+    fun configUrl(code: String): String = "https://$SUBSCRIPTION_HOST/k/$code"
+
+    /**
      * Приводит к рабочей ссылке на конфиг:
      *  - короткий код              -> https://<host>/<код>/singbox
      *  - ссылка панели без суффикса -> дописываем /singbox
