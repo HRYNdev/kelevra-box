@@ -254,9 +254,13 @@ object AutoMode {
     /** Что выбрали последним: не дёргаем ядро одним и тем же выбором. */
     private var selected: String? = null
 
-    /** Выход, который человек выбрал руками. Нужен, чтобы вернуть его выбор после пересборки ядра. */
+    /**
+     * Выход, который человек выбрал руками. Нужен, чтобы вернуть его выбор после пересборки
+     * ядра. Держится ещё и в настройках: выбор часто делают при выключенной сети, когда
+     * отдать команду некому, а память процесса до включения не доживает.
+     */
     @Volatile
-    private var manualExit: String? = null
+    private var manualExit: String? = Settings.manualExitName.takeIf { it.isNotBlank() }
 
     /** Сколько заходов подряд основной канал не поднимается. Считает повод для пробного подъёма. */
     private var mainFailures = 0
@@ -357,6 +361,7 @@ object AutoMode {
         Settings.autoModeEnabled = enabled
         if (enabled) {
             manualExit = null
+            Settings.manualExitName = ""
             Settings.autoModeManualRoom = false
         }
         _state.value = _state.value.copy(auto = enabled)
@@ -375,12 +380,31 @@ object AutoMode {
      * должен пережить перезапуск сервиса — иначе после перезагрузки телефона выбранная
      * комната оказалась бы выбранной, но не поднятой.
      */
+    /** Имя комнаты приходит с сервера, поэтому узнаём её по корню слова, как и экран. */
+    private fun looksLikeRoom(tag: String): Boolean =
+        tag.lowercase().let { it.contains("комнат") || it.contains("room") }
+
     fun chooseManually(tag: String) {
         manualExit = tag
+        Settings.manualExitName = tag
         // Экран сразу применяет выбор в ядре, поэтому запоминаем его и мы: иначе автомат
         // будет считать, что стоит на основном канале, и мерять пробой чужой выход.
-        selected = tag
-        Settings.autoModeManualRoom = layout.room != null && tag == layout.room
+        //
+        // Но только когда ядро вообще есть. При выключенной сети команду отдавать некому,
+        // и запись «уже выбрано» заставляла choose() промолчать после старта: ядро
+        // оставалось на своём дефолте. Ровно так выбранная комната превращалась в
+        // «Нидерланды, выбран вручную» (поймано в эмуляторе 07.08.2026).
+        selected = if (host != null) tag else null
+        // Комнату узнаём и по имени тоже. Раскладка приходит от работающего ядра, а выбор
+        // делают чаще всего до включения сети: тогда layout.room пуст, сравнивать не с чем,
+        // и выбранная комната записывалась как обычный выход. Ниже, в round(), выбор ещё
+        // раз уточняется по раскладке, когда она появится.
+        val room = layout.room?.let { tag == it } ?: looksLikeRoom(tag)
+        Settings.autoModeManualRoom = room
+        // Ядро комнаты поднимается только при включённом тумблере, а он живёт в расширенных
+        // настройках. Без этого выбор комнаты молча давал обычный выход: круг писал
+        // «Комната», нога не видела участника вовсе (поймано в эмуляторе 07.08.2026).
+        if (room) Settings.olcrtcEnabled = true
         Settings.autoModeEnabled = false
         _state.value = _state.value.copy(auto = false)
         gate.reset(Situation.Unknown)
@@ -456,8 +480,14 @@ object AutoMode {
                 // Пересборка ядра сбрасывает выбор в селекторе на первый пункт конфига —
                 // возвращаем то, что выбрал человек.
                 selected = null
-                manualExit?.let { choose(host, it) }
             }
+            // Выбор возвращаем каждым заходом, а не только когда трогали комнату. На старте
+            // сервиса комнату поднимает уже BoxService, setRoomWanted отвечает «ничего не
+            // менялось», и выбор человека не применялся вовсе: ядро оставалось на первом
+            // выходе конфига. Ровно так выбранная комната работала как «Нидерланды»
+            // (поймано в эмуляторе 07.08.2026). Лишних команд нет: choose молчит, когда
+            // выбранное уже стоит.
+            manualExit?.let { choose(host, it) }
             idle = true
             burst.cancel()
             settled = true
