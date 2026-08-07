@@ -237,6 +237,24 @@ jobs:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
           if-no-files-found: error
 
+      # Нога дома (LXC 211) — вторая сторона комнаты, и патч ей нужен ровно тот же,
+      # что и телефону: control-плоскость работает, только когда её понимают оба конца.
+      # Собираем серверный бинарь из того же пропатченного дерева.
+      - name: Build нога (linux/amd64)
+        if: matrix.variant == 'main'
+        working-directory: olcrtc
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o /tmp/olcrtc-linux-amd64 ./cmd/olcrtc
+          ls -la /tmp/olcrtc-linux-amd64
+
+      - name: Upload нога
+        if: matrix.variant == 'main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: olcrtc-linux-amd64
+          path: /tmp/olcrtc-linux-amd64
+          if-no-files-found: error
+
       # APK собирается из основного флейвора: ему нужен только libbox.aar
       - name: Подготовка подписи
         if: matrix.variant == 'main' && github.event.inputs.build_apk == 'true'
