@@ -62,6 +62,20 @@ object OlcRtcCore {
     /** Сколько ждём остановки ядра, чтобы не подвесить выключение сервиса. */
     private const val STOP_TIMEOUT_MILLIS = 5_000L
 
+    /**
+     * Живость управляющего потока. Дефолты ядра (10 с между пингами, 15 с на ответ,
+     * 4 промаха подряд) сносят РАБОЧУЮ сессию примерно через 55 секунд молчания понгов,
+     * а понг опаздывает всегда, когда канал занят данными: пинг стоит в общей очереди.
+     *
+     * 07.08.2026 это ловилось дважды на живом телефоне: комната отработала 14 минут
+     * плотного трафика и легла по liveness, хотя данные в этот момент шли. Терпим
+     * около трёх минут: настоящий обрыв всё равно виден по отвалу соединений, а вот
+     * убивать живой канал из-за одного опоздавшего понга нельзя.
+     */
+    private const val LIVENESS_INTERVAL_MILLIS = 10_000L
+    private const val LIVENESS_TIMEOUT_MILLIS = 30_000L
+    private const val LIVENESS_FAILURES = 6L
+
     data class Params(
         val carrier: String,
         val roomId: String,
@@ -226,6 +240,14 @@ object OlcRtcCore {
                 arrayOf(LONG, LONG),
                 params.vp8Fps.toLong(),
                 params.vp8BatchSize.toLong(),
+            )
+            invoke(
+                mobile,
+                "setLivenessOptions",
+                arrayOf(LONG, LONG, LONG),
+                LIVENESS_INTERVAL_MILLIS,
+                LIVENESS_TIMEOUT_MILLIS,
+                LIVENESS_FAILURES,
             )
 
             Log.i(
