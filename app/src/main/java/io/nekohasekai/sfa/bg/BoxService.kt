@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.concurrent.thread
 
 class BoxService(private val service: Service, private val platformInterface: PlatformInterface) : CommandServerHandler {
     companion object {
@@ -202,8 +203,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // sing-box это обычный socks-outbound на 127.0.0.1.
             roomWanted = !Settings.autoModeEnabled && Settings.autoModeManualRoom
             if (roomWanted) {
-                Log.i(TAG, "комната выбрана человеком — поднимаю её до старта ядра")
-                startOlcRtcIfEnabled()
+                // Поднимаем ПАРАЛЛЕЛЬНО старту ядра, а не до него. Подъём комнаты стоит
+                // до полутора минут (вход в чужой видеозвонок), и пока он шёл, человек
+                // смотрел на «Подключаюсь» и считал, что приложение стало медленнее.
+                // Для sing-box комната — обычный socks-выход на петле: пока её нет, он
+                // просто не может через неё ходить, а круг честно пишет «Поднимаю комнату».
+                Log.i(TAG, "комната выбрана человеком — поднимаю её параллельно старту ядра")
+                thread(name = "olcrtc-warmup", isDaemon = true) { startOlcRtcIfEnabled() }
             }
 
             try {
