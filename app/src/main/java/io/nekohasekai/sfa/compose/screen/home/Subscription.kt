@@ -1,5 +1,6 @@
 package io.nekohasekai.sfa.compose.screen.home
 
+import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.database.ProfileManager
 import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.database.TypedProfile
@@ -79,8 +80,10 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         if (id == -1L) return@runCatching null
         val profile = ProfileManager.get(id) ?: return@runCatching null
         if (profile.typed.type != TypedProfile.Type.Remote) return@runCatching null
-        val remote = profile.typed.remoteURL.trimEnd('/')
-        if (!remote.contains("/k/")) return@runCatching null
+        // сводка живёт только у своего сборщика, поэтому адрес профиля приводим к нему:
+        // старые профили ведут на панель, и по ним раньше не читалось ничего
+        val subCode = Kelevra.subscriptionCode(profile.typed.remoteURL) ?: return@runCatching null
+        val remote = Kelevra.configUrl(subCode)
 
         val conn = URL("$remote/info").openConnection() as HttpURLConnection
         conn.requestMethod = "GET"

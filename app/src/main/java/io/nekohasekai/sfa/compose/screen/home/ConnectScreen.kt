@@ -354,9 +354,22 @@ private fun clipboardText(context: Context): String? {
     return manager?.primaryClip?.getItemAt(0)?.text?.toString()?.trim()?.takeIf { it.isNotBlank() }
 }
 
-/** Понятный текст вместо стектрейса: человек должен понять, что делать дальше. */
+/**
+ * Понятный текст вместо стектрейса: человек должен понять, что делать дальше.
+ *
+ * Тип исключения надёжнее его текста: без сети сюда приходит UnknownHostException,
+ * в message у которого лежит только имя хоста, и человек видел общее «не удалось
+ * подключиться», хотя дело не в коде, а в том, что интернета нет вовсе.
+ */
 private fun humanError(e: Throwable): String {
     val text = (e.message ?: "").lowercase()
+    val net = generateSequence(e) { it.cause }.any {
+        it is java.net.UnknownHostException ||
+            it is java.net.ConnectException ||
+            it is java.net.SocketTimeoutException ||
+            it is java.net.NoRouteToHostException
+    }
+    if (net) return "Нет связи. Проверьте интернет и повторите."
     return when {
         "unable to resolve host" in text || "failed to connect" in text || "timeout" in text ->
             "Нет связи с сервером. Проверьте подключение и повторите."
