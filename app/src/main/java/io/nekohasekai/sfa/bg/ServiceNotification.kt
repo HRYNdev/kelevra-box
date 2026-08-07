@@ -119,12 +119,32 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
         receiverRegistered = true
     }
 
+    /**
+     * Что показывать в шторке кроме скорости.
+     *
+     * «Работает» не говорит человеку ничего: он не видит ни выхода, ни того, что канал
+     * через комнату ещё поднимается. Пишем состояние словами, как на главном экране.
+     */
+    private fun состояние(): String = when {
+        AutoMode.state.value.situation == AutoMode.Situation.Home -> service.getString(R.string.status_home)
+        AutoMode.state.value.situation == AutoMode.Situation.NoNetwork -> "Нет сети"
+        Settings.olcrtcEnabled && Settings.autoModeManualRoom -> when (OlcRtcCore.state) {
+            is OlcRtcCore.State.Ready -> "Комната"
+            is OlcRtcCore.State.Starting -> "Поднимаю комнату"
+            else -> "Комната не отвечает"
+        }
+        Settings.manualExitName.isNotBlank() && !Settings.autoModeEnabled -> Settings.manualExitName
+        Settings.autoModeEnabled -> "Выход выбирается сам"
+        else -> service.getString(R.string.status_started)
+    }
+
     override fun updateStatus(status: StatusMessage) {
         // нули в шторке выглядят как поломка: пока трафика нет, показываем состояние
         val content = if (status.uplink == 0L && status.downlink == 0L) {
-            service.getString(R.string.status_started)
+            состояние()
         } else {
-            Libbox.formatBytes(status.uplink) + "/s ↑\t" + Libbox.formatBytes(status.downlink) + "/s ↓"
+            состояние() + " · " +
+                Libbox.formatBytes(status.uplink) + "/s ↑ " + Libbox.formatBytes(status.downlink) + "/s ↓"
         }
         Application.notificationManager.notify(
             notificationId,
