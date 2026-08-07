@@ -249,9 +249,6 @@ patch(
         ),
         (
             "func (r *sdkRoom) publishTrack(track webrtc.TrackLocal) error {",
-            "// Надёжная труба обязательна: поверх этого канала работает smux, а он не\n"
-            "// переживает потерю фрейма. Ненадёжная труба (lossy) сняла бы очередь за\n"
-            "// данными, но рукопожатие по ней не соберётся — это отдельная переделка.\n"
             "func (r *sdkRoom) publishControl(data []byte) error {\n"
             "\tif err := r.room.LocalParticipant.PublishDataPacket(\n"
             "\t\tlksdk.UserData(data),\n"
