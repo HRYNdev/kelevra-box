@@ -169,6 +169,12 @@ object Settings {
     // окажется выбранной, но не поднятой.
     var autoModeManualRoom by dataStore.boolean(SettingsKey.AUTO_MODE_MANUAL_ROOM) { false }
 
+    // Имя выхода, выбранного руками. Держали его только в памяти автомата, поэтому выбор,
+    // сделанный до включения сети, пропадал: ядра ещё нет, команду выбора отдать некому,
+    // а перезапуск процесса стирал память. 07.08.2026 это ловилось в эмуляторе: выбрал
+    // комнату, включил — поднялись «Нидерланды» с подписью «выбран вручную».
+    var manualExitName by dataStore.string(SettingsKey.AUTO_MODE_MANUAL_EXIT) { "" }
+
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }
