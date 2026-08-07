@@ -125,7 +125,19 @@ jobs:
         with:
           distribution: temurin
           java-version: "17" # gomobile/gobind в апстриме проверяют 17; держим ту же связку
-          cache: gradle
+
+      # Свой кеш Gradle вместо cache: gradle у setup-java: у того нет restore-keys, а ключ —
+      # хеш всех gradle-файлов, поэтому любая правка build.gradle.kts убивает попадания насовсем.
+      - name: Кеш Gradle
+        if: steps.core-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Setup Android SDK
         if: steps.core-cache.outputs.cache-hit != 'true'
@@ -240,7 +252,17 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
+
+      # см. комментарий у такого же шага в job core
+      - name: Кеш Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
