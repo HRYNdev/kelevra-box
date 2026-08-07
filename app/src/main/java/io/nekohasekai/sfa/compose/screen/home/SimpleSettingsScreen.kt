@@ -69,6 +69,8 @@ fun SimpleSettingsScreen(
     onCheck: () -> Unit,
     onAdvanced: () -> Unit,
     onComplaint: () -> Unit,
+    onCheckUpdate: () -> Unit,
+    обновлениеПодпись: String,
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -95,15 +97,8 @@ fun SimpleSettingsScreen(
                 color = colors.Text,
                 modifier = Modifier.weight(1f),
             )
-            // «Столкнулись с проблемой? Опишите её, и мы исправим»
-            Icon(
-                imageVector = Icons.Outlined.MailOutline,
-                contentDescription = "Сообщить о проблеме",
-                tint = colors.Dim,
-                modifier = Modifier
-                    .size(22.dp)
-                    .clickable { onComplaint() },
-            )
+            // Иконка письма в шапке убрана: без подписи непонятно, что это жалоба,
+            // а то же действие теперь есть строкой «Сообщить о проблеме» ниже.
         }
 
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad)) {
@@ -141,7 +136,22 @@ fun SimpleSettingsScreen(
                     subtitle = "Состояние подключения в панели уведомлений",
                     trailing = { KSwitch(notifications, onNotificationsChange) },
                 )
-
+                KDivider()
+                // Обновление приходило только само и молча. Человеку нужен способ
+                // спросить прямо сейчас: иначе непонятно, свежая у него версия или нет.
+                KRowItem(
+                    title = "Проверить обновление",
+                    subtitle = обновлениеПодпись,
+                    chevron = true,
+                    onClick = onCheckUpdate,
+                )
+                KDivider()
+                KRowItem(
+                    title = "Сообщить о проблеме",
+                    subtitle = "Опишите, что не работает",
+                    chevron = true,
+                    onClick = onComplaint,
+                )
             }
 
             KGroupTitle("Подписка")
