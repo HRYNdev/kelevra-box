@@ -120,8 +120,13 @@ fun HomeScreen(
     // трафика (поймано в эмуляторе 07.08.2026). Зелёным теперь только по живому ядру.
     val roomCoreState = OlcRtcCore.state
     val room = roomChosen && roomCoreState is OlcRtcCore.State.Ready
-    val roomRising = roomChosen && roomCoreState is OlcRtcCore.State.Starting
-    val roomDead = roomChosen && !room && !roomRising
+    // «Не отвечает» пишем только когда ядро действительно отказалось. Пока оно ещё
+    // не поднималось или поднимается — это «поднимаю»: иначе в первые же секунды
+    // после включения человек читает «Комната не отвечает», хотя вход только начался.
+    val roomDead = roomChosen && (
+        roomCoreState is OlcRtcCore.State.Failed || roomCoreState is OlcRtcCore.State.Unavailable
+        )
+    val roomRising = roomChosen && !room && !roomDead
     // Ничего не поднимается или сети нет — круг не должен врать зелёным.
     val broken = running && (
         auto.situation == AutoMode.Situation.Searching ||
