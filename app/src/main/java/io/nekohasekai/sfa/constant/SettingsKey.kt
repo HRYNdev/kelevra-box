@@ -88,6 +88,9 @@ object SettingsKey {
     /** Человек выбрал руками именно комнату: её ядро надо поднимать и после перезапуска. */
     const val AUTO_MODE_MANUAL_ROOM = "auto_mode_manual_room"
 
+    /** Имя выхода, выбранного руками: выбор должен пережить выключенную сеть и перезапуск. */
+    const val AUTO_MODE_MANUAL_EXIT = "auto_mode_manual_exit"
+
     // cache
     const val STARTED_BY_USER = "started_by_user"
     const val CACHED_UPDATE_INFO = "cached_update_info"
