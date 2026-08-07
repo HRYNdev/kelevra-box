@@ -83,6 +83,9 @@ import io.nekohasekai.sfa.compose.screen.usbip.USBIPServerScreen
 import io.nekohasekai.sfa.compose.screen.usbip.USBIPStatusViewModel
 import io.nekohasekai.sfa.constant.Status
 import io.nekohasekai.sfa.database.Settings
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 private val slideInFromRight: AnimatedContentTransitionScope<*>.() -> androidx.compose.animation.EnterTransition = {
     slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, animationSpec = tween(300))
@@ -577,6 +580,9 @@ fun SFANavHost(
             val uiState = dashboardViewModel?.uiState?.collectAsState()?.value
             var autoStart by remember { mutableStateOf(Settings.startedByUser) }
             var notifications by remember { mutableStateOf(Settings.dynamicNotification) }
+            var обновлениеИдёт by remember { mutableStateOf(false) }
+            var обновлениеИтог by remember { mutableStateOf("") }
+            val scope = rememberCoroutineScope()
             SimpleSettingsScreen(
                 autoStart = autoStart,
                 onAutoStartChange = {
@@ -597,6 +603,24 @@ fun SFANavHost(
                 onCheck = { navController.navigate("settings/diagnostics") },
                 onAdvanced = { navController.navigate("settings/all") },
                 onComplaint = { navController.navigate("complaint") },
+                onCheckUpdate = {
+                    обновлениеИдёт = true
+                    scope.launch(Dispatchers.IO) {
+                        val найдено = runCatching { io.nekohasekai.sfa.vendor.Vendor.checkUpdateAsync() }.getOrNull()
+                        io.nekohasekai.sfa.update.UpdateState.setUpdate(найдено)
+                        обновлениеИдёт = false
+                        обновлениеИтог = if (найдено != null) {
+                            "Есть версия ${найдено.versionName}"
+                        } else {
+                            "Установлена свежая версия"
+                        }
+                    }
+                },
+                обновлениеПодпись = when {
+                    обновлениеИдёт -> "Проверяю…"
+                    обновлениеИтог.isNotBlank() -> обновлениеИтог
+                    else -> "Сейчас ${io.nekohasekai.sfa.BuildConfig.VERSION_NAME}"
+                },
             )
         }
 
