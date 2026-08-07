@@ -97,8 +97,15 @@ fun SimpleSettingsScreen(
                 color = colors.Text,
                 modifier = Modifier.weight(1f),
             )
-            // Иконка письма в шапке убрана: без подписи непонятно, что это жалоба,
-            // а то же действие теперь есть строкой «Сообщить о проблеме» ниже.
+            // Иконка жалобы стоит здесь по прямому решению Вовы. Не переносить.
+            Icon(
+                imageVector = Icons.Outlined.MailOutline,
+                contentDescription = "Сообщить о проблеме",
+                tint = colors.Dim,
+                modifier = Modifier
+                    .size(22.dp)
+                    .clickable { onComplaint() },
+            )
         }
 
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad)) {
@@ -144,13 +151,6 @@ fun SimpleSettingsScreen(
                     subtitle = обновлениеПодпись,
                     chevron = true,
                     onClick = onCheckUpdate,
-                )
-                KDivider()
-                KRowItem(
-                    title = "Сообщить о проблеме",
-                    subtitle = "Опишите, что не работает",
-                    chevron = true,
-                    onClick = onComplaint,
                 )
             }
 
