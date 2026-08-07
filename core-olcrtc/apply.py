@@ -194,4 +194,45 @@ patch(
     ],
 )
 
+# --------------------------------------------------------------------------------------
+# Залётное рукопожатие не должно ронять живую сессию.
+#
+# Замер на боевом 07.08.2026: за 27 минут пользования сессия рвалась трижды, и каждый раз
+# в логе ноги стояло `server control stream ended: unexpected control message: got
+# "CLIENT_HELLO"`. Промахов пинга за то же время было два, то есть таймаут ни при чём:
+# клиент сам начинал рукопожатие заново в уже живом служебном потоке, а сервер считал
+# это протокольной ошибкой и сносил всю сессию вместе с рабочими соединениями.
+# --------------------------------------------------------------------------------------
+
+print("internal/control/control.go:")
+patch(
+    "internal/control/control.go",
+    [
+        (
+            '\t"io"\n\t"sync"\n\t"time"\n',
+            '\t"io"\n\t"strings"\n\t"sync"\n\t"time"\n',
+            "импорт strings",
+        ),
+        (
+            "\tcase TypeClose:\n"
+            "\t\treturn ErrClosedByPeer\n"
+            "\tdefault:\n"
+            '\t\treturn fmt.Errorf("%w: got %q", ErrUnexpectedMessage, msg.Type)\n',
+            "\tcase TypeClose:\n"
+            "\t\treturn ErrClosedByPeer\n"
+            "\tdefault:\n"
+            "\t\t// Рукопожатие, прилетевшее в живой поток, — это попытка пира\n"
+            "\t\t// переустановиться, а не поломка протокола. Рвать из-за неё рабочую\n"
+            "\t\t// сессию нельзя: у человека обрываются все соединения разом.\n"
+            "\t\t// Если связь и правда мертва, её снимет liveness.\n"
+            '\t\tif strings.HasPrefix(string(msg.Type), "CLIENT_") ||\n'
+            '\t\t\tstrings.HasPrefix(string(msg.Type), "SERVER_") {\n'
+            "\t\t\treturn nil\n"
+            "\t\t}\n"
+            '\t\treturn fmt.Errorf("%w: got %q", ErrUnexpectedMessage, msg.Type)\n',
+            "не рвать сессию на залётном рукопожатии",
+        ),
+    ],
+)
+
 print("патч наложен")
