@@ -41,7 +41,11 @@ class GitHubUpdateChecker : Closeable {
                 continue
             }
             val versionName = versionNameFromAssets(release)
-            if (versionName == null) {
+            // Кандидатом по имени берём только релиз, у которого метаданные вообще есть:
+            // победителю они понадобятся ради version_code, и если их нет, проверка
+            // возвращала null и глушила обновление целиком. Список ассетов уже скачан,
+            // так что эта проверка не стоит ни одного запроса.
+            if (versionName == null || !hasMetadata(release)) {
                 withoutVersionInName.add(release)
                 continue
             }
@@ -116,6 +120,9 @@ class GitHubUpdateChecker : Closeable {
     }
 
     private fun isNewerThanCurrent(versionName: String): Boolean = Libbox.compareSemver(versionName, BuildConfig.VERSION_NAME)
+
+    private fun hasMetadata(release: GitHubRelease): Boolean =
+        release.assets.any { it.name == METADATA_FILENAME }
 
     private fun versionNameFromAssets(release: GitHubRelease): String? {
         for (asset in release.assets) {
