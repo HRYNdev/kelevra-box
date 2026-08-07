@@ -23,6 +23,12 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.scale
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -86,8 +92,28 @@ fun KDial(
         label = "breath",
     )
 
+    // Нажатие: круг должен нажиматься как круг и отвечать сразу.
+    // Было — квадратная область (Box без обрезки), поэтому попадание в угол считалось
+    // попаданием в кнопку, а отклика не было видно вовсе: подсветка рисовалась под
+    // Canvas. Теперь область обрезана по кругу, а на нажатие круг заметно поджимается.
+    val press = remember { MutableInteractionSource() }
+    val pressed by press.collectIsPressedAsState()
+    val squeeze by animateFloatAsState(
+        targetValue = if (pressed) 0.955f else 1f,
+        animationSpec = tween(90),
+        label = "squeeze",
+    )
+
     Box(
-        modifier = modifier.size(size).clickable(enabled = state != DialState.Busy) { onClick() },
+        modifier = modifier
+            .size(size)
+            .scale(squeeze)
+            .clip(CircleShape)
+            .clickable(
+                enabled = state != DialState.Busy,
+                interactionSource = press,
+                indication = ripple(bounded = true),
+            ) { onClick() },
         contentAlignment = Alignment.Center,
     ) {
         Canvas(modifier = Modifier.size(size)) {
