@@ -109,11 +109,19 @@ fun HomeScreen(
     val home = running && auto.situation == AutoMode.Situation.Home
     // Комнату узнаём по выбранному выходу, а не только по решению автомата: выбранная
     // руками комната — та же комната, и подпись под кругом должна быть та же.
-    val room = running && (auto.situation == AutoMode.Situation.Room || isRoomExit(activeOutbound))
+    val roomChosen = running && (auto.situation == AutoMode.Situation.Room || isRoomExit(activeOutbound))
+    // Выбранная комната и поднятая комната — разные вещи. Круг писал «Подключено. Комната»,
+    // когда ядро olcRTC не запускалось вовсе: на ноге в этот момент ноль участников и ноль
+    // трафика (поймано в эмуляторе 07.08.2026). Зелёным теперь только по живому ядру.
+    val roomCoreState = OlcRtcCore.state
+    val room = roomChosen && roomCoreState is OlcRtcCore.State.Ready
+    val roomRising = roomChosen && roomCoreState is OlcRtcCore.State.Starting
+    val roomDead = roomChosen && !room && !roomRising
     // Ничего не поднимается или сети нет — круг не должен врать зелёным.
     val broken = running && (
         auto.situation == AutoMode.Situation.Searching ||
-            auto.situation == AutoMode.Situation.NoNetwork
+            auto.situation == AutoMode.Situation.NoNetwork ||
+            roomDead
         )
 
     // Задержку комнаты знает только её собственная проверка. Спрашиваем, пока
@@ -181,6 +189,8 @@ fun HomeScreen(
                 home -> "Дома"
                 running && auto.situation == AutoMode.Situation.NoNetwork -> "Нет сети"
                 running && auto.situation == AutoMode.Situation.Searching -> "Ищу путь"
+                roomRising -> "Поднимаю комнату"
+                roomDead -> "Комната не отвечает"
                 running -> "Подключено"
                 else -> "Отключено"
             },
@@ -198,6 +208,8 @@ fun HomeScreen(
                 home -> "дома интернет и так открыт, туннель выключен"
                 running && auto.situation == AutoMode.Situation.NoNetwork -> "включится, когда появится сеть"
                 running && auto.situation == AutoMode.Situation.Searching -> "подбираю рабочий выход"
+                roomRising -> "поднимаю канал через комнату"
+                roomDead -> "канал через комнату не поднялся, выберите другой выход"
                 running -> "нажмите, чтобы выключить"
                 else -> "нажмите, чтобы включить"
             },
