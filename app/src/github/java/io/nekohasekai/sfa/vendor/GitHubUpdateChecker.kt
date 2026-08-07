@@ -16,6 +16,7 @@ class GitHubUpdateChecker : Closeable {
     companion object {
         private const val RELEASES_URL = "https://api.github.com/repos/HRYNdev/kelevra-box/releases"
         private const val METADATA_FILENAME = "kelevra-version.json"
+        private val APK_VERSION = Regex("""^Kelevra-(\d+\.\d+\.\d+)-.*\.apk$""")
     }
 
     private val client = Libbox.newHTTPClient().apply {
@@ -28,23 +29,47 @@ class GitHubUpdateChecker : Closeable {
     fun checkUpdate(track: UpdateTrack, githubToken: String): UpdateInfo? {
         val releases = getReleases(githubToken)
         var selected: ReleaseCandidate? = null
+        val withoutVersionInName = mutableListOf<GitHubRelease>()
 
+        // Версия уже написана в имени APK: app/build.gradle.kts задаёт
+        // base.archivesName = "Kelevra-${versionName}". Пока имя разбирается,
+        // kelevra-version.json скачивать незачем — он нужен только победителю, ради
+        // version_code. Раньше метаданные качались у ВСЕХ релизов страницы, причём
+        // до отсева по версии: 29 запросов на одну проверку вместо двух.
         for (release in releases) {
             if (!isReleaseInTrack(release, track)) {
                 continue
             }
+            val versionName = versionNameFromAssets(release)
+            if (versionName == null) {
+                withoutVersionInName.add(release)
+                continue
+            }
+            if (!isNewerThanCurrent(versionName)) {
+                continue
+            }
+            val currentBest = selected
+            if (currentBest == null || isBetterCandidate(release, versionName, currentBest)) {
+                selected = ReleaseCandidate(release, versionName, null)
+            }
+        }
+
+        // Запасной путь для релизов с чужим именем ассета — как раньше, через метаданные.
+        for (release in withoutVersionInName) {
             val metadata = runCatching { downloadMetadata(release) }.getOrNull() ?: continue
             if (!isNewerThanCurrent(metadata.versionName)) {
                 continue
             }
             val currentBest = selected
-            if (currentBest == null || isBetterVersion(metadata, currentBest.metadata)) {
-                selected = ReleaseCandidate(release, metadata)
+            if (currentBest == null || isBetterCandidate(release, metadata.versionName, currentBest)) {
+                selected = ReleaseCandidate(release, metadata.versionName, metadata)
             }
         }
 
         val release = selected?.release ?: return null
         val metadata = selected.metadata
+            ?: runCatching { downloadMetadata(release) }.getOrNull()
+            ?: return null
 
         val isLegacy = Build.VERSION.SDK_INT < Build.VERSION_CODES.M
         val apkAsset = release.assets.find { asset ->
@@ -92,14 +117,29 @@ class GitHubUpdateChecker : Closeable {
 
     private fun isNewerThanCurrent(versionName: String): Boolean = Libbox.compareSemver(versionName, BuildConfig.VERSION_NAME)
 
-    private fun isBetterVersion(version: VersionMetadata, other: VersionMetadata): Boolean {
-        if (Libbox.compareSemver(version.versionName, other.versionName)) {
+    private fun versionNameFromAssets(release: GitHubRelease): String? {
+        for (asset in release.assets) {
+            val match = APK_VERSION.find(asset.name) ?: continue
+            return match.groupValues[1]
+        }
+        return null
+    }
+
+    private fun isBetterCandidate(release: GitHubRelease, versionName: String, best: ReleaseCandidate): Boolean {
+        if (Libbox.compareSemver(versionName, best.versionName)) {
             return true
         }
-        if (Libbox.compareSemver(other.versionName, version.versionName)) {
+        if (Libbox.compareSemver(best.versionName, versionName)) {
             return false
         }
-        return version.versionCode > other.versionCode
+        // Равные versionName: прежний разрыв ничьей по version_code. Метаданные качаются
+        // только здесь, и на живых релизах этот случай не встречается ни разу.
+        val code = runCatching { downloadMetadata(release) }.getOrNull()?.versionCode ?: return false
+        val bestMetadata = best.metadata ?: runCatching { downloadMetadata(best.release) }.getOrNull()
+        if (bestMetadata == null) {
+            return true
+        }
+        return code > bestMetadata.versionCode
     }
 
     private fun downloadMetadata(release: GitHubRelease): VersionMetadata? {
@@ -146,6 +186,7 @@ class GitHubUpdateChecker : Closeable {
 
     private data class ReleaseCandidate(
         val release: GitHubRelease,
-        val metadata: VersionMetadata,
+        val versionName: String,
+        val metadata: VersionMetadata?,
     )
 }
