@@ -96,7 +96,7 @@ fun ConnectScreen(
                 onSuccess = { step = 2 },
                 onFailure = {
                     android.util.Log.w("KelevraConnect", "подключение по коду не удалось", it)
-                    error = humanError(it)
+                    error = humanError(it, context)
                 },
             )
         }
@@ -349,6 +349,15 @@ private fun ColumnScope.StepDone(onDone: () -> Unit) {
 }
 
 /** Код часто присылают сообщением: вставка из буфера избавляет от ручного ввода. */
+/** Есть ли у телефона рабочая сеть прямо сейчас. Свой туннель тут не мешает: он тоже сеть. */
+private fun hasNetwork(context: Context): Boolean {
+    val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE)
+        as? android.net.ConnectivityManager ?: return true
+    val active = manager.activeNetwork ?: return false
+    val caps = manager.getNetworkCapabilities(active) ?: return false
+    return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+}
+
 private fun clipboardText(context: Context): String? {
     val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
     return manager?.primaryClip?.getItemAt(0)?.text?.toString()?.trim()?.takeIf { it.isNotBlank() }
@@ -361,8 +370,13 @@ private fun clipboardText(context: Context): String? {
  * в message у которого лежит только имя хоста, и человек видел общее «не удалось
  * подключиться», хотя дело не в коде, а в том, что интернета нет вовсе.
  */
-private fun humanError(e: Throwable): String {
+private fun humanError(e: Throwable, context: Context): String {
     val text = (e.message ?: "").lowercase()
+    // Сначала спрашиваем систему, а не исключение. Конфиг качает ядро (libbox), и наружу
+    // оно отдаёт свою ошибку от Go: ни UnknownHostException, ни знакомых слов в тексте там
+    // нет. Проверено в эмуляторе 07.08.2026 с выключенными вайфаем и мобильной сетью —
+    // человек видел «Проверьте код», хотя код был верный, а интернета не было вовсе.
+    if (!hasNetwork(context)) return "Нет связи. Проверьте интернет и повторите."
     val net = generateSequence(e) { it.cause }.any {
         it is java.net.UnknownHostException ||
             it is java.net.ConnectException ||

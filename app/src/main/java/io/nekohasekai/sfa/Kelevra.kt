@@ -45,26 +45,24 @@ object Kelevra {
 
     /**
      * Приводит к рабочей ссылке на конфиг:
-     *  - короткий код              -> https://<host>/<код>/singbox
-     *  - ссылка панели без суффикса -> дописываем /singbox
+     *  - короткий код               -> https://<host>/k/<код>
+     *  - любая наша ссылка          -> тоже /k/<код>, в какой бы форме её ни дали
      *  - всё остальное              -> оставляем как есть (чужие подписки не трогаем)
+     *
+     * Старую форму (`/<код>/singbox`, конфиг от панели) не оставляем даже когда её
+     * вводят руками: панель отдаёт формат старого ядра, и sing-box 1.14 его не принимает
+     * вовсе. Проверено в эмуляторе 07.08.2026: подключение по такой ссылке падало с
+     * «legacy DNS fakeip options are deprecated ... removed in sing-box 1.14.0»,
+     * профиль не создавался.
      */
     fun normalizeSubscription(input: String): String {
         val raw = input.trim()
         if (raw.isEmpty()) return raw
-        // короткий код -> свой сборщик конфигов: панель отдаёт формат старого ядра
+        // короткий код -> свой сборщик конфигов
         if (!raw.contains("://")) {
-            return "https://$SUBSCRIPTION_HOST/k/${raw.trim('/')}"
+            return configUrl(raw.trim('/'))
         }
         val cleaned = raw.trimEnd('/')
-        // ссылки нашего сборщика (/k/<код>) уже готовые — суффикс им не нужен
-        if (cleaned.contains("$SUBSCRIPTION_HOST/k/")) {
-            return cleaned
-        }
-        return if (cleaned.contains(SUBSCRIPTION_HOST) && !cleaned.endsWith(CONFIG_SUFFIX)) {
-            cleaned + CONFIG_SUFFIX
-        } else {
-            cleaned
-        }
+        return subscriptionCode(cleaned)?.let(::configUrl) ?: cleaned
     }
 }
