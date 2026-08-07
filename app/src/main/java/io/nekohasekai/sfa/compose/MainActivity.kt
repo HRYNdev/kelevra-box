@@ -655,7 +655,9 @@ class MainActivity :
         val updateInfo by UpdateState.updateInfo
         val shouldShowUpdateDialog = updateInfo != null &&
             updateInfo!!.versionCode > Settings.lastShownUpdateVersion
-        var showUpdateDialog by remember { mutableStateOf(true) }
+        // Ключ по версии: после ручной проверки окно должно показаться снова, даже если
+        // его один раз закрыли. Без этого промах мимо «Обновить» лишал последней кнопки.
+        var showUpdateDialog by remember(updateInfo?.versionCode) { mutableStateOf(true) }
 
         // Download dialog state
         var showDownloadDialog by remember { mutableStateOf(false) }
