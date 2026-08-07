@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.compose.screen.home
 
 import android.util.Log
 import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.compose.theme.plural
 import io.nekohasekai.sfa.database.Profile
@@ -153,6 +154,8 @@ object SubscriptionRefresh {
                 return
             }
 
+            migrateToOwnBuilder(profile)
+
             val content = try {
                 Log.i(TAG, "обновление подписки: запрашиваю настройки у сервера")
                 val text = HTTPClient().use { it.getString(profile.typed.remoteURL) }
@@ -212,6 +215,21 @@ object SubscriptionRefresh {
         } finally {
             lock.unlock()
         }
+    }
+
+    /**
+     * Профили, заведённые до своего сборщика, ведут на панель (/<код>/singbox).
+     * Оттуда приезжает конфиг старого формата: без комнаты и без сводки, поэтому
+     * адрес переписываем на свой сборщик один раз и молча. Чужие подписки не трогаем:
+     * [Kelevra.subscriptionCode] отдаёт код только для нашего хоста.
+     */
+    private suspend fun migrateToOwnBuilder(profile: Profile) {
+        val code = Kelevra.subscriptionCode(profile.typed.remoteURL) ?: return
+        val fresh = Kelevra.configUrl(code)
+        if (profile.typed.remoteURL.trimEnd('/') == fresh) return
+        Log.i(TAG, "подписка переведена на свой сборщик: $fresh")
+        profile.typed.remoteURL = fresh
+        ProfileManager.update(profile)
     }
 
     private suspend fun selectedRemote(): Profile? {
