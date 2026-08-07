@@ -98,6 +98,11 @@ fun HomeScreen(
     // должна показать новое сразу, без перезахода в приложение.
     val subscription by SubscriptionRefresh.info.collectAsState()
     val auto by AutoMode.state.collectAsState()
+    // Что человек выбрал руками. Читаем при каждой смене состояния автомата и запуска:
+    // ядро может молчать, а показать надо правду.
+    val manualExit by remember(auto.auto, running) {
+        mutableStateOf(io.nekohasekai.sfa.database.Settings.manualExitName)
+    }
 
     LaunchedEffect(hasProfile, running) {
         if (hasProfile) {
@@ -226,7 +231,13 @@ fun HomeScreen(
                         label = "Выход",
                         title = when {
                             home -> "Не нужен"
-                            else -> activeOutbound ?: "Автоматически"
+                            // Имя выбранного выхода знает только работающее ядро, поэтому
+                            // при выключенной сети карточка писала «Автоматически» даже
+                            // после ручного выбора. Пока ядро молчит, показываем то, что
+                            // человек выбрал сам, и оно же поедет в ядро при включении.
+                            else -> activeOutbound
+                                ?: manualExit.takeIf { it.isNotBlank() && !auto.auto }
+                                ?: "Автоматически"
                         },
                         subtitle = when {
                             home -> "дома работает роутер"
