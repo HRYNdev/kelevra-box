@@ -607,6 +607,11 @@ fun SFANavHost(
                     обновлениеИдёт = true
                     scope.launch(Dispatchers.IO) {
                         val найдено = runCatching { io.nekohasekai.sfa.vendor.Vendor.checkUpdateAsync() }.getOrNull()
+                        // Окно обновления показывается один раз на версию: если человек
+                        // промахнулся мимо «Обновить», второго шанса не было, а проверка
+                        // просто писала «обновление есть». Ручная проверка снимает эту
+                        // отметку, поэтому окно показывается снова.
+                        Settings.lastShownUpdateVersion = 0
                         io.nekohasekai.sfa.update.UpdateState.setUpdate(найдено)
                         обновлениеИдёт = false
                         обновлениеИтог = if (найдено != null) {
