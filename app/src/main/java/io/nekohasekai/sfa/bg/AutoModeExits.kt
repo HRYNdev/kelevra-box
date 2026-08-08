@@ -42,9 +42,31 @@ object AutoModeExits {
          * входа нет, честная проба недоступна.
          */
         val localProxy: Endpoint? = null,
+        /**
+         * Пути, которые имеет смысл уметь мерить по отдельности: выходы селектора мимо
+         * комнаты плюс прямой выход. Комната сюда не попадает — у неё свой закреплённый
+         * SOCKS в ядре olcRTC, закреплять её ещё раз незачем.
+         */
+        val measurable: List<String> = emptyList(),
+        /**
+         * Локальные входы, закреплённые за конкретными выходами
+         * ([io.nekohasekai.sfa.bg.ProbeInboundPatch]): тег выхода → куда стучаться пробе.
+         * Пусто — конфиг без правки, и тогда меряется только «текущий выбор», а не путь.
+         */
+        val probeEntries: Map<String, Endpoint> = emptyMap(),
     ) {
         /** Есть ли вообще между чем переключать. */
         val canSwitch: Boolean get() = chooser != null && room != null && main != null
+
+        /**
+         * Меряется ли основной путь сам по себе. false — [localProxy] (если он вообще есть)
+         * ведёт туда, куда смотрит селектор, и вердикт про основной канал по нему честен
+         * только пока селектор стоит на основном.
+         */
+        val mainPinned: Boolean get() = main != null && probeEntries[main] != null
+
+        /** Вход, закреплённый за путём [tag]. `null` — путь мерить нечем. */
+        fun entryFor(tag: String?): Endpoint? = tag?.let { probeEntries[it] }
 
         companion object {
             val EMPTY = Layout(null, null, null, emptyList(), null)
@@ -88,13 +110,67 @@ object AutoModeExits {
         val endpoints = endpointsOf(main, byTag, mutableSetOf())
             .ifEmpty { allEndpoints(byTag) }
 
+        val direct = byTag.entries.firstOrNull { it.value.optString("type") == "direct" }?.key
+        val measurable = (
+            chooser?.let { members(byTag.getValue(it)) }.orEmpty() + listOfNotNull(direct)
+            ).filter { it != room }.distinct()
+
+        val entries = probeEntries(root)
+
         return Layout(
             chooser = chooser,
             room = room,
             main = main,
             mainEndpoints = endpoints,
-            localProxy = localProxy(root, socksPort),
+            // Закреплённый за основным путём вход честнее общего: он меряет ИМЕННО этот
+            // путь и не зависит от того, куда сейчас смотрит селектор. Его нет — остаётся
+            // общий вход, как было раньше.
+            localProxy = main?.let { entries[it] } ?: localProxy(root, socksPort),
+            measurable = measurable,
+            probeEntries = entries,
         )
+    }
+
+    /**
+     * Какие локальные входы к каким выходам привязаны правилами маршрута.
+     *
+     * Читается из самого конфига, а не из памяти о том, что мы туда клали: конфиг —
+     * единственное, что реально исполняет ядро, и если правка не легла, здесь будет пусто.
+     * Ровно это и нужно: пусто → мерить нечем → путь не «живой», а «не проверен».
+     */
+    fun probeEntries(content: String): Map<String, Endpoint> =
+        runCatching { probeEntries(JSONObject(content)) }.getOrElse { emptyMap() }
+
+    private fun probeEntries(root: JSONObject): Map<String, Endpoint> {
+        val rules = root.optJSONObject("route")?.optJSONArray("rules") ?: return emptyMap()
+        val inbounds = root.optJSONArray("inbounds") ?: return emptyMap()
+
+        val listenByTag = HashMap<String, Endpoint>()
+        for (i in 0 until inbounds.length()) {
+            val inbound = inbounds.optJSONObject(i) ?: continue
+            if (inbound.optString("type") !in PROXY_INBOUNDS) continue
+            if ((inbound.optJSONArray("users")?.length() ?: 0) > 0) continue
+            val tag = inbound.optString("tag").takeIf { it.isNotBlank() } ?: continue
+            val listen = inbound.optString("listen").takeIf { it.isNotBlank() } ?: continue
+            if (listen !in LOOPBACK) continue
+            val port = inbound.optInt("listen_port").takeIf { it in 1..65535 } ?: continue
+            listenByTag[tag] = Endpoint(listen, port)
+        }
+
+        val entries = LinkedHashMap<String, Endpoint>()
+        for (i in 0 until rules.length()) {
+            val rule = rules.optJSONObject(i) ?: continue
+            val exit = rule.optString("outbound").takeIf { it.isNotBlank() } ?: continue
+            val inbound = rule.optJSONArray("inbound") ?: continue
+            // Привязка честна, только если правило про ОДИН вход и больше ни про что:
+            // лишнее условие означает, что через этот вход в выход попадёт не всё.
+            if (inbound.length() != 1) continue
+            if (rule.keys().asSequence().any { it != "inbound" && it != "outbound" && it != "action" }) continue
+            if (rule.has("action") && rule.optString("action") != "route") continue
+            val entry = listenByTag[inbound.optString(0)] ?: continue
+            if (!entries.containsKey(exit)) entries[exit] = entry
+        }
+        return entries
     }
 
     /**
