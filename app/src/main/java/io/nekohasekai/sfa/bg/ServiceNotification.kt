@@ -17,6 +17,8 @@ import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.PathWords
 import io.nekohasekai.sfa.compose.MainActivity
 import io.nekohasekai.sfa.constant.Action
 import io.nekohasekai.sfa.constant.Status
@@ -212,13 +214,19 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
         closed = false
         if (watcher?.isActive == true) return
         watcher = scope.launch {
-            AutoMode.state.collect {
-                // Путь сменился — прошлые байты в секунду мерили прошлый путь и врут.
-                // Следующий тик ядра (если оно живо) вернёт настоящие числа.
-                uplink = 0L
-                downlink = 0L
-                render()
+            launch {
+                AutoMode.state.collect {
+                    // Путь сменился — прошлые байты в секунду мерили прошлый путь и врут.
+                    // Следующий тик ядра (если оно живо) вернёт настоящие числа.
+                    uplink = 0L
+                    downlink = 0L
+                    render()
+                }
             }
+            // Обстановка может не меняться, а знание о путях — да: комната поднялась,
+            // задержка пересчиталась, отказ получил причину. Шторка это показывает,
+            // значит и просыпаться должна на это тоже.
+            launch { PathRegistry.snapshot.collect { render() } }
         }
     }
 
@@ -238,31 +246,17 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
      * Что показывать в шторке кроме скорости.
      *
      * «Работает» не говорит человеку ничего: он не видит ни выхода, ни того, что канал
-     * через комнату ещё поднимается. Пишем состояние словами, как на главном экране.
+     * через комнату ещё поднимается. Пишем состояние словами, как на главном экране, —
+     * и теперь буквально теми же: обе стороны читают один снимок [PathRegistry] через
+     * одну таблицу [PathWords.headline]. Своей цепочки условий у шторки больше нет, а
+     * значит нет и способа разойтись с кругом.
      */
-    private fun состояние(): String {
-        val auto = AutoMode.state.value
-        return when {
-            auto.situation == AutoMode.Situation.Home -> service.getString(R.string.status_home)
-            auto.situation == AutoMode.Situation.NoNetwork -> "Нет сети"
-            Settings.autoModeManualRoom || auto.situation == AutoMode.Situation.Room -> when (OlcRtcCore.state) {
-                is OlcRtcCore.State.Ready -> "Комната"
-                is OlcRtcCore.State.Starting -> "Поднимаю комнату"
-                else -> "Комната не отвечает"
-            }
-            // Выход выбран человеком: автомат отошёл до смены сети, мерять некому.
-            Settings.manualExitName.isNotBlank() && !auto.auto -> Settings.manualExitName
-            // Ветки для «ничего не поднимается» тут не было вовсе: шторка писала
-            // «Выход выбирается сам» и на мёртвом канале (06.08.2026).
-            auto.situation == AutoMode.Situation.Searching -> "Ищу путь"
-            auto.auto -> when (auto.link) {
-                AutoMode.Link.Dead -> "Связи нет"
-                AutoMode.Link.Alive -> "Выход выбирается сам"
-                else -> "Проверяю связь"
-            }
-            else -> service.getString(R.string.status_started)
-        }
-    }
+    private fun состояние(): String = PathWords.headline(
+        snapshot = PathRegistry.snapshot.value,
+        chosen = AutoMode.standingOn(),
+        auto = AutoMode.state.value.auto,
+        manualExit = Settings.manualExitName.takeIf { it.isNotBlank() },
+    )
 
     override fun updateStatus(status: StatusMessage) {
         uplink = status.uplink
