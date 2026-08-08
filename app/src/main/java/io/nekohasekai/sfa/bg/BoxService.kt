@@ -29,6 +29,7 @@ import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.compose.MainActivity
 import io.nekohasekai.sfa.constant.Action
 import io.nekohasekai.sfa.constant.Alert
@@ -134,7 +135,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         override fun tunnelLive(): Boolean = !tunnelSuspended
 
-        override fun profileConfig(): String? = runCatching {
+        // Отдаём тот конфиг, который ядро исполняет сейчас, а не файл профиля: правки
+        // живут только в памяти, и по файлу автомат не увидел бы ни запрета QUIC, ни
+        // входов, закреплённых за путями. Ядра ещё нет — остаётся файл, как раньше.
+        override fun profileConfig(): String? = runningConfig ?: runCatching {
             val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) } ?: return null
             File(profile.typed.path).readText()
         }.getOrNull()
@@ -229,6 +233,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 stopAndAlert(Alert.CreateService, e.message)
                 return
             }
+            checkPathsHonestly("старт сервиса")
 
             if (commandServer.needWIFIState()) {
                 val wifiPermission =
@@ -361,16 +366,72 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     /**
      * Конфиг, с которым реально стартует sing-box.
      *
-     * Комната поднялась — добавляем в маршруты отказ по UDP/443 (см. [OlcRtcConfigPatch]).
-     * Выключена или не поднялась — возвращаем ровно то, что лежит в профиле: ни байта
-     * правки. Резать QUIC ради мёртвого выхода незачем, от этого только хуже.
-     * Файл профиля не трогаем в любом случае, правка живёт только в памяти.
+     * Две правки, обе только в памяти — файл профиля приходит с сервера и не наш:
+     *  1. Комната поднялась — в маршруты идёт отказ по UDP/443 ([OlcRtcConfigPatch]).
+     *     Выключена или не поднялась — не трогаем: резать QUIC ради мёртвого выхода
+     *     незачем, от этого только хуже.
+     *  2. На каждый путь — свой локальный вход и правило, которое привязывает вход к
+     *     выходу ([ProbeInboundPatch]). Без этого спросить «жив ли путь» можно было
+     *     только через общий вход, то есть через тот выход, который выбран прямо сейчас,
+     *     и ради замера приходилось переставлять селектор живым людям под руку.
+     *
+     * Не легла вторая правка — путь просто останется без входа, и проба скажет
+     * «не проверено». Врать «работает» она в этом случае не имеет права.
      */
     private fun effectiveConfig(content: String): String {
-        if (!Settings.olcrtcEnabled || OlcRtcCore.state !is OlcRtcCore.State.Ready) return content
-        val result = OlcRtcConfigPatch.addQuicReject(content, OlcRtcParams.socksPort)
-        OlcRtcConfigPatch.log(result)
-        return result.content
+        var result = content
+        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
+            val quic = OlcRtcConfigPatch.addQuicReject(result, OlcRtcParams.socksPort)
+            OlcRtcConfigPatch.log(quic)
+            result = quic.content
+        }
+
+        val layout = AutoModeExits.parse(result, OlcRtcParams.socksPort)
+        val probe = ProbeInboundPatch.addProbeInbounds(result, layout.measurable)
+        ProbeInboundPatch.log(probe)
+        result = probe.content
+
+        runningConfig = result
+        return result
+    }
+
+    /**
+     * Конфиг, который ядро исполняет прямо сейчас. Автомату нужен именно он, а не файл
+     * профиля: закреплённые за путями входы живут только в памяти, и по файлу их не видно.
+     */
+    @Volatile
+    private var runningConfig: String? = null
+
+    /**
+     * Разовый честный опрос всех путей сразу после старта.
+     *
+     * Это и проверка самой правки (входы поднялись, привязка работает), и первый честный
+     * снимок: какой путь несёт трафик, а какой нет. Селектор при этом не трогается вообще —
+     * каждый путь спрашивается через свой вход, поэтому пути можно мерить один за другим,
+     * ничего не переключая.
+     */
+    private fun checkPathsHonestly(reason: String) {
+        val content = runningConfig ?: return
+        val entries = AutoModeExits.probeEntries(content)
+        if (entries.isEmpty()) {
+            Log.w(TAG, "проверка путей ($reason): закреплённых входов нет, мерить нечем")
+            return
+        }
+        thread(name = "path-selfcheck", isDaemon = true) {
+            Log.i(TAG, "проверка путей ($reason): ${entries.size} шт., селектор не трогаем")
+            for ((exit, entry) in entries) {
+                val measurement = HonestProbe.measure(
+                    entry,
+                    exit,
+                    // Диагностике важно не только «дошло», но и куда именно путь вывел:
+                    // разные адреса на выходе — это и есть доказательство, что вход
+                    // закреплён за своим выходом, а не за общим выбором.
+                    target = HonestProbe.EGRESS_TARGET,
+                    collectBody = true,
+                )
+                Log.i(TAG, "путь «$exit»: $measurement")
+            }
+        }
     }
 
     /**

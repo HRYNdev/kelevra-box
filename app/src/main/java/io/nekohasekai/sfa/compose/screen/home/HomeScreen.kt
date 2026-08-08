@@ -29,7 +29,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.bg.AutoMode
-import io.nekohasekai.sfa.bg.OlcRtcCore
+import io.nekohasekai.sfa.bg.path.PathId
+import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.PathStatus
+import io.nekohasekai.sfa.bg.path.PathWords
 import io.nekohasekai.sfa.compose.theme.DialState
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KBadge
@@ -50,9 +53,18 @@ data class ChannelRow(val name: String, val delayMs: Int, val selected: Boolean)
  * Код выхода в бейдже. Флаги-эмодзи не используем: на части устройств и в
  * браузере они не рисуются, а двухбуквенный код читается везде одинаково.
  */
-/** Выход через комнату. Имя приходит с сервера, поэтому узнаём его по корню слова. */
+/**
+ * Выход через комнату.
+ *
+ * Спрашиваем реестр: имя комнаты приходит с сервера, и знает его раскладка конфига —
+ * та самая, которую автомат отдаёт в общую память. Угадывание по корню слова осталось
+ * запасным путём и работает ровно там, где раскладки ещё нет: до первого включения сети
+ * ядро её не отдавало, а выход человек выбирает и в этот момент тоже.
+ */
 fun isRoomExit(name: String?): Boolean {
-    val n = name?.lowercase() ?: return false
+    val tag = name?.takeIf { it.isNotBlank() } ?: return false
+    PathRegistry.snapshot.value[PathId.ROOM].def.exitTag?.let { return tag == it }
+    val n = tag.lowercase()
     return n.contains("комнат") || n.contains("room")
 }
 
@@ -94,10 +106,23 @@ fun HomeScreen(
     val running = serviceStatus == Status.Started
     val busy = serviceStatus == Status.Starting || serviceStatus == Status.Stopping
     var showExits by remember { mutableStateOf(false) }
+    // «40 секунд назад» обязано стареть на глазах: замер, который вечно выглядит свежим,
+    // хуже отсутствия замера. Тикаем только пока открыт список выходов — больше эту
+    // фразу нигде не показываем, а считать секунды на закрытом экране незачем.
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(showExits) {
+        while (showExits) {
+            now = System.currentTimeMillis()
+            delay(1_000)
+        }
+    }
     // Сводку держит общий объект: её же обновляет кнопка в расширенных, и карточка
     // должна показать новое сразу, без перезахода в приложение.
     val subscription by SubscriptionRefresh.info.collectAsState()
     val auto by AutoMode.state.collectAsState()
+    // Что известно про каждый путь. Экран больше ничего не достраивает сам: и круг,
+    // и список выходов пересказывают этот снимок, а не собственную версию правды.
+    val paths by PathRegistry.snapshot.collectAsState()
     // Что человек выбрал руками. Читаем при каждой смене состояния автомата и запуска:
     // ядро может молчать, а показать надо правду.
     val manualExit by remember(auto.auto, running) {
@@ -111,21 +136,22 @@ fun HomeScreen(
         }
     }
 
+    val homePath = paths[PathId.HOME]
+    val roomPath = paths[PathId.ROOM]
+
     val home = running && auto.situation == AutoMode.Situation.Home
+    val noNetwork = running && homePath.status == PathStatus.Unavailable
     // Комнату узнаём по выбранному выходу, а не только по решению автомата: выбранная
     // руками комната — та же комната, и подпись под кругом должна быть та же.
-    val roomChosen = running && (auto.situation == AutoMode.Situation.Room || isRoomExit(activeOutbound))
+    val roomChosen = running && (AutoMode.standingOn() == PathId.ROOM || isRoomExit(activeOutbound))
     // Выбранная комната и поднятая комната — разные вещи. Круг писал «Подключено. Комната»,
     // когда ядро olcRTC не запускалось вовсе: на ноге в этот момент ноль участников и ноль
-    // трафика (поймано в эмуляторе 07.08.2026). Зелёным теперь только по живому ядру.
-    val roomCoreState = OlcRtcCore.state
-    val room = roomChosen && roomCoreState is OlcRtcCore.State.Ready
-    // «Не отвечает» пишем только когда ядро действительно отказалось. Пока оно ещё
-    // не поднималось или поднимается — это «поднимаю»: иначе в первые же секунды
+    // трафика (поймано в эмуляторе 07.08.2026). Зелёным теперь только по живой комнате.
+    val room = roomChosen && roomPath.status == PathStatus.Alive
+    // «Не отвечает» пишем только когда комната действительно отказалась. Пока она ещё
+    // не поднималась или поднимается — это «поднимаю»: иначе в первые же секунды
     // после включения человек читает «Комната не отвечает», хотя вход только начался.
-    val roomDead = roomChosen && (
-        roomCoreState is OlcRtcCore.State.Failed || roomCoreState is OlcRtcCore.State.Unavailable
-        )
+    val roomDead = roomChosen && roomPath.refused
     val roomRising = roomChosen && !room && !roomDead
     // Выход человек выбрал сам — автомат отошёл. Это не «поломка», но и не молчание:
     // человек должен видеть, что подбором пути сейчас никто не занимается.
@@ -133,26 +159,17 @@ fun HomeScreen(
     // «Подключено» — это утверждение про канал, а не про сервис. Пока проба не прошла,
     // сказать про канал нечего; когда она провалилась — тем более (06.08.2026 экран
     // писал «Подключено» на мёртвом канале).
-    val measuring = running && !manualHold &&
-        (auto.link == AutoMode.Link.Unknown || auto.link == AutoMode.Link.Checking)
-    val linkDead = running && !manualHold && auto.link == AutoMode.Link.Dead
+    val measuring = running && !manualHold && !noNetwork &&
+        (paths.anyIs(PathStatus.Probing) || !paths.any { it.usable || it.refused })
+    val linkDead = running && !manualHold && !noNetwork &&
+        !paths.any { it.usable } && paths.any { it.refused }
     // Ничего не поднимается или сети нет — круг не должен врать зелёным.
-    val broken = running && (
-        auto.situation == AutoMode.Situation.Searching ||
-            auto.situation == AutoMode.Situation.NoNetwork ||
-            roomDead ||
-            linkDead
-        )
+    val broken = running && (noNetwork || roomDead || linkDead)
 
-    // Задержку комнаты знает только её собственная проверка. Спрашиваем, пока
-    // комната показана: на других обстановках это никому не нужно.
-    var roomLatency by remember { mutableStateOf(0L) }
-    LaunchedEffect(room) {
-        while (room) {
-            roomLatency = (OlcRtcCore.health as? OlcRtcCore.Health.Live)?.latencyMs ?: 0L
-            delay(3_000)
-        }
-    }
+    // Задержку комнаты меряет её собственный присмотр, а помнит — реестр. Своего опроса
+    // экран больше не ведёт: цикл раз в три секунды жил только потому, что состояние
+    // комнаты нельзя было получить иначе как спросив ядро напрямую.
+    val roomLatency = roomPath.latencyMs ?: 0L
 
     val state = when {
         busy -> DialState.Busy
@@ -161,14 +178,17 @@ fun HomeScreen(
         else -> DialState.Off
     }
 
+    // «Ищу путь» — это решение автомата, а не факт про отдельный выход: пути уже
+    // отказали, но менять обстановку он вправе только после своих подтверждений.
+    // Реестр про такое не знает и знать не должен — он помнит выходы, а не решения.
+    val searching = running && auto.situation == AutoMode.Situation.Searching
+
     val activeDelay = channels.firstOrNull { it.selected }?.delayMs ?: 0
     val place = when {
         busy || !running -> null
         // Дома защита уже есть, её делает роутер. Это и написано, без «подключено».
         home -> "обход на роутере"
-        auto.situation == AutoMode.Situation.NoNetwork ||
-            auto.situation == AutoMode.Situation.Searching -> null
-
+        noNetwork || searching -> null
         else -> activeOutbound
     }
     // транспорт активного выхода знает только сервер: ядро наверх его не отдаёт
@@ -207,8 +227,8 @@ fun HomeScreen(
                 busy && serviceStatus == Status.Starting -> "Подключаюсь"
                 busy -> "Отключаюсь"
                 home -> "Дома"
-                running && auto.situation == AutoMode.Situation.NoNetwork -> "Нет сети"
-                running && auto.situation == AutoMode.Situation.Searching -> "Ищу путь"
+                noNetwork -> "Нет сети"
+                searching -> "Ищу путь"
                 roomRising -> "Поднимаю комнату"
                 roomDead -> "Комната не отвечает"
                 linkDead -> "Связи нет"
@@ -228,8 +248,8 @@ fun HomeScreen(
                 !hasProfile -> "нажмите, чтобы подключить"
                 busy -> "подождите"
                 home -> "дома интернет и так открыт, туннель выключен"
-                running && auto.situation == AutoMode.Situation.NoNetwork -> "включится, когда появится сеть"
-                running && auto.situation == AutoMode.Situation.Searching -> "подбираю рабочий выход"
+                noNetwork -> "включится, когда появится сеть"
+                searching -> "подбираю рабочий выход"
                 roomRising -> "поднимаю канал через комнату"
                 roomDead -> "канал через комнату не поднялся, выберите другой выход"
                 linkDead -> "выбранный путь не отвечает, ищу другой"
@@ -326,10 +346,19 @@ fun HomeScreen(
                 )
                 Spacer(Modifier.height(8.dp))
                 channels.forEach { ch ->
+                    // Что мы про этот выход знаем.
+                    //
+                    // В списке лежат узлы, а не пути: сервер отдаёт «Нидерланды · прямой»
+                    // и «Нидерланды · запасной», тогда как путь у них один — основной
+                    // канал, и меряется он целиком. Поэтому комнату узнаём отдельно,
+                    // а всё остальное — это основной канал и его состояние.
+                    val known = paths.byExit(ch.name)
+                        ?: if (isRoomExit(ch.name)) paths[PathId.ROOM] else paths[PathId.MAIN]
                     ExitRow(
                         name = ch.name,
                         delayMs = ch.delayMs,
                         selected = !auto.auto && ch.selected,
+                        subtitle = known?.let { PathWords.state(it, now) },
                         onClick = {
                             // Выбор руками выключает автомат: иначе он через минуту
                             // передумает, и человек увидит, что его выбор не держится.
