@@ -31,6 +31,7 @@ import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.compose.MainActivity
 import io.nekohasekai.sfa.constant.Action
 import io.nekohasekai.sfa.constant.Alert
@@ -128,6 +129,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @Volatile
     private var roomWanted = false
 
+    /**
+     * Подъём комнаты идёт прямо сейчас, в потоке `olcrtc-raise`.
+     *
+     * Раньше подъём шёл в потоке того, кто попросил, — то есть в потоке автомата, и держал
+     * его замер 08.08.2026 на 69 секунд. Всё это время автомат был слеп: круг не крутился,
+     * экран и шторка стояли на том, что было до подъёма. Теперь просьба возвращается сразу
+     * с [AutoMode.RoomAck.Raising], а этот флаг не даёт следующим заходам просить второй раз.
+     */
+    @Volatile
+    private var roomRaising = false
+
     /** Что автомат умеет сделать с сервисом. Больше он ни во что не лезет. */
     private val autoModeHost = object : AutoMode.Host {
         override fun suspendTunnel(reason: String): Boolean = this@BoxService.suspendTunnel(reason)
@@ -150,7 +162,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             Libbox.newStandaloneCommandClient().selectOutbound(group, tag)
         }
 
-        override fun setRoomWanted(wanted: Boolean, reason: String): Boolean =
+        override fun setRoomWanted(wanted: Boolean, reason: String): AutoMode.RoomAck =
             this@BoxService.setRoomWanted(wanted, reason)
     }
 
@@ -622,14 +634,24 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * QUIC — через SOCKS5 комнаты UDP не ходит. Значит правка живёт ровно столько же,
      * сколько сама комната, и пересборка ядра обязательна в обе стороны.
      *
-     * @return true, если состояние действительно поменяли и ядро sing-box пересобрано.
+     * Подъём при этом **не блокирует того, кто попросил**: вход в чужой видеозвонок
+     * стоит до полутора минут, и пока он шёл в потоке автомата, автомат не делал ни одного
+     * захода — экран и шторка замирали на 69 секунд (замер 08.08.2026). Поэтому подъём
+     * уходит в свой поток, наверх сразу возвращается [AutoMode.RoomAck.Raising], а итог
+     * приезжает двумя путями: в реестр путей — через [RoomNote], и в автомат — вызовом
+     * [AutoMode.onCoreRebuilt], который будит заход, не дожидаясь его ритма.
+     *
+     * Гашение осталось синхронным: оно быстрое, и ждать его не больно.
+     *
+     * @return чем кончилась просьба. Разница между «не стал спрашивать» и «не встала»
+     *   стоит двух минут простоя — см. [AutoMode.RoomAck].
      */
-    private fun setRoomWanted(wanted: Boolean, reason: String): Boolean {
+    private fun setRoomWanted(wanted: Boolean, reason: String): AutoMode.RoomAck {
         // Поднимать нечего, если параметров комнаты нет или человек нажал аварийный
         // выключатель. Гасить — можно всегда.
         if (wanted && !OlcRtcParams.roomAllowed) {
             Log.i(TAG, "комната не поднимается ($reason): комната выключена или нет её параметров")
-            return false
+            return AutoMode.RoomAck.Unavailable
         }
         synchronized(tunnelLock) {
             if (tunnelSuspended) {
@@ -639,39 +661,86 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // ушёл ровно на то, чтобы понять — комнату никто и не пробовал поднимать.
                 Log.i(TAG, "комната не поднимается ($reason): туннель погашен")
                 roomWanted = false
-                return false
+                return AutoMode.RoomAck.NoTunnel
+            }
+            if (wanted && roomRaising) {
+                Log.i(TAG, "комната уже поднимается ($reason) — второй раз не прошу")
+                return AutoMode.RoomAck.Raising
             }
             val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
             roomWanted = wanted
             if (wanted == up) {
                 Log.i(TAG, "комната уже ${if (up) "поднята" else "погашена"} ($reason) — оставляю как есть")
-                return false
+                return AutoMode.RoomAck.Unchanged
             }
 
             if (wanted) {
-                Log.i(TAG, "комната нужна ($reason) — поднимаю ядро")
-                startOlcRtcIfEnabled()
-                if (OlcRtcCore.state !is OlcRtcCore.State.Ready) {
-                    Log.w(TAG, "комната не встала: ${OlcRtcCore.lastError}")
-                    roomWanted = false
-                    return false
-                }
-            } else {
-                Log.i(TAG, "комната больше не нужна ($reason) — гашу ядро")
-                stopOlcRtc()
+                Log.i(TAG, "комната нужна ($reason) — поднимаю ядро отдельным потоком")
+                roomRaising = true
+                // Реестр узнаёт про подъём сразу, а не когда автомат дойдёт до своей записи:
+                // на круге и в шторке это и есть «Поднимаю комнату».
+                RoomNote.raising()
+                thread(name = "olcrtc-raise", isDaemon = true) { raiseRoom(reason) }
+                return AutoMode.RoomAck.Raising
             }
 
+            Log.i(TAG, "комната больше не нужна ($reason) — гашу ядро")
+            stopOlcRtc()
             return runCatching {
                 restartCore()
-                // Комната встала — в урезанной сети это единственная дорога наружу, и
-                // именно сейчас появляется возможность дотянуть недостающие наборы правил.
-                if (wanted) refreshRuleSets("комната поднята ($reason)", null)
-                true
+                AutoMode.RoomAck.Changed
             }.getOrElse {
                 Log.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
-                false
+                AutoMode.RoomAck.Failed
             }
         }
+    }
+
+    /**
+     * Собственно подъём комнаты — целиком в своём потоке.
+     *
+     * Замок берётся только на пересборку ядра, а не на сам подъём: держать его полторы
+     * минуты значило бы заморозить и гашение туннеля, и уход домой.
+     */
+    private fun raiseRoom(reason: String) {
+        startOlcRtcIfEnabled()
+        val rebuilt = synchronized(tunnelLock) {
+            roomRaising = false
+            when {
+                OlcRtcCore.state !is OlcRtcCore.State.Ready -> {
+                    Log.w(TAG, "комната не встала ($reason): ${OlcRtcCore.lastError}")
+                    roomWanted = false
+                    false
+                }
+
+                // Пока поднимались, туннель успели погасить (ушли домой, выключили автомат).
+                // Комната без туннеля бессмысленна, и оставить её висеть нельзя — это ровно
+                // тот круглосуточный чужой видеозвонок, которого схема избегает.
+                tunnelSuspended -> {
+                    Log.i(TAG, "комната встала, но туннель за это время погасили ($reason) — гашу её")
+                    roomWanted = false
+                    stopOlcRtc()
+                    false
+                }
+
+                else -> runCatching {
+                    restartCore()
+                    true
+                }.getOrElse {
+                    Log.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
+                    false
+                }
+            }
+        }
+        // Что бы ни вышло — реестр узнаёт об этом сразу, не дожидаясь круга автомата.
+        RoomNote.note()
+        if (!rebuilt) return
+        // Комната встала — в урезанной сети это единственная дорога наружу, и именно
+        // сейчас появляется возможность дотянуть недостающие наборы правил.
+        refreshRuleSets("комната поднята ($reason)", null)
+        // Ядро пересобрано у автомата за спиной: его выбор в селекторе сброшен, и ждать
+        // очередного шага ритма незачем — комната уже стоит.
+        AutoMode.onCoreRebuilt("комната поднята ($reason)")
     }
 
     /**
