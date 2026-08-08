@@ -135,7 +135,13 @@ object Settings {
     // olcRTC. Параметры комнаты приезжают с сервера (olcrtcSrv*), ручные значения —
     // переопределение для отладки: пусто (или 0) значит «не переопределено».
     // Ядро читает всё это только через OlcRtcParams.resolve(), сама обёртка в настройки не лезет.
-    var olcrtcEnabled by dataStore.boolean(SettingsKey.OLCRTC_ENABLED) { false }
+    // Тумблер комнаты — АВАРИЙНЫЙ ВЫКЛЮЧАТЕЛЬ, а не разрешение. По умолчанию комната
+    // разрешена: параметры всё равно приезжают с сервера, и без них подниматься нечему
+    // (OlcRtcParams.hasRoom). Пока умолчание было «запрещено», автомат не мог уйти в
+    // комнату вообще — под ограничениями он показывал «ищу путь» и продолжал долбиться
+    // в мёртвый основной канал, пока человек сам не найдёт тумблер в расширенных
+    // настройках (поймано на живом телефоне 06.08.2026).
+    var olcrtcEnabled by dataStore.boolean(SettingsKey.OLCRTC_ENABLED) { true }
     var olcrtcCarrier by dataStore.string(SettingsKey.OLCRTC_CARRIER) { "" }
     var olcrtcRoomId by dataStore.string(SettingsKey.OLCRTC_ROOM_ID) { "" }
     var olcrtcClientId by dataStore.string(SettingsKey.OLCRTC_CLIENT_ID) { "" }

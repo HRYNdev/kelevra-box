@@ -87,7 +87,9 @@ class UpdateProfileWork {
                     profile.typed.lastUpdated = Date()
                     ProfileManager.update(profile)
                 } catch (e: Exception) {
-                    Log.e(TAG, "update profile ${profile.name}", e)
+                    // Адрес подписки несёт код доступа целиком, а текст ошибки его часто
+                    // повторяет — в лог идёт замаскированная копия исключения.
+                    Log.e(TAG, "update profile ${profile.name}", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
                     success = false
                 }
             }

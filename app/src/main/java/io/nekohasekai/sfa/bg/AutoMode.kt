@@ -85,13 +85,46 @@ object AutoMode {
         NoNetwork,
     }
 
+    /**
+     * Чем кончилась последняя проба. Обстановка отвечает на вопрос «куда идём», а это —
+     * на вопрос «дошли ли»: без него экран писал «Подключено» по факту живого сервиса,
+     * в том числе пока ничего ещё не мерили и когда все пробы уже провалились.
+     */
+    enum class Link {
+        /** Ещё не мерили. */
+        Unknown,
+
+        /** Меряем прямо сейчас. */
+        Checking,
+
+        /** Через выбранный путь данные ходят (или мы дома, где путь не нужен). */
+        Alive,
+
+        /** Ни основной канал, ни комната не отвечают. */
+        Dead,
+    }
+
     data class State(
         val auto: Boolean = true,
         val situation: Situation = Situation.Unknown,
+        val link: Link = Link.Unknown,
     )
 
     private val _state = MutableStateFlow(State(auto = true, situation = Situation.Unknown))
     val state: StateFlow<State> = _state
+
+    /** Итог последней пробы — держим отдельно, чтобы не терять его при смене обстановки. */
+    @Volatile
+    private var link: Link = Link.Unknown
+
+    private fun setLink(value: Link) {
+        link = value
+        _state.value = _state.value.copy(link = value)
+    }
+
+    private fun publish(auto: Boolean, situation: Situation) {
+        _state.value = State(auto = auto, situation = situation, link = link)
+    }
 
     /**
      * Что автомат умеет сделать с сервисом. Реализует [BoxService]: только у него есть
@@ -265,6 +298,13 @@ object AutoMode {
     /** Сколько заходов подряд основной канал не поднимается. Считает повод для пробного подъёма. */
     private var mainFailures = 0
 
+    /**
+     * Сеть, в которой человек выбрал выход руками. Выбор держится, пока мы в ней:
+     * см. [chooseManually] и [onNetworkChanged].
+     */
+    @Volatile
+    private var holdNetwork: Network? = null
+
     /** Последняя пробная попытка поднять комнату — чтобы не долбить её каждым заходом. */
     private var roomTriedAt = 0L
     private var roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
@@ -300,7 +340,9 @@ object AutoMode {
             roomTriedAt = 0L
             roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
             mainFailures = 0
-            _state.value = State(auto = Settings.autoModeEnabled, situation = initial)
+            link = Link.Unknown
+            holdNetwork = physicalNetwork()
+            publish(Settings.autoModeEnabled, initial)
             active = true
             thread = Thread(::loop, "automode").apply {
                 isDaemon = true
@@ -328,7 +370,8 @@ object AutoMode {
         t?.interrupt()
         t?.join(1_000)
         host = null
-        _state.value = State(auto = Settings.autoModeEnabled, situation = Situation.Unknown)
+        link = Link.Unknown
+        publish(Settings.autoModeEnabled, Situation.Unknown)
         Log.i(TAG, "автомат выключен")
     }
 
@@ -353,7 +396,33 @@ object AutoMode {
         lastValidated = nowValidated
         networkChanged = true
         Log.i(TAG, "сеть сменилась: ${describe(network)}")
+        // Ручной выбор — это «стой здесь», а не «выключи автомат навсегда». Он держится,
+        // пока мы в той же сети: под неё человек и выбирал. Сеть другая — обстановка
+        // другая, и держаться за прошлый выбор значит увезти человека в мёртвый выход.
+        // Сравниваем именно физические сети: наш собственный туннель тоже приходит сюда
+        // сменой сети по умолчанию, и по ней выбор отпускался бы через секунду после того,
+        // как его сделали.
+        if (!Settings.autoModeEnabled) {
+            val now = physicalNetwork()
+            if (now != null && now != holdNetwork) releaseManualHold(now)
+        }
         synchronized(lock) { lock.notifyAll() }
+    }
+
+    /** Сеть сменилась — ручной выбор больше ничего не значит, автомат снова сам. */
+    private fun releaseManualHold(network: Network?) {
+        Log.i(TAG, "сеть сменилась — ручной выбор «${manualExit ?: "нет"}» отпущен, автомат снова сам")
+        holdNetwork = network
+        manualExit = null
+        Settings.manualExitName = ""
+        Settings.autoModeManualRoom = false
+        Settings.autoModeEnabled = true
+        idle = false
+        selected = null
+        gate.reset(Situation.Unknown)
+        mainFailures = 0
+        link = Link.Unknown
+        publish(true, Situation.Unknown)
     }
 
     /** Человек включил или выключил автомат. */
@@ -363,27 +432,35 @@ object AutoMode {
             manualExit = null
             Settings.manualExitName = ""
             Settings.autoModeManualRoom = false
+            holdNetwork = null
+            link = Link.Unknown
         }
-        _state.value = _state.value.copy(auto = enabled)
+        _state.value = _state.value.copy(auto = enabled, link = link)
         gate.reset(Situation.Unknown)
         mainFailures = 0
         networkChanged = true
         synchronized(lock) { lock.notifyAll() }
     }
 
+    /** Имя комнаты приходит с сервера, поэтому узнаём её по корню слова, как и экран. */
+    private fun looksLikeRoom(tag: String): Boolean =
+        tag.lowercase().let { it.contains("комнат") || it.contains("room") }
+
     /**
-     * Человек выбрал выход руками. Автомат при этом выключается: иначе он через минуту
+     * Человек выбрал выход руками. Автомат при этом отходит: иначе он через минуту
      * передумает, и выбор не удержится.
+     *
+     * Отходит **до смены сети**, а не навсегда. Выбор всегда сделан под то, что вокруг
+     * прямо сейчас («здесь основной канал живой, хочу его»), и в другой сети он значит
+     * ровно ничего — а раньше один случайный тык оставлял человека без автомата до тех
+     * пор, пока он сам не вспомнит про пункт «Автоматически». Отпускает выбор
+     * [onNetworkChanged], состояние «выбрано вручную» видно на главном экране.
      *
      * Комнату сюда тащим осознанно: ядро olcRTC поднимается не только по решению автомата,
      * но и когда человек выбрал комнату сам. Выбор запоминаем в настройках, потому что он
      * должен пережить перезапуск сервиса — иначе после перезагрузки телефона выбранная
      * комната оказалась бы выбранной, но не поднятой.
      */
-    /** Имя комнаты приходит с сервера, поэтому узнаём её по корню слова, как и экран. */
-    private fun looksLikeRoom(tag: String): Boolean =
-        tag.lowercase().let { it.contains("комнат") || it.contains("room") }
-
     fun chooseManually(tag: String) {
         manualExit = tag
         Settings.manualExitName = tag
@@ -401,16 +478,24 @@ object AutoMode {
         // раз уточняется по раскладке, когда она появится.
         val room = layout.room?.let { tag == it } ?: looksLikeRoom(tag)
         Settings.autoModeManualRoom = room
-        // Ядро комнаты поднимается только при включённом тумблере, а он живёт в расширенных
-        // настройках. Без этого выбор комнаты молча давал обычный выход: круг писал
-        // «Комната», нога не видела участника вовсе (поймано в эмуляторе 07.08.2026).
+        // Человек выбрал комнату — значит аварийный выключатель, если он был нажат,
+        // он снимает этим же действием. Без этого выбор комнаты молча давал обычный
+        // выход: круг писал «Комната», нога не видела участника вовсе (поймано в
+        // эмуляторе 07.08.2026).
         if (room) Settings.olcrtcEnabled = true
         Settings.autoModeEnabled = false
-        _state.value = _state.value.copy(auto = false)
+        // Сеть, под которую сделан выбор. Сменится — автомат вернётся сам.
+        holdNetwork = physicalNetwork()
+        link = Link.Unknown
+        _state.value = _state.value.copy(auto = false, situation = Situation.Unknown, link = link)
         gate.reset(Situation.Unknown)
         mainFailures = 0
         idle = false
-        Log.i(TAG, "выход выбран руками: «$tag» (комната: ${Settings.autoModeManualRoom})")
+        Log.i(
+            TAG,
+            "выход выбран руками: «$tag» (комната: ${Settings.autoModeManualRoom}) — " +
+                "держим до смены сети",
+        )
         synchronized(lock) { lock.notifyAll() }
     }
 
@@ -491,7 +576,7 @@ object AutoMode {
             idle = true
             burst.cancel()
             settled = true
-            _state.value = State(auto = false, situation = Situation.Unknown)
+            publish(auto = false, situation = Situation.Unknown)
             return Situation.Unknown
         }
         idle = false
@@ -513,7 +598,7 @@ object AutoMode {
         when {
             changed -> {
                 Log.i(TAG, "обстановка сменилась: ${name(was)} → ${name(observed)}")
-                _state.value = State(auto = true, situation = observed)
+                publish(auto = true, situation = observed)
                 apply(host, observed, repeat = false)
             }
 
@@ -527,7 +612,13 @@ object AutoMode {
     }
 
     private fun observe(host: Host): Situation {
-        val network = physicalNetwork() ?: return decide(false, false, false, false)
+        val network = physicalNetwork() ?: run {
+            setLink(Link.Dead)
+            return decide(false, false, false, false)
+        }
+        // Пока меряем — так и говорим. Иначе экран весь этот десяток секунд утверждает,
+        // что всё подключено, хотя ещё ничего не проверено.
+        setLink(Link.Checking)
         // Порядок проб важен и стоит денег: дома дальше смотреть незачем, а комнату
         // спрашиваем только когда основной канал уже не отвечает.
         val home = homeBypass(network)
@@ -547,7 +638,9 @@ object AutoMode {
             if (mainFailures >= ROOM_TRIAL_AFTER) trialRaiseRoom(host)
             roomAlive()
         }
-        return decide(hasNetwork = true, home = home, main = main, room = room)
+        val situation = decide(hasNetwork = true, home = home, main = main, room = room)
+        setLink(if (situation == Situation.Searching) Link.Dead else Link.Alive)
+        return situation
     }
 
     /**
@@ -563,8 +656,8 @@ object AutoMode {
      *     комната, которая не встаёт вообще, не съедает батарею попытками.
      */
     private fun trialRaiseRoom(host: Host) {
-        if (roomAlive()) return
-        if (!Settings.olcrtcEnabled || layout.room == null || !OlcRtcParams.hasRoom) return
+        if (roomUp()) return
+        if (layout.room == null || !OlcRtcParams.roomAllowed) return
         val now = SystemClock.elapsedRealtime()
         if (roomTriedAt != 0L && now - roomTriedAt < roomTrialPause) return
         roomTriedAt = now
@@ -575,8 +668,14 @@ object AutoMode {
                 false
             }
         if (changed) selected = null
-        if (roomAlive()) {
+        // Удалась попытка или нет — спрашиваем у самого ядра. Раньше спрашивали
+        // [roomAlive], а он ждёт ещё и вердикта присмотра: тот меряет раз в пять секунд,
+        // и под нагрузкой ответ приходит за 2-9 с (замер 07.08.2026). Поднявшаяся комната
+        // успевала посчитаться невставшей, и пауза до следующей попытки удваивалась
+        // вплоть до десяти минут — на пустом месте.
+        if (roomUp()) {
             roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+            Log.i(TAG, "комната поднялась, жду вердикта присмотра")
         } else {
             roomTrialPause = (roomTrialPause * 2).coerceAtMost(ROOM_TRIAL_PAUSE_CAP_MILLIS)
             Log.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
@@ -624,8 +723,17 @@ object AutoMode {
                 // Ничего не поднимается, но сеть есть: туннель оставляем поднятым —
                 // ядро само продолжает пробовать, а мы просто честно это показываем.
                 if (host.resumeTunnel("проверяю, что поднимется")) selected = null
-                // Пробный подъём комнаты канала не дал: держать поднятое ядро незачем.
-                if (setRoom(host, false, "комната канала не дала")) selected = null
+                // Комнату при этом НЕ гасим, пока она встаёт. Пробный подъём занимает
+                // секунды, а «ничего не поднимается» повторяется каждые 12 — раньше
+                // повторный заход гасил комнату ровно в тот момент, когда она поднималась,
+                // и автомат навсегда оставался в «ищу путь» (поймано 06.08.2026).
+                // Гасим либо по решению задвижки, либо когда присмотр уже вынес приговор.
+                val judged = OlcRtcCore.health is OlcRtcCore.Health.Dead
+                if (!roomSettling() && (!repeat || judged) &&
+                    setRoom(host, false, "комната канала не дала")
+                ) {
+                    selected = null
+                }
             }
 
             // Сети нет и обстановка неизвестна: не поднимаем ничего. Комнату при этом
@@ -644,6 +752,13 @@ object AutoMode {
                 Log.w(TAG, "комнату переключить не вышло ($reason): ${it.message}")
                 false
             }
+
+    /** Какой выход соответствует обстановке. Нужен, когда [selected] стёрт пересборкой ядра. */
+    private fun exitFor(situation: Situation): String? = when (situation) {
+        Situation.Room -> layout.room
+        Situation.Main -> layout.main
+        else -> null
+    }
 
     private fun choose(host: Host, tag: String?) {
         val group = layout.chooser ?: return
@@ -884,7 +999,11 @@ object AutoMode {
         // либо переключать нечем, либо мы и так стоим на основном.
         var restore: String? = null
         if (group != null && main != null && selected != main) {
-            restore = selected
+            // Пересборка ядра (её делает подъём комнаты) стирает [selected], и тогда
+            // возвращать было некуда: селектор оставался на мёртвом основном канале,
+            // хотя стояли мы в комнате. Знать, где стоим, можно и без [selected] —
+            // это выход текущей обстановки.
+            restore = (selected ?: exitFor(gate.current))?.takeIf { it != main }
             runCatching { host.selectExit(group, main) }
                 .onSuccess {
                     selected = main
@@ -916,10 +1035,23 @@ object AutoMode {
         }
     }.getOrElse { false }
 
-    /** Стоит ли комната. Своей пробы не заводим: её владелец один — [OlcRtcWatchdog]. */
-    private fun roomAlive(): Boolean = Settings.olcrtcEnabled &&
-        OlcRtcCore.state is OlcRtcCore.State.Ready &&
+    /**
+     * Идёт ли через комнату трафик. Своей пробы не заводим: её владелец один —
+     * [OlcRtcWatchdog]. Тумблер тут не спрашиваем: живое ядро живо независимо от него,
+     * а сам тумблер — аварийный выключатель и работает там, где комнату поднимают.
+     */
+    private fun roomAlive(): Boolean = OlcRtcCore.state is OlcRtcCore.State.Ready &&
         OlcRtcCore.health is OlcRtcCore.Health.Live
+
+    /** Поднято ли ядро комнаты. Ответ самого ядра, без ожидания вердикта присмотра. */
+    private fun roomUp(): Boolean = OlcRtcCore.state is OlcRtcCore.State.Ready
+
+    /**
+     * Комната ещё не сказала своего слова: либо поднимается, либо поднялась, но присмотр
+     * её пока не мерил. Гасить в этот момент нельзя — это и есть убийство собственной пробы.
+     */
+    private fun roomSettling(): Boolean = OlcRtcCore.state is OlcRtcCore.State.Starting ||
+        (OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.health is OlcRtcCore.Health.Unknown)
 
     private fun name(situation: Situation): String = when (situation) {
         Situation.Home -> "дома"
