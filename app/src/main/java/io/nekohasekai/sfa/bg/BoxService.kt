@@ -269,7 +269,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val self = Application.application.packageName
 
         // Ядро olcRTC не переживает собственный tun — выводим весь пакет наружу.
-        val selfOutsideTun = Settings.olcrtcEnabled && service is VpnService
+        //
+        // Смотрим на саму комнату, а не на тумблер: тумблер стал аварийным выключателем
+        // и по умолчанию разрешает комнату, а вывод приложения из туннеля нужен ровно
+        // тогда, когда комната живёт. Пересборка ядра идёт в обе стороны (см.
+        // [setRoomWanted]), поэтому исключение появляется и снимается вместе с ней.
+        val roomLive = roomWanted || OlcRtcCore.state is OlcRtcCore.State.Ready
+        val selfOutsideTun = roomLive && service is VpnService
 
         if (!Vendor.isPerAppProxyAvailable() || !Settings.perAppProxyEnabled) {
             // Без per-app списка апстрим не задаёт ничего, и приложение остаётся в tun.
@@ -314,7 +320,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * Ошибка olcRTC не роняет сервис: этот выход просто не поднимается.
      */
     private fun startOlcRtcIfEnabled() {
-        if (!Settings.olcrtcEnabled) return
+        // Ни параметров комнаты, ни разрешения — стартовать нечем и незачем.
+        if (!OlcRtcParams.roomAllowed) return
 
         val vpn = service as? VpnService
         if (vpn != null && VpnService.prepare(service) != null) {
@@ -442,7 +449,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * @return true, если состояние действительно поменяли и ядро sing-box пересобрано.
      */
     private fun setRoomWanted(wanted: Boolean, reason: String): Boolean {
-        if (wanted && !Settings.olcrtcEnabled) return false
+        // Поднимать нечего, если параметров комнаты нет или человек нажал аварийный
+        // выключатель. Гасить — можно всегда.
+        if (wanted && !OlcRtcParams.roomAllowed) return false
         synchronized(tunnelLock) {
             if (tunnelSuspended) {
                 // Дома туннеля нет, поднимать комнату некуда и незачем.

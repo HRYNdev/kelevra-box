@@ -54,6 +54,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -112,7 +113,7 @@ import io.nekohasekai.sfa.compose.navigation.NewProfileArgs
 import io.nekohasekai.sfa.compose.navigation.ProfileRoutes
 import io.nekohasekai.sfa.compose.navigation.SFANavHost
 import io.nekohasekai.sfa.compose.navigation.Screen
-import io.nekohasekai.sfa.compose.navigation.bottomNavigationScreens
+import io.nekohasekai.sfa.compose.navigation.mainNavigationScreens
 import io.nekohasekai.sfa.compose.screen.configuration.ProfileImportHandler
 import io.nekohasekai.sfa.compose.screen.connections.ConnectionDetailsScreen
 import io.nekohasekai.sfa.compose.screen.connections.ConnectionsPage
@@ -126,6 +127,7 @@ import io.nekohasekai.sfa.compose.screen.tools.OpenVPNStatusViewModel
 import io.nekohasekai.sfa.compose.screen.tools.TailscaleSSHSharedViewModel
 import io.nekohasekai.sfa.compose.screen.tools.TailscaleStatusViewModel
 import io.nekohasekai.sfa.compose.screen.usbip.USBIPStatusViewModel
+import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KTab
 import io.nekohasekai.sfa.compose.theme.KTabBar
 import io.nekohasekai.sfa.compose.theme.SFATheme
@@ -272,7 +274,7 @@ class MainActivity :
                 pendingImportProfile = Triple(profile.name, profile.host, profile.url)
                 showImportProfileDialog = true
             } catch (e: Exception) {
-                pendingIntentErrorMessage = e.message ?: "Failed to parse subscription link"
+                pendingIntentErrorMessage = e.message ?: "Ссылка подписки не читается"
             }
             return
         }
@@ -282,7 +284,7 @@ class MainActivity :
                 pendingImportProfile = Triple(profile.name, profile.host, profile.url)
                 showImportProfileDialog = true
             } catch (e: Exception) {
-                pendingIntentErrorMessage = e.message ?: "Failed to parse profile link"
+                pendingIntentErrorMessage = e.message ?: "Ссылка профиля не читается"
             }
             return
         }
@@ -653,7 +655,14 @@ class MainActivity :
 
         // Handle update available dialog
         val updateInfo by UpdateState.updateInfo
-        val shouldShowUpdateDialog = updateInfo != null &&
+        // Окно ждёт спокойного места. Проверка идёт в фоне, а ответ приходил когда
+        // угодно: человек вводил код подключения — и поверх ввода вылезало «Есть
+        // обновление». Показываем только на главном и в настройках (откуда проверку
+        // и запускают руками); на мастере подключения, в жалобе и на внутренних
+        // экранах окно молча ждёт возврата, ничего не теряя.
+        val updateDialogPlace = currentRoute == Screen.Dashboard.route ||
+            currentRoute == Screen.Settings.route
+        val shouldShowUpdateDialog = updateDialogPlace && updateInfo != null &&
             updateInfo!!.versionCode > Settings.lastShownUpdateVersion
         // Ключ по версии: после ручной проверки окно должно показаться снова, даже если
         // его один раз закрыли. Без этого промах мимо «Обновить» лишал последней кнопки.
@@ -866,47 +875,19 @@ class MainActivity :
                 null
             }
 
-        val showGroupsInNav = dashboardUiState.hasGroups
-        val showConnectionsInNav =
-            if (isRemote) {
-                remoteConnected
-            } else {
-                currentServiceStatus == Status.Started || currentServiceStatus == Status.Starting
-            }
-
-        val railScreens =
-            buildList {
-                add(Screen.Dashboard)
-                if (showGroupsInNav) {
-                    add(Screen.Groups)
-                }
-                if (showConnectionsInNav) {
-                    add(Screen.Connections)
-                }
-                add(Screen.Log)
-                add(Screen.Tools)
-                add(Screen.Settings)
-            }
-
+        // Разрешённые корневые маршруты не зависят от ориентации: разделы берутся из
+        // общей карты, дальше только наши внутренние экраны. Донорские корни (журнал,
+        // инструменты, группы, соединения sing-box) сюда не попадают ни в одном режиме —
+        // сторож ниже возвращает с них на главный.
         val allowedRoutes =
             buildSet {
-                add(Screen.Dashboard.route)
+                mainNavigationScreens.forEach { add(it.route) }
                 // без этого сторож маршрутов выкидывает свои экраны обратно на главный
                 add("connect")
                 add("complaint")
                 add("advanced/log")
                 add("advanced/connections")
                 add("advanced/olcrtc")
-                add(Screen.Log.route)
-                add(Screen.Tools.route)
-                add(Screen.Settings.route)
-                // экран выходов нужен и на телефоне: там видно задержку каждого выхода
-                if (showGroupsInNav) {
-                    add(Screen.Groups.route)
-                }
-                if (useNavigationRail && showConnectionsInNav) {
-                    add(Screen.Connections.route)
-                }
             }
 
         val pendingRoute = pendingNavigationRoute.value
@@ -1017,7 +998,9 @@ class MainActivity :
                 // полоса состояния снизу — чужой элемент sing-box: дублирует круг
                 // и лезет на наши вкладки. Убрана вместе с остальным чужим.
 
-                val showPadFab = useNavigationRail && !isSubScreen && (showStartFab || showStatusBar)
+                // Плавающей кнопки нет и на широком экране: в портрете её убрали как дубль
+                // круга включения, а в альбомной она оставалась и делала два разных продукта.
+                val showPadFab = false
                 if (useNavigationRail) {
                     androidx.compose.animation.AnimatedVisibility(
                         visible = showPadFab,
@@ -1137,11 +1120,8 @@ class MainActivity :
             }
         }
 
-        val crashReportUnreadCount by CrashReportManager.unreadCount.collectAsState()
-        val oomReportUnreadCount by OOMReportManager.unreadCount.collectAsState()
-        // The crash/OOM report entries are hidden in remote control mode.
-        val toolsUnreadCount = if (isRemote) 0 else crashReportUnreadCount + oomReportUnreadCount
-
+        // счётчик непрочитанных отчётов о падениях жил на вкладке «Инструменты»;
+        // вкладки больше нет ни в одной ориентации, считать нечего
         LaunchedEffect(Unit) {
             withContext(Dispatchers.IO) {
                 CrashReportManager.refresh()
@@ -1149,43 +1129,59 @@ class MainActivity :
             }
         }
 
+        // Вкладки описаны один раз и рисуются в обеих ориентациях: снизу на телефоне,
+        // сбоку на широком экране. Порядок совпадает с mainNavigationScreens.
+        val mainTabs = listOf(
+            KTab(stringResource(R.string.title_dashboard), Icons.Outlined.RadioButtonChecked),
+            KTab(stringResource(R.string.title_settings), Icons.Outlined.Settings),
+        )
+        val selectedTab = if (currentRootRoute == Screen.Settings.route) 1 else 0
+        val onSelectTab: (Int) -> Unit = { index ->
+            val screen = mainNavigationScreens[index]
+            navController.navigate(screen.route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+
         CompositionLocalProvider(LocalTopBarController provides topBarController) {
             if (useNavigationRail) {
                 Row(modifier = Modifier.fillMaxSize()) {
-                    Surface(tonalElevation = 1.dp) {
-                        NavigationRail(
-                            modifier = Modifier.fillMaxHeight(),
-                        ) {
-                            val hasUpdate by UpdateState.hasUpdate
-                            railScreens.forEach { screen ->
-                                val selected = currentRootRoute == screen.route
-
-                                NavigationRailItem(
-                                    icon = {
-                                        if (screen == Screen.Settings && hasUpdate) {
-                                            BadgedBox(badge = { Badge(containerColor = MaterialTheme.colorScheme.primary) }) {
-                                                Icon(screen.icon, contentDescription = null)
+                    // на внутренних экранах панели нет — как и на телефоне
+                    if (!isSubScreen) {
+                        val colors = K
+                        Surface(color = colors.Bg2, tonalElevation = 0.dp) {
+                            NavigationRail(
+                                modifier = Modifier.fillMaxHeight(),
+                                containerColor = colors.Bg2,
+                            ) {
+                                val hasUpdate by UpdateState.hasUpdate
+                                mainTabs.forEachIndexed { index, tab ->
+                                    NavigationRailItem(
+                                        icon = {
+                                            if (index == 1 && hasUpdate) {
+                                                BadgedBox(badge = { Badge(containerColor = colors.Accent) }) {
+                                                    Icon(tab.icon, contentDescription = null)
+                                                }
+                                            } else {
+                                                Icon(tab.icon, contentDescription = null)
                                             }
-                                        } else if (screen == Screen.Tools && toolsUnreadCount > 0) {
-                                            BadgedBox(badge = { Badge(containerColor = MaterialTheme.colorScheme.error) { Text("$toolsUnreadCount") } }) {
-                                                Icon(screen.icon, contentDescription = null)
-                                            }
-                                        } else {
-                                            Icon(screen.icon, contentDescription = null)
-                                        }
-                                    },
-                                    label = { Text(stringResource(screen.titleRes)) },
-                                    selected = selected,
-                                    onClick = {
-                                        navController.navigate(screen.route) {
-                                            popUpTo(navController.graph.findStartDestination().id) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    },
-                                )
+                                        },
+                                        label = { Text(tab.title) },
+                                        selected = index == selectedTab,
+                                        onClick = { onSelectTab(index) },
+                                        colors = NavigationRailItemDefaults.colors(
+                                            selectedIconColor = colors.Accent,
+                                            selectedTextColor = colors.Accent,
+                                            unselectedIconColor = colors.Dim,
+                                            unselectedTextColor = colors.Dim,
+                                            indicatorColor = colors.Surface2,
+                                        ),
+                                    )
+                                }
                             }
                         }
                     }
@@ -1206,25 +1202,10 @@ class MainActivity :
                     bottomBar = {
                         if (!isSubScreen) {
                             // своя панель: две вкладки в языке продукта, без материаловского вида
-                            val tabs = listOf(
-                                KTab(stringResource(R.string.title_dashboard), Icons.Outlined.RadioButtonChecked),
-                                KTab(stringResource(R.string.title_settings), Icons.Outlined.Settings),
-                            )
-                            val selectedTab =
-                                if (currentRootRoute == Screen.Settings.route) 1 else 0
                             KTabBar(
-                                tabs = tabs,
+                                tabs = mainTabs,
                                 selected = selectedTab,
-                                onSelect = { index ->
-                                    val screen = bottomNavigationScreens[index]
-                                    navController.navigate(screen.route) {
-                                        popUpTo(navController.graph.findStartDestination().id) {
-                                            saveState = true
-                                        }
-                                        launchSingleTop = true
-                                        restoreState = true
-                                    }
-                                },
+                                onSelect = onSelectTab,
                             )
                         }
                     },

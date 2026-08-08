@@ -450,7 +450,10 @@ class DashboardViewModel :
                     }
                 }
             } catch (e: Exception) {
-                sendErrorMessage("Failed to update profile: ${e.message}")
+                // Адрес подписки несёт код доступа целиком — в журнал он идёт
+                // замаскированным, а человеку вместо стектрейса — русский текст.
+                Log.w("DashboardViewModel", "update profile", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
+                sendErrorMessage(humanProfileError(e))
                 // Clear updating state on error
                 withContext(Dispatchers.Main) {
                     updateState { copy(updatingProfileId = null) }
@@ -890,5 +893,31 @@ class DashboardViewModel :
         CardGroup.valueOf(name)
     } catch (e: IllegalArgumentException) {
         null
+    }
+
+    /**
+     * Причина словами вместо сырого исключения: адрес подписки качает HTTPClient
+     * поверх ядра на Go, оттуда и формулировки вида «no such host», «connection refused».
+     */
+    private fun humanProfileError(e: Throwable): String {
+        val text = ((e.message ?: "") + " " + (e.cause?.message ?: "")).lowercase()
+        return when {
+            "no such host" in text || "unable to resolve host" in text ||
+                "unable to resolve" in text || "no address associated" in text ||
+                "network is unreachable" in text || "network is down" in text ||
+                "connection refused" in text || "econnrefused" in text ||
+                "failed to connect" in text || "no route to host" in text ||
+                "unknownhost" in text || "server misbehaving" in text ->
+                "Нет связи. Проверьте интернет и повторите."
+
+            "timeout" in text || "timed out" in text || "etimedout" in text ||
+                "deadline exceeded" in text || "connection reset" in text ||
+                "eof" == text.trim() || "unexpected eof" in text ||
+                "500" in text || "502" in text || "503" in text || "504" in text ||
+                "bad gateway" in text || "unavailable" in text ->
+                "Сервер не ответил. Попробуйте позже."
+
+            else -> "Обновить подписку не удалось. Попробуйте позже."
+        }
     }
 }
