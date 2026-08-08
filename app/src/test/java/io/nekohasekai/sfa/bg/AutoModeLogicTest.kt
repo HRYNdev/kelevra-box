@@ -1,5 +1,6 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.AutoMode.RoomAck
 import io.nekohasekai.sfa.bg.AutoMode.Situation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -442,5 +443,54 @@ class AutoModeLogicTest {
         assertEquals(AutoMode.CONFIRMATIONS - 1, AutoMode.ROOM_TRIAL_AFTER)
         assertTrue("подъём обязан быть раньше решения", AutoMode.ROOM_TRIAL_AFTER < AutoMode.CONFIRMATIONS)
         assertTrue("одиночного провала мало", AutoMode.ROOM_TRIAL_AFTER > 1)
+    }
+
+    // ------------------------------------------------------------ ответ про комнату
+
+    @Test
+    fun `ядро пересобрано только на Changed`() {
+        assertTrue(AutoMode.RoomAck.Changed.changed)
+        RoomAck.values().filter { it != AutoMode.RoomAck.Changed }.forEach {
+            assertFalse("$it ядро не пересобирал", it.changed)
+        }
+    }
+
+    @Test
+    fun `не спрашивали — значит и штрафовать не за что`() {
+        // Ровно эти два ответа стоили 120 секунд простоя (замер 08.08.2026): сервис
+        // отказывал, не начав, а автомат считал отказ неудачей комнаты и удваивал паузу.
+        assertTrue("туннеля нет — попытки не было", AutoMode.RoomAck.NoTunnel.untried)
+        assertTrue("комнаты нет вовсе — попытки не было", AutoMode.RoomAck.Unavailable.untried)
+    }
+
+    @Test
+    fun `попытка была — ответ про неё честный`() {
+        assertFalse("подъём идёт — это попытка", AutoMode.RoomAck.Raising.untried)
+        assertFalse("не встала — это попытка", AutoMode.RoomAck.Failed.untried)
+        assertFalse(AutoMode.RoomAck.Changed.untried)
+        assertFalse(AutoMode.RoomAck.Unchanged.untried)
+    }
+
+    // ------------------------------------------------------------ приговор комнате
+
+    @Test
+    fun `свежий присмотр комнату не осуждает`() {
+        // Ноль отказов — гасить нечего. Иначе автомат ронял бы комнату сразу после подъёма.
+        assertFalse(OlcRtcWatchdog.condemned)
+    }
+
+    @Test
+    fun `приговор требует тех же трёх отказов, что и подъём заново`() {
+        // Одна цифра на оба решения: если бы автомат гасил раньше, чем присмотр лечит,
+        // лечение не случалось бы никогда — комнату сносили бы до первой же попытки.
+        assertEquals(3, OlcRtcWatchdog.FAILURES_BEFORE_RESTART)
+        assertTrue("одиночного отказа мало", OlcRtcWatchdog.FAILURES_BEFORE_RESTART > 1)
+    }
+
+    @Test
+    fun `подъём в фоне ядро ещё не пересобрал`() {
+        // Наверх он возвращается сразу, а пересборка случится потом и разбудит заход
+        // отдельно — иначе автомат стёр бы память о выборе раньше, чем выбор сбился.
+        assertFalse(AutoMode.RoomAck.Raising.changed)
     }
 }

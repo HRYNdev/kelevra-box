@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.bg
 
 import android.os.SystemClock
 import android.util.Log
+import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.database.Settings
 
 /**
@@ -73,6 +74,25 @@ object OlcRtcWatchdog {
     var note: String = ""
         private set
 
+    /**
+     * Сколько отказов подряд насчитал присмотр. Ноль — канал отвечает.
+     *
+     * Наружу нужен ровно для одного вопроса: «это приговор или комната ещё моргает».
+     * Первая же проба только что поднятой комнаты врёт чаще всего — нога заходит в неё
+     * до десяти секунд, — и решать по ней нельзя (прогон 09.08.2026: автомат погасил
+     * комнату через 31 секунду после подъёма по первому отказу и заплатил вторым
+     * подъёмом). Владелец счёта один, здесь.
+     */
+    @Volatile
+    var deadInARow: Int = 0
+        private set
+
+    /**
+     * Присмотр вынес приговор: канал не отвечает столько раз подряд, что это уже не
+     * пересборка на той стороне, — либо он вовсе отошёл, исчерпав подъёмы.
+     */
+    val condemned: Boolean get() = gaveUp || deadInARow >= FAILURES_BEFORE_RESTART
+
     private var protector: ((Int) -> Boolean)? = null
     private var requireProtector: Boolean = false
 
@@ -89,6 +109,7 @@ object OlcRtcWatchdog {
             this.requireProtector = requireProtector
             restarts = 0
             gaveUp = false
+            deadInARow = 0
             note = ""
             active = true
             thread = Thread(::loop, "olcrtc-watchdog").apply {
@@ -144,9 +165,14 @@ object OlcRtcWatchdog {
             val port = OlcRtcParams.socksPort
             val health = OlcRtcCore.probe(port)
             if (!active) return
+            // Померил — записал. Раньше присмотр держал вердикт при себе, а реестр про
+            // комнату обновлял только круг автомата: обрыв на 83 секунды (прогон 08.08.2026)
+            // присмотр вылечил сам, а человек всё это время читал «Подключено».
+            RoomNote.note(OlcRtcCore.state, health)
 
             if (health is OlcRtcCore.Health.Live) {
                 failures = 0
+                deadInARow = 0
                 if (restarts > 0 && lastRestartAt > 0 &&
                     SystemClock.elapsedRealtime() - lastRestartAt > HEALTHY_RESET_MILLIS
                 ) {
@@ -159,6 +185,7 @@ object OlcRtcWatchdog {
             }
 
             failures++
+            deadInARow = failures
             val reason = (health as? OlcRtcCore.Health.Dead)?.reason ?: "неизвестно"
             if (failures < FAILURES_BEFORE_RESTART) {
                 Log.i(TAG, "канал не отвечает ($reason), отказ $failures из $FAILURES_BEFORE_RESTART")
@@ -175,6 +202,7 @@ object OlcRtcWatchdog {
 
             if (!restartCore(reason)) return
             failures = 0
+            deadInARow = 0
             lastRestartAt = SystemClock.elapsedRealtime()
         }
     }
@@ -195,6 +223,10 @@ object OlcRtcWatchdog {
 
         runCatching { OlcRtcCore.stop() }
             .onFailure { Log.w(TAG, "остановка перед подъёмом сорвалась: ${it.message}") }
+        // Ядро погашено нарочно и сейчас встанет заново. По одному только состоянию это
+        // не отличить от «комнату не поднимали», а для человека разница вся: «поднимаю
+        // комнату» вместо «не проверяли».
+        RoomNote.raising()
         if (!active) return false
         if (!sleepQuietly(pause)) return false
 
@@ -209,12 +241,14 @@ object OlcRtcWatchdog {
                 note = "канал поднят заново (попытка $restarts)"
                 Log.i(TAG, "$note: SOCKS5 на 127.0.0.1:${params.socksPort}")
                 // Сразу спрашиваем: «поднят» без прошедших байтов — это ещё не канал.
-                OlcRtcCore.probe(params.socksPort)
+                val health = OlcRtcCore.probe(params.socksPort)
+                RoomNote.note(OlcRtcCore.state, health)
             }
 
             else -> {
                 note = "подъём $restarts из $MAX_RESTARTS не удался: ${OlcRtcCore.lastError}"
                 Log.w(TAG, note)
+                RoomNote.note()
             }
         }
         return active
