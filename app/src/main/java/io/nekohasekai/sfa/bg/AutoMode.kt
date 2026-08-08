@@ -6,6 +6,11 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import io.nekohasekai.sfa.Application
+import io.nekohasekai.sfa.bg.path.Evidence
+import io.nekohasekai.sfa.bg.path.PathId
+import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.PathSnapshot
+import io.nekohasekai.sfa.bg.path.PathStatus
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -117,9 +122,43 @@ object AutoMode {
     @Volatile
     private var link: Link = Link.Unknown
 
-    private fun setLink(value: Link) {
+    /**
+     * Пересчитывает итог проб по общей памяти о путях.
+     *
+     * [Link] остался ради тех, кто на него смотрит, но своей правды у него больше нет:
+     * он целиком выводится из снимка [PathRegistry]. Раньше это было отдельное поле,
+     * которое ставили руками в шести местах, — и оно жило своей жизнью.
+     */
+    private fun refreshLink() {
+        val value = linkFrom(PathRegistry.snapshot.value)
+        if (link == value) return
         link = value
         _state.value = _state.value.copy(link = value)
+    }
+
+    /**
+     * Итог проб по снимку. Порядок веток — это и есть смысл: пока хоть что-то меряется,
+     * говорить «связи нет» рано, а один живой путь важнее двух отказавших.
+     */
+    internal fun linkFrom(snapshot: PathSnapshot): Link = when {
+        snapshot.anyIs(PathStatus.Probing) -> Link.Checking
+        snapshot.anyIs(PathStatus.Alive) -> Link.Alive
+        snapshot.any { it.refused } -> Link.Dead
+        else -> Link.Unknown
+    }
+
+    /**
+     * Путь, на котором стоим. Решает по-прежнему автомат — реестр помнит состояние путей,
+     * но не то, каким из них мы идём.
+     */
+    fun standingOn(): PathId? = when {
+        !Settings.autoModeEnabled && Settings.autoModeManualRoom -> PathId.ROOM
+        else -> when (_state.value.situation) {
+            Situation.Home -> PathId.HOME
+            Situation.Main -> PathId.MAIN
+            Situation.Room -> PathId.ROOM
+            else -> null
+        }
     }
 
     private fun publish(auto: Boolean, situation: Situation) {
@@ -298,6 +337,10 @@ object AutoMode {
     /** Сколько заходов подряд основной канал не поднимается. Считает повод для пробного подъёма. */
     private var mainFailures = 0
 
+    /** Чем кончилась честная проба этого захода. Нужна только для записи в реестр. */
+    @Volatile
+    private var lastMainProbe: ProxyProbe.Result? = null
+
     /**
      * Сеть, в которой человек выбрал выход руками. Выбор держится, пока мы в ней:
      * см. [chooseManually] и [onNetworkChanged].
@@ -340,6 +383,10 @@ object AutoMode {
             roomTriedAt = 0L
             roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
             mainFailures = 0
+            // Прошлая сессия про эти пути больше ничего не знает: сеть под нами могла
+            // смениться, пока сервиса не было.
+            PathRegistry.reset()
+            PathRegistry.bindExits(main = layout.main, room = layout.room)
             link = Link.Unknown
             holdNetwork = physicalNetwork()
             publish(Settings.autoModeEnabled, initial)
@@ -370,6 +417,7 @@ object AutoMode {
         t?.interrupt()
         t?.join(1_000)
         host = null
+        PathRegistry.reset()
         link = Link.Unknown
         publish(Settings.autoModeEnabled, Situation.Unknown)
         Log.i(TAG, "автомат выключен")
@@ -421,6 +469,7 @@ object AutoMode {
         selected = null
         gate.reset(Situation.Unknown)
         mainFailures = 0
+        PathRegistry.reset()
         link = Link.Unknown
         publish(true, Situation.Unknown)
     }
@@ -433,6 +482,7 @@ object AutoMode {
             Settings.manualExitName = ""
             Settings.autoModeManualRoom = false
             holdNetwork = null
+            PathRegistry.reset()
             link = Link.Unknown
         }
         _state.value = _state.value.copy(auto = enabled, link = link)
@@ -486,6 +536,9 @@ object AutoMode {
         Settings.autoModeEnabled = false
         // Сеть, под которую сделан выбор. Сменится — автомат вернётся сам.
         holdNetwork = physicalNetwork()
+        // Прошлые замеры делались под выбор автомата: держать их и показывать как правду
+        // про выход, который человек выбрал сам, значит врать.
+        PathRegistry.reset()
         link = Link.Unknown
         _state.value = _state.value.copy(auto = false, situation = Situation.Unknown, link = link)
         gate.reset(Situation.Unknown)
@@ -573,6 +626,10 @@ object AutoMode {
             // (поймано в эмуляторе 07.08.2026). Лишних команд нет: choose молчит, когда
             // выбранное уже стоит.
             manualExit?.let { choose(host, it) }
+            // Пробы тут не идут, но про комнату её ядро говорит и без нас: без этой записи
+            // выбранная руками комната выглядела бы «непроверенной» всё время выбора.
+            // Итог проб ([refreshLink]) при этом не трогаем — мерять действительно некому.
+            noteRoom()
             idle = true
             burst.cancel()
             settled = true
@@ -613,15 +670,29 @@ object AutoMode {
 
     private fun observe(host: Host): Situation {
         val network = physicalNetwork() ?: run {
-            setLink(Link.Dead)
+            PathRegistry.allUnavailable("сети нет")
+            refreshLink()
             return decide(false, false, false, false)
         }
         // Пока меряем — так и говорим. Иначе экран весь этот десяток секунд утверждает,
         // что всё подключено, хотя ещё ничего не проверено.
-        setLink(Link.Checking)
+        PathRegistry.probing(PathId.HOME)
+        refreshLink()
         // Порядок проб важен и стоит денег: дома дальше смотреть незачем, а комнату
         // спрашиваем только когда основной канал уже не отвечает.
         val home = homeBypass(network)
+        if (home) {
+            PathRegistry.alive(PathId.HOME)
+            // Основной канал этим заходом не мерили — так и записываем. Прошлый его
+            // отказ был в другой сети и про эту не говорит ничего.
+            PathRegistry.unchecked(PathId.MAIN, "дома обход делает роутер")
+        } else {
+            PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+            // Обе записи одним движением: между ними снимок читателю не показываем,
+            // иначе экран мигнёт «связи нет» ровно посреди своей же проверки.
+            PathRegistry.probing(PathId.MAIN)
+        }
+        refreshLink()
         val main = !home && mainWorks(network, host)
         if (home || main) {
             mainFailures = 0
@@ -638,9 +709,33 @@ object AutoMode {
             if (mainFailures >= ROOM_TRIAL_AFTER) trialRaiseRoom(host)
             roomAlive()
         }
-        val situation = decide(hasNetwork = true, home = home, main = main, room = room)
-        setLink(if (situation == Situation.Searching) Link.Dead else Link.Alive)
-        return situation
+        noteRoom()
+        refreshLink()
+        return decide(hasNetwork = true, home = home, main = main, room = room)
+    }
+
+    /**
+     * Теневая запись про комнату: что о ней говорит её собственное ядро.
+     *
+     * Своего мнения тут нет ни на грош — только перевод состояния [OlcRtcCore] в общую
+     * память. Раньше этот перевод делали трое: экран, шторка и автомат, каждый по-своему,
+     * и «Комната» в шторке могла стоять рядом с «Комната не отвечает» на круге.
+     */
+    private fun noteRoom() {
+        when (val state = OlcRtcCore.state) {
+            is OlcRtcCore.State.Starting -> PathRegistry.raising(PathId.ROOM)
+
+            is OlcRtcCore.State.Ready -> when (val health = OlcRtcCore.health) {
+                is OlcRtcCore.Health.Live -> PathRegistry.alive(PathId.ROOM, health.latencyMs)
+                is OlcRtcCore.Health.Dead -> PathRegistry.dead(PathId.ROOM, health.reason)
+                // Ядро встало, а присмотр ещё не мерил: это не отказ, комната поднимается.
+                OlcRtcCore.Health.Unknown -> PathRegistry.raising(PathId.ROOM)
+            }
+
+            is OlcRtcCore.State.Failed -> PathRegistry.dead(PathId.ROOM, state.reason)
+            OlcRtcCore.State.Unavailable -> PathRegistry.unavailable(PathId.ROOM, "ядра комнаты в сборке нет")
+            OlcRtcCore.State.Idle -> PathRegistry.unchecked(PathId.ROOM, "комнату не поднимали")
+        }
     }
 
     /**
@@ -661,6 +756,7 @@ object AutoMode {
         val now = SystemClock.elapsedRealtime()
         if (roomTriedAt != 0L && now - roomTriedAt < roomTrialPause) return
         roomTriedAt = now
+        PathRegistry.raising(PathId.ROOM)
         Log.i(TAG, "основной канал не поднимается $mainFailures заход(а) подряд — пробую поднять комнату")
         val changed = runCatching { host.setRoomWanted(true, "проверяю, встаёт ли комната") }
             .getOrElse {
@@ -678,6 +774,9 @@ object AutoMode {
             Log.i(TAG, "комната поднялась, жду вердикта присмотра")
         } else {
             roomTrialPause = (roomTrialPause * 2).coerceAtMost(ROOM_TRIAL_PAUSE_CAP_MILLIS)
+            // Остывание помнит реестр, но распоряжается им по-прежнему [roomTrialPause]:
+            // решения из общей памяти на этом шаге не принимает никто.
+            PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
             Log.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
         }
     }
@@ -930,6 +1029,7 @@ object AutoMode {
      * и занимается [probeThroughMain].
      */
     private fun mainWorks(network: Network, host: Host): Boolean {
+        lastMainProbe = null
         val endpoints = layout.mainEndpoints
         val portOpen = if (endpoints.isEmpty()) {
             // Раскладку не поняли — не выдумываем отказ: гнать всех в комнату из-за
@@ -947,7 +1047,7 @@ object AutoMode {
                 )
             }
         }
-        if (portOpen == false) return mainVerdict(portOpen = false, trafficFlows = null)
+        if (portOpen == false) return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
 
         val proxy = layout.localProxy
         val trafficFlows = when {
@@ -957,7 +1057,33 @@ object AutoMode {
             !host.tunnelLive() -> null
             else -> probeThroughMain(host, proxy)
         }
-        return mainVerdict(portOpen, trafficFlows)
+        return noteMain(mainVerdict(portOpen, trafficFlows), portOpen)
+    }
+
+    /**
+     * Теневая запись про основной канал. Вердикт [works] уже вынесен и не меняется —
+     * здесь только записывается, откуда он взялся.
+     *
+     * Разница между «мерили» и «догадались» тут не косметическая: честная проба видит
+     * весь путь, а открытый порт — одно рукопожатие. Человеку показываем то, что есть,
+     * не выдавая догадку за замер.
+     */
+    private fun noteMain(works: Boolean, portOpen: Boolean?): Boolean {
+        when (val probe = lastMainProbe) {
+            is ProxyProbe.Result.Live -> PathRegistry.alive(PathId.MAIN, probe.latencyMs)
+            is ProxyProbe.Result.Dead -> PathRegistry.dead(PathId.MAIN, probe.reason)
+            null -> when (portOpen) {
+                false -> PathRegistry.dead(PathId.MAIN, "адрес узла не отвечает", Evidence.Hint)
+                true -> PathRegistry.alive(PathId.MAIN, evidence = Evidence.Hint)
+                // Раскладку не поняли: отказ не выдумываем, но и замером это не назовёшь.
+                null -> PathRegistry.alive(
+                    PathId.MAIN,
+                    evidence = Evidence.Never,
+                    reason = "про канал не известно ничего",
+                )
+            }
+        }
+        return works
     }
 
     /**
@@ -1014,6 +1140,9 @@ object AutoMode {
 
         val result = ProxyProbe.through(proxy, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
         ProxyProbe.log("основной канал", result)
+        // Итог пробы забирает [noteMain]: задержку и причину знает только она, а вердикт
+        // выносится выше и от записи не зависит.
+        lastMainProbe = result
         val alive = result is ProxyProbe.Result.Live
 
         if (!alive && restore != null && group != null) {

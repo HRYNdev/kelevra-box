@@ -1,6 +1,7 @@
 package io.nekohasekai.sfa.bg
 
 import android.util.Log
+import io.nekohasekai.sfa.bg.path.HonestProbe
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -327,18 +328,14 @@ object OlcRtcCore {
         return invokeIsRunning(mobile)
     }
 
-    /** Куда ходим, чтобы убедиться что канал живой: маленький ответ, обычный HTTP. */
-    private const val PROBE_HOST = "ifconfig.me"
-    private const val PROBE_PORT = 80
-    private const val PROBE_PATH = "/ip"
-    private const val PROBE_TIMEOUT_MILLIS = 8_000
-
     /**
      * Гонит через поднятый SOCKS5 живой запрос и меряет ответ. Блокирующий вызов,
      * звать только с фонового потока.
      *
-     * Ходим руками по SOCKS5 с адресом-именем (ATYP=domain): так имя резолвит дальняя
-     * сторона, и проверка меряет ровно путь через комнату, а не локальный DNS.
+     * Сама проба теперь общая для всех путей ([HonestProbe]): она делала ровно то же,
+     * что проба основного канала, и две копии расходились бы при первой же правке.
+     * Комнате отдельный вход в конфиге не нужен — ядро olcRTC и так слушает свой SOCKS
+     * только на петле, то есть закреплено за комнатой по построению.
      */
     fun probe(socksPort: Int): Health {
         val mobile = mobileClass
@@ -360,62 +357,18 @@ object OlcRtcCore {
         return result
     }
 
-    private fun runProbe(socksPort: Int): Health = try {
-        val startedAt = android.os.SystemClock.elapsedRealtime()
-        java.net.Socket().use { socket ->
-            socket.tcpNoDelay = true
-            socket.soTimeout = PROBE_TIMEOUT_MILLIS
-            socket.connect(java.net.InetSocketAddress(SOCKS_LISTEN_HOST, socksPort), 2_000)
-            val out = socket.getOutputStream()
-            val input = java.io.DataInputStream(socket.getInputStream())
-
-            // greeting: версия 5, один метод «без авторизации»
-            out.write(byteArrayOf(0x05, 0x01, 0x00))
-            out.flush()
-            val greeting = ByteArray(2).also { input.readFully(it) }
-            if (greeting[0].toInt() != 0x05 || greeting[1].toInt() != 0x00) {
-                return Health.Dead("SOCKS5 не принял приветствие")
-            }
-
-            val host = PROBE_HOST.toByteArray()
-            out.write(
-                byteArrayOf(0x05, 0x01, 0x00, 0x03, host.size.toByte()) + host +
-                    byteArrayOf((PROBE_PORT shr 8).toByte(), (PROBE_PORT and 0xff).toByte()),
-            )
-            out.flush()
-            val reply = ByteArray(4).also { input.readFully(it) }
-            if (reply[1].toInt() != 0x00) {
-                return Health.Dead("комната не открыла соединение (код ${reply[1].toInt()})")
-            }
-            // хвост ответа: адрес привязки, длина зависит от типа
-            when (reply[3].toInt()) {
-                0x01 -> input.skipBytes(4 + 2)
-                0x03 -> input.skipBytes(input.readUnsignedByte() + 2)
-                0x04 -> input.skipBytes(16 + 2)
-                else -> return Health.Dead("непонятный ответ SOCKS5")
-            }
-
-            out.write(
-                (
-                    "GET $PROBE_PATH HTTP/1.1\r\nHost: $PROBE_HOST\r\n" +
-                        "User-Agent: kelevra\r\nConnection: close\r\n\r\n"
-                    ).toByteArray(),
-            )
-            out.flush()
-            val statusLine = input.readLine().orEmpty()
-            if (!statusLine.startsWith("HTTP/1.")) {
-                return Health.Dead("ответа нет")
-            }
-            Health.Live(android.os.SystemClock.elapsedRealtime() - startedAt)
-        }
-    } catch (t: Throwable) {
-        Health.Dead(
-            when (t) {
-                is java.net.SocketTimeoutException -> "ответа не дождались"
-                is java.net.ConnectException -> "SOCKS5 не отвечает"
-                else -> t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
-            },
+    private fun runProbe(socksPort: Int): Health {
+        val measurement = HonestProbe.measure(
+            AutoModeExits.Endpoint(SOCKS_LISTEN_HOST, socksPort),
+            "комната",
         )
+        return when (measurement.verdict) {
+            HonestProbe.Verdict.Live -> Health.Live(measurement.latencyMs ?: 0L)
+            HonestProbe.Verdict.Dead -> Health.Dead(measurement.reason)
+            // Спросить было нечем. Не «мертва» и уж точно не «жива»: живой комнату
+            // считает только тот, кто её реально прошёл.
+            HonestProbe.Verdict.Unmeasurable -> Health.Unknown
+        }
     }
 
     private fun validate(params: Params): String? = when {
