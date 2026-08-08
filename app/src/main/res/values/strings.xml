@@ -766,4 +766,16 @@
     <string name="room_field_port">порт</string>
     <string name="room_field_placeholder">как у сети</string>
     <string name="advanced_journal_subtitle">Что происходило внутри — на случай разбора</string>
+
+    <!--
+      Образцы системных запросов на первом запуске. Текст и кнопки повторяют то, что
+      человек реально увидит от Android на русском телефоне: узнавание и есть весь смысл
+      этих превью, а по-английски они не узнавались вовсе.
+    -->
+    <string name="system_ask_notifications_title">Разрешить приложению Kelevra отправлять вам уведомления?</string>
+    <string name="system_ask_notifications_yes">Разрешить</string>
+    <string name="system_ask_notifications_no">Запретить</string>
+    <string name="system_ask_vpn_title">Kelevra запрашивает разрешение на настройку VPN-подключения…</string>
+    <string name="system_ask_vpn_yes">ОК</string>
+    <string name="system_ask_vpn_no">Отмена</string>
 </resources>

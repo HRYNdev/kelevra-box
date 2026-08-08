@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -44,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.base.GlobalEventBus
 import io.nekohasekai.sfa.compose.base.UiEvent
 import io.nekohasekai.sfa.compose.theme.K
@@ -290,15 +292,15 @@ private fun ColumnScope.StepPermission(onNext: () -> Unit) {
     Spacer(Modifier.height(24.dp))
     // показываем оба запроса в том порядке, в каком они реально прилетают
     SystemAsk(
-        title = "Allow Kelevra to send you notifications?",
-        yes = "Allow",
-        no = "Don't allow",
+        title = stringResource(R.string.system_ask_notifications_title),
+        yes = stringResource(R.string.system_ask_notifications_yes),
+        no = stringResource(R.string.system_ask_notifications_no),
     )
     Spacer(Modifier.height(10.dp))
     SystemAsk(
-        title = "Kelevra wants to set up a VPN connection…",
-        yes = "OK",
-        no = "Cancel",
+        title = stringResource(R.string.system_ask_vpn_title),
+        yes = stringResource(R.string.system_ask_vpn_yes),
+        no = stringResource(R.string.system_ask_vpn_no),
     )
 
     Spacer(Modifier.weight(1f))
