@@ -154,6 +154,43 @@ class PathWordsTest {
     }
 
     @Test
+    fun `выход выбран человеком и жив — реестр подтверждает имя`() {
+        // Реестр знает имя (bindExits) и намерил «жив» — заголовок остаётся именем
+        // выхода, как и раньше: живой путь ничего не обязан объяснять.
+        PathRegistry.bindExits(main = "Нидерланды", room = null)
+        PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+        PathRegistry.alive(PathId.MAIN, latencyMs = 210)
+        assertEquals("Нидерланды", headline(chosen = null, auto = false, manualExit = "Нидерланды"))
+    }
+
+    @Test
+    fun `выход выбран человеком, но проба назвала его мёртвым — так и пишем`() {
+        // Раньше здесь просто повторяли выбранное имя, будто автомат отошёл — значит
+        // и мерить некому. На деле честная проба (BoxService.checkPathsHonestly) мерит
+        // пришпиленный путь и кладёт результат в тот же реестр — заголовок обязан его
+        // читать, а не молчать поверх готового замера.
+        PathRegistry.bindExits(main = "Нидерланды", room = null)
+        PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+        PathRegistry.dead(PathId.MAIN, "ответа нет")
+        assertEquals("Нидерланды не отвечает", headline(chosen = null, auto = false, manualExit = "Нидерланды"))
+    }
+
+    @Test
+    fun `выход выбран человеком, путь недоступен — тоже не «Нидерланды»`() {
+        PathRegistry.bindExits(main = null, room = "Комната")
+        PathRegistry.unavailable(PathId.ROOM, "ядра комнаты в сборке нет")
+        assertEquals("Комната не отвечает", headline(chosen = null, auto = false, manualExit = "Комната"))
+    }
+
+    @Test
+    fun `выход выбран человеком, ещё не мерили — показываем имя, а не выдумку`() {
+        // Реестр про этот выход ничего не знает (Unknown) — врать отказом нельзя,
+        // возвращаем то же имя, что и раньше.
+        PathRegistry.bindExits(main = "Нидерланды", room = null)
+        assertEquals("Нидерланды", headline(chosen = null, auto = false, manualExit = "Нидерланды"))
+    }
+
+    @Test
     fun `основной канал отвечает за себя сам`() {
         PathRegistry.dead(PathId.HOME, "подменных адресов нет")
 

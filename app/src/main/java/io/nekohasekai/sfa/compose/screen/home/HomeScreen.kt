@@ -163,8 +163,16 @@ fun HomeScreen(
         (paths.anyIs(PathStatus.Probing) || !paths.any { it.usable || it.refused })
     val linkDead = running && !manualHold && !noNetwork &&
         !paths.any { it.usable } && paths.any { it.refused }
-    // Ничего не поднимается или сети нет — круг не должен врать зелёным.
-    val broken = running && (noNetwork || roomDead || linkDead)
+    // Путь, который человек выбрал руками. Раньше в ручном режиме круг показывал
+    // состояние ядра, а не то, что реально намерили: проба секундами раньше называла
+    // тот же путь мёртвым, а круг писал «Подключено» (поймано на стенде 08.08.2026).
+    // Автомат отошёл, но мерить пришпиленный путь никто не запрещал — состояние берём
+    // из того же реестра, что и для автоматического выбора.
+    val manualPath = if (manualHold) paths.byExit(manualExit) else null
+    val manualDead = manualHold && manualPath?.refused == true
+    // Ничего не поднимается, сети нет, или выбранный руками путь не отвечает —
+    // круг не должен врать зелёным.
+    val broken = running && (noNetwork || roomDead || linkDead || manualDead)
 
     // Задержку комнаты меряет её собственный присмотр, а помнит — реестр. Своего опроса
     // экран больше не ведёт: цикл раз в три секунды жил только потому, что состояние
@@ -232,6 +240,7 @@ fun HomeScreen(
                 roomRising -> "Поднимаю комнату"
                 roomDead -> "Комната не отвечает"
                 linkDead -> "Связи нет"
+                manualDead -> "Не отвечает"
                 measuring -> "Проверяю связь"
                 running -> "Подключено"
                 else -> "Отключено"
@@ -253,6 +262,7 @@ fun HomeScreen(
                 roomRising -> "поднимаю канал через комнату"
                 roomDead -> "канал через комнату не поднялся, выберите другой выход"
                 linkDead -> "выбранный путь не отвечает, ищу другой"
+                manualDead -> "выбран вами, не отвечает"
                 measuring -> "проверяю, идут ли данные"
                 manualHold -> "выход выбран вами, автомат вернётся при смене сети"
                 running -> "нажмите, чтобы выключить"

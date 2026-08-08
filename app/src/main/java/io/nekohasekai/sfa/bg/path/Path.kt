@@ -100,7 +100,9 @@ data class PathDef(
         /** Комната дороже: чужой видеозвонок, поднимается секундами. */
         const val RANK_ROOM = 20
 
-        val HOME = PathDef(PathId.HOME, "Дома", null, RANK_HOME, ProbeKind.Dns)
+        // Дом узнаётся по DNS, но подтверждается трафиком — и записан именно вторым:
+        // подменные адреса без прошедшего наружу запроса домом больше не считаются.
+        val HOME = PathDef(PathId.HOME, "Дома", null, RANK_HOME, ProbeKind.Traffic)
         val MAIN = PathDef(PathId.MAIN, "Основной канал", null, RANK_MAIN, ProbeKind.Traffic)
         val ROOM = PathDef(PathId.ROOM, "Комната", null, RANK_ROOM, ProbeKind.Carrier)
     }
