@@ -62,11 +62,16 @@ import kotlin.random.Random
  *    признак необязательный, а пакет лишний.
  *
  * ## Подключение
- * В [AutoMode] намеренно НЕ вплетено. Точка вызова будет выглядеть так:
- * ```
- * // val mode = NetworkModeDetector.detect().mode
- * ```
- * но включать её — отдельный шаг.
+ * [AutoMode] спрашивает вердикт **подсказкой**, а не командой, и делает это редко:
+ * только когда что-то уже не сходится (дома по DNS, а трафик не идёт; основной канал
+ * провалился), и не чаще одного замера на сеть за время жизни подсказки. Вердикт
+ * кэшируется вместе с сетью, на которой снят ([reportFor]): «белый список» на мобильной
+ * сети ничего не говорит про домашний вайфай.
+ *
+ * Что подсказка меняет у автомата: [NetworkMode.Whitelist] отменяет вердикт «дома»
+ * при любых признаках DNS и помечает основной канал мёртвым без траты честной пробы —
+ * под белым списком узел недостижим на уровне маршрутизации, и мерить там нечего.
+ * Выбор пути при этом по-прежнему делает автомат: подсказка даёт факт, а не решение.
  */
 object NetworkModeDetector {
 
@@ -194,10 +199,32 @@ object NetworkModeDetector {
     @Volatile
     private var last: NetworkModeReport? = null
 
+    /**
+     * Сеть, на которой снят [last].
+     *
+     * Вердикт про режим — это утверждение про конкретное окружение, а не про телефон
+     * вообще: «белый список» на мобильной сети ничего не говорит про домашний вайфай.
+     * Поэтому вердикт хранится вместе с сетью, а спросить его можно только про неё
+     * ([reportFor]).
+     */
+    @Volatile
+    private var lastNetwork: Network? = null
+
     private var nextRunAt = 0L
 
     /** Последний известный вердикт, если он был. Без сети и без побочных действий. */
     fun lastReport(): NetworkModeReport? = last
+
+    /**
+     * Готовый вердикт про **эту** сеть, если он есть. Ничего не меряет и ничего не шлёт.
+     *
+     * Свежесть решает тот, кто спрашивает: у отчёта есть [NetworkModeReport.atMillis],
+     * и что считать протухшим — вопрос вызывающего, а не наш.
+     */
+    fun reportFor(network: Network?): NetworkModeReport? {
+        if (network == null) return null
+        return last?.takeIf { lastNetwork == network }
+    }
 
     /**
      * Определить режим сети.
@@ -208,18 +235,26 @@ object NetworkModeDetector {
      * @param probeExternalDns добавить необязательный признак «отвечает ли внешний
      *   резолвер». По умолчанию выключен: в решении он не участвует (данные по
      *   операторам расходятся), а лишний пакет рисует лишний след.
+     * @param network по какой сети мерить. `null` — выберем сами. Передаётся тем, кто
+     *   уже нашёл физическую сеть: иначе замер и вызывающий могут говорить о разных
+     *   сетях, а вердикт кэшируется именно по сети.
      */
     suspend fun detect(
         targets: Targets = Targets.DEFAULT,
         force: Boolean = false,
         probeExternalDns: Boolean = false,
+        network: Network? = null,
     ): NetworkModeReport = lock.withLock {
+        val chosen = network?.takeIf(::physical) ?: physicalNetwork()
         val cached = last
-        if (!force && cached != null && SystemClock.elapsedRealtime() < nextRunAt) {
+        // Выдержка бережёт от ровного следа в одной и той же обстановке. Другая сеть —
+        // другая обстановка, и старый вердикт про неё не говорит ничего.
+        if (!force && cached != null && chosen == lastNetwork && SystemClock.elapsedRealtime() < nextRunAt) {
             return@withLock cached
         }
-        val report = withContext(Dispatchers.IO) { measure(targets, probeExternalDns) }
+        val report = withContext(Dispatchers.IO) { measure(targets, probeExternalDns, chosen) }
         last = report
+        lastNetwork = chosen
         nextRunAt = SystemClock.elapsedRealtime() +
             COOLDOWN_MILLIS +
             Random.nextLong(COOLDOWN_JITTER_MILLIS)
@@ -229,13 +264,17 @@ object NetworkModeDetector {
 
     // ----------------------------------------------------------------------- замер
 
-    private fun measure(targets: Targets, probeExternalDns: Boolean): NetworkModeReport {
+    private fun measure(
+        targets: Targets,
+        probeExternalDns: Boolean,
+        chosen: Network?,
+    ): NetworkModeReport {
         val wall = System.currentTimeMillis()
         val started = SystemClock.elapsedRealtime()
         var signals = NetworkSignals()
         var owned: Socket? = null
         try {
-            val network = physicalNetwork() ?: return report(signals, wall, started)
+            val network = chosen ?: return report(signals, wall, started)
             signals = signals.copy(physicalNetwork = true)
 
             // Проба 1: TCP к неразрешённому адресу. Самая дешёвая и самая решающая.
@@ -249,6 +288,15 @@ object NetworkModeDetector {
                 // Дальше не идём: TLS тут нечего проверять, а лишних пакетов не шлём.
                 // На этом пути ни одного рукопожатия не бывает вовсе.
                 signals = signals.copy(tcpAllowed = control(network, targets.allowed))
+                // Признак про внешний резолвер снимаем и здесь. Раньше ранний выход стоял
+                // выше пробы DNS, и параметр [probeExternalDns] на этом пути молча ничего
+                // не делал — а путь этот ровно тот, где признак единственно и интересен:
+                // именно белый список бывает и без фильтрации DNS (МТС, Tele2), и с ней
+                // (Мегафон), и различить два профиля больше нечем. В решении он
+                // по-прежнему не участвует.
+                if (probeExternalDns) {
+                    signals = signals.copy(externalDns = probeDns(network, targets.externalResolver))
+                }
                 return report(signals, wall, started)
             }
             // Неразрешённый адрес нам ответил — белого списка нет, и держать соединение
