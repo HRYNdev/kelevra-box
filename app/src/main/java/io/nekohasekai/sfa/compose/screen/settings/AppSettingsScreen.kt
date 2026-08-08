@@ -431,7 +431,7 @@ fun AppSettingsScreen(
                         showDownloadDialog = false
                     } catch (e: Exception) {
                         Log.e("AppSettingsScreen", "Error downloading update", e)
-                        downloadError = e.message
+                        downloadError = humanUpdateError(e, context, R.string.update_download_failed)
                     }
                 }
             },
@@ -499,7 +499,9 @@ fun AppSettingsScreen(
                         },
                         trailingContent = {
                             if (hasUpdate) {
-                                Badge(containerColor = MaterialTheme.colorScheme.primary) { Text("New") }
+                                Badge(containerColor = MaterialTheme.colorScheme.primary) {
+                                    Text(stringResource(R.string.update_badge_new))
+                                }
                             }
                         },
                         modifier =
@@ -1323,7 +1325,7 @@ fun AppSettingsScreen(
                                     } catch (e: Exception) {
                                         Log.e("AppSettingsScreen", "checkUpdateAsync failed", e)
                                         UpdateState.setUpdate(null)
-                                        showErrorDialog = e.message
+                                        showErrorDialog = humanUpdateError(e, context)
                                     }
                                 }
                                 UpdateState.isChecking.value = false
@@ -1571,6 +1573,37 @@ private fun LanguageDialog(
             }
         },
     )
+}
+
+/**
+ * Причина словами вместо сырого (часто английского) текста исключения: проверка и
+ * скачивание обновления ходят по сети, поэтому формулировки — «unable to resolve
+ * host», «connection refused», HTTP-коды — те же, что и в остальных сетевых местах.
+ */
+private fun humanUpdateError(
+    e: Throwable,
+    context: Context,
+    fallback: Int = R.string.update_check_failed,
+): String {
+    val text = ((e.message ?: "") + " " + (e.cause?.message ?: "")).lowercase()
+    return when {
+        "no such host" in text || "unable to resolve host" in text ||
+            "unable to resolve" in text || "no address associated" in text ||
+            "network is unreachable" in text || "network is down" in text ||
+            "connection refused" in text || "econnrefused" in text ||
+            "failed to connect" in text || "no route to host" in text ||
+            "unknownhost" in text || "server misbehaving" in text ->
+            context.getString(R.string.update_check_no_network)
+
+        "timeout" in text || "timed out" in text || "etimedout" in text ||
+            "deadline exceeded" in text || "connection reset" in text ||
+            "eof" == text.trim() || "unexpected eof" in text ||
+            "500" in text || "502" in text || "503" in text || "504" in text ||
+            "bad gateway" in text || "unavailable" in text ->
+            context.getString(R.string.update_check_server_unavailable)
+
+        else -> context.getString(fallback)
+    }
 }
 
 private fun calculateDirSize(dir: File?): Long {

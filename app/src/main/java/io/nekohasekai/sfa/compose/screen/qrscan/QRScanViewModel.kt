@@ -395,7 +395,7 @@ class QRScanViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             if (uri.scheme != "sing-box" || uri.host != "import-remote-profile") {
-                _uiState.update { it.copy(errorMessage = "Not a valid sing-box remote profile URI") }
+                _uiState.update { it.copy(errorMessage = "Это не ссылка на профиль Kelevra") }
                 imageAnalysis?.setAnalyzer(analysisExecutor, imageAnalyzer!!)
                 return false
             }

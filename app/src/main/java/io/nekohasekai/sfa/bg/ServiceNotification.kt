@@ -125,17 +125,28 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
      * «Работает» не говорит человеку ничего: он не видит ни выхода, ни того, что канал
      * через комнату ещё поднимается. Пишем состояние словами, как на главном экране.
      */
-    private fun состояние(): String = when {
-        AutoMode.state.value.situation == AutoMode.Situation.Home -> service.getString(R.string.status_home)
-        AutoMode.state.value.situation == AutoMode.Situation.NoNetwork -> "Нет сети"
-        Settings.olcrtcEnabled && Settings.autoModeManualRoom -> when (OlcRtcCore.state) {
-            is OlcRtcCore.State.Ready -> "Комната"
-            is OlcRtcCore.State.Starting -> "Поднимаю комнату"
-            else -> "Комната не отвечает"
+    private fun состояние(): String {
+        val auto = AutoMode.state.value
+        return when {
+            auto.situation == AutoMode.Situation.Home -> service.getString(R.string.status_home)
+            auto.situation == AutoMode.Situation.NoNetwork -> "Нет сети"
+            Settings.autoModeManualRoom || auto.situation == AutoMode.Situation.Room -> when (OlcRtcCore.state) {
+                is OlcRtcCore.State.Ready -> "Комната"
+                is OlcRtcCore.State.Starting -> "Поднимаю комнату"
+                else -> "Комната не отвечает"
+            }
+            // Выход выбран человеком: автомат отошёл до смены сети, мерять некому.
+            Settings.manualExitName.isNotBlank() && !auto.auto -> Settings.manualExitName
+            // Ветки для «ничего не поднимается» тут не было вовсе: шторка писала
+            // «Выход выбирается сам» и на мёртвом канале (06.08.2026).
+            auto.situation == AutoMode.Situation.Searching -> "Ищу путь"
+            auto.auto -> when (auto.link) {
+                AutoMode.Link.Dead -> "Связи нет"
+                AutoMode.Link.Alive -> "Выход выбирается сам"
+                else -> "Проверяю связь"
+            }
+            else -> service.getString(R.string.status_started)
         }
-        Settings.manualExitName.isNotBlank() && !Settings.autoModeEnabled -> Settings.manualExitName
-        Settings.autoModeEnabled -> "Выход выбирается сам"
-        else -> service.getString(R.string.status_started)
     }
 
     override fun updateStatus(status: StatusMessage) {

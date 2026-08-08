@@ -127,11 +127,21 @@ fun HomeScreen(
         roomCoreState is OlcRtcCore.State.Failed || roomCoreState is OlcRtcCore.State.Unavailable
         )
     val roomRising = roomChosen && !room && !roomDead
+    // Выход человек выбрал сам — автомат отошёл. Это не «поломка», но и не молчание:
+    // человек должен видеть, что подбором пути сейчас никто не занимается.
+    val manualHold = running && !auto.auto
+    // «Подключено» — это утверждение про канал, а не про сервис. Пока проба не прошла,
+    // сказать про канал нечего; когда она провалилась — тем более (06.08.2026 экран
+    // писал «Подключено» на мёртвом канале).
+    val measuring = running && !manualHold &&
+        (auto.link == AutoMode.Link.Unknown || auto.link == AutoMode.Link.Checking)
+    val linkDead = running && !manualHold && auto.link == AutoMode.Link.Dead
     // Ничего не поднимается или сети нет — круг не должен врать зелёным.
     val broken = running && (
         auto.situation == AutoMode.Situation.Searching ||
             auto.situation == AutoMode.Situation.NoNetwork ||
-            roomDead
+            roomDead ||
+            linkDead
         )
 
     // Задержку комнаты знает только её собственная проверка. Спрашиваем, пока
@@ -201,6 +211,8 @@ fun HomeScreen(
                 running && auto.situation == AutoMode.Situation.Searching -> "Ищу путь"
                 roomRising -> "Поднимаю комнату"
                 roomDead -> "Комната не отвечает"
+                linkDead -> "Связи нет"
+                measuring -> "Проверяю связь"
                 running -> "Подключено"
                 else -> "Отключено"
             },
@@ -220,6 +232,9 @@ fun HomeScreen(
                 running && auto.situation == AutoMode.Situation.Searching -> "подбираю рабочий выход"
                 roomRising -> "поднимаю канал через комнату"
                 roomDead -> "канал через комнату не поднялся, выберите другой выход"
+                linkDead -> "выбранный путь не отвечает, ищу другой"
+                measuring -> "проверяю, идут ли данные"
+                manualHold -> "выход выбран вами, автомат вернётся при смене сети"
                 running -> "нажмите, чтобы выключить"
                 else -> "нажмите, чтобы включить"
             },
@@ -248,7 +263,10 @@ fun HomeScreen(
                             home -> "дома работает роутер"
                             channels.isEmpty() && !running -> "определится при подключении"
                             auto.auto -> "выбирается сам"
-                            else -> "выбран вручную"
+                            // Ручной выбор больше не выключает автомат навсегда: он
+                            // держится, пока не сменится сеть. Так и пишем, иначе
+                            // «выбран вручную» читается как «автомат сломался».
+                            else -> "выбран вами · автомат вернётся при смене сети"
                         },
                         badge = if (home) null else badgeOf(activeOutbound),
                         chevron = channels.isNotEmpty(),
@@ -296,7 +314,11 @@ fun HomeScreen(
                     name = "Автоматически",
                     delayMs = 0,
                     selected = auto.auto,
-                    subtitle = "подбирает выход под обстановку",
+                    subtitle = if (auto.auto) {
+                        "подбирает выход под обстановку"
+                    } else {
+                        "вернётся сам при смене сети"
+                    },
                     onClick = {
                         AutoMode.setEnabled(true)
                         showExits = false

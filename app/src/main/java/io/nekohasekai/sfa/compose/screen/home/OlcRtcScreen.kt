@@ -24,12 +24,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.OlcRtcCore
 import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.bg.OlcRtcWatchdog
@@ -95,14 +97,19 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             .background(colors.Bg)
             .verticalScroll(rememberScrollState()),
     ) {
-        KScreenHeader(title = "olcRTC", subtitle = "выход через комнату", onBack = onBack)
+        // Имена наружу человеческие: «olcRTC», «токен WB», «SOCKS», «carrier» — это
+        // внутренняя кухня, в коде она осталась, на экране её нет.
+        KScreenHeader(
+            title = stringResource(R.string.room_title),
+            subtitle = stringResource(R.string.room_header_subtitle),
+            onBack = onBack,
+        )
 
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad)) {
             KCard {
                 KRowItem(
-                    title = "Использовать комнату",
-                    subtitle = "Ядро поднимает локальный SOCKS5 и уводит трафик через WebRTC. " +
-                        "Применяется при следующем подключении.",
+                    title = stringResource(R.string.room_use_title),
+                    subtitle = stringResource(R.string.room_use_subtitle),
                     trailing = {
                         KSwitch(checked = enabled) { checked ->
                             enabled = checked
@@ -111,56 +118,56 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     },
                 )
                 KDivider()
-                KRowItem(title = "Состояние", subtitle = status)
+                KRowItem(title = stringResource(R.string.room_state), subtitle = status)
             }
 
-            KGroupTitle("Параметры")
+            KGroupTitle(stringResource(R.string.room_params))
             KCard {
-                KRowItem(title = "Источник", subtitle = sourceText())
+                KRowItem(title = stringResource(R.string.room_source), subtitle = sourceText())
                 KDivider()
-                KRowItem(title = "Комната", subtitle = roomSummary())
+                KRowItem(title = stringResource(R.string.room_which), subtitle = roomSummary())
                 KDivider()
-                KRowItem(title = "Токен WB", subtitle = tokenText())
+                KRowItem(title = stringResource(R.string.room_pass), subtitle = tokenText())
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("токен WB", wbToken, secret = true) {
+                OlcRtcField(stringResource(R.string.room_pass_field), wbToken, secret = true) {
                     wbToken = it
                     persist { Settings.olcrtcWbToken = it }
                 }
             }
 
-            KGroupTitle("Переопределение")
+            KGroupTitle(stringResource(R.string.room_manual_group))
             KCard {
                 KRowItem(
-                    title = "Ручные значения",
-                    subtitle = "Пустое поле — берём то, что даёт сеть. Заполненное перебивает её.",
+                    title = stringResource(R.string.room_manual_title),
+                    subtitle = stringResource(R.string.room_manual_subtitle),
                 )
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("carrier", carrier) {
+                OlcRtcField(stringResource(R.string.room_field_carrier), carrier) {
                     carrier = it
                     persist { Settings.olcrtcCarrier = it }
                 }
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("room id", roomId) {
+                OlcRtcField(stringResource(R.string.room_field_room), roomId) {
                     roomId = it
                     persist { Settings.olcrtcRoomId = it }
                 }
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("client id", clientId) {
+                OlcRtcField(stringResource(R.string.room_field_client), clientId) {
                     clientId = it
                     persist { Settings.olcrtcClientId = it }
                 }
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("ключ (hex)", keyHex, secret = true) {
+                OlcRtcField(stringResource(R.string.room_field_key), keyHex, secret = true) {
                     keyHex = it
                     persist { Settings.olcrtcKeyHex = it }
                 }
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("transport", transport) {
+                OlcRtcField(stringResource(R.string.room_field_transport), transport) {
                     transport = it
                     persist { Settings.olcrtcTransport = it }
                 }
                 Spacer(Modifier.height(10.dp))
-                OlcRtcField("порт SOCKS", socksPort, numeric = true) { value ->
+                OlcRtcField(stringResource(R.string.room_field_port), socksPort, numeric = true) { value ->
                     val digits = value.filter { it.isDigit() }.take(5)
                     socksPort = digits
                     val port = digits.toIntOrNull()
@@ -183,7 +190,7 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
  */
 private fun currentStatus(): String {
     val base = when (val state = OlcRtcCore.state) {
-        is OlcRtcCore.State.Unavailable -> "в этой сборке ядра olcRTC нет"
+        is OlcRtcCore.State.Unavailable -> "в этой сборке комнаты нет"
         is OlcRtcCore.State.Starting -> "поднимается"
         is OlcRtcCore.State.Failed -> "не поднят: ${state.reason}"
         is OlcRtcCore.State.Idle -> if (Settings.olcrtcEnabled) "не запускался" else "выключен"
@@ -213,11 +220,11 @@ private fun sourceText(): String = when (OlcRtcParams.source) {
     OlcRtcParams.Source.None -> "нет: сеть комнату не раздаёт, руками тоже не задано"
 }
 
-/** Токен наружу не показываем: только откуда он и какой длины. */
+/** Пропуск наружу не показываем: только откуда он и какой длины. */
 private fun tokenText(): String = when (OlcRtcParams.wbTokenSource) {
-    OlcRtcParams.Source.Server -> "задан сетью, ${OlcRtcParams.wbTokenLength} симв."
+    OlcRtcParams.Source.Server -> "выдан сетью, ${OlcRtcParams.wbTokenLength} симв."
     OlcRtcParams.Source.Manual -> "задан вручную, ${OlcRtcParams.wbTokenLength} симв."
-    else -> "не задан — в комнату пустят только гостем"
+    else -> "нет — в комнату пустят только гостем"
 }
 
 /** Короткая сводка того, с чем реально пойдём в комнату. Секретов нет: ключ — только факт. */
@@ -256,7 +263,7 @@ private fun OlcRtcField(
         ) {
             if (value.isEmpty()) {
                 Text(
-                    text = "как у сети",
+                    text = stringResource(R.string.room_field_placeholder),
                     fontFamily = Montserrat,
                     fontSize = 14.sp,
                     color = colors.Dim2,

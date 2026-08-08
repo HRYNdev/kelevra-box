@@ -24,12 +24,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.remember
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.BuildConfig
+import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KCard
@@ -155,9 +157,11 @@ fun AdvancedScreen(
                     onClick = onAppsBypass,
                 )
                 KDivider()
+                // «olcRTC» — внутреннее имя канала, человеку оно ничего не говорит.
+                // Наружу идёт то, чем эта штука для него является.
                 KRowItem(
-                    title = "olcRTC",
-                    subtitle = "Выход через комнату: состояние канала и свой токен",
+                    title = stringResource(R.string.room_title),
+                    subtitle = stringResource(R.string.room_subtitle),
                     chevron = true,
                     onClick = onOlcRtc,
                 )
@@ -185,7 +189,7 @@ fun AdvancedScreen(
                 KDivider()
                 KRowItem(
                     title = "Журнал",
-                    subtitle = "Подробный лог работы",
+                    subtitle = stringResource(R.string.advanced_journal_subtitle),
                     chevron = true,
                     onClick = onLog,
                 )
