@@ -30,6 +30,7 @@ import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.path.HonestProbe
+import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.compose.MainActivity
 import io.nekohasekai.sfa.constant.Action
 import io.nekohasekai.sfa.constant.Alert
@@ -403,33 +404,55 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private var runningConfig: String? = null
 
     /**
-     * Разовый честный опрос всех путей сразу после старта.
+     * Разовый честный опрос всех путей: сразу после полного старта сервиса и при каждом
+     * подъёме туннеля из погашенного состояния ([resumeTunnel]).
      *
      * Это и проверка самой правки (входы поднялись, привязка работает), и первый честный
      * снимок: какой путь несёт трафик, а какой нет. Селектор при этом не трогается вообще —
      * каждый путь спрашивается через свой вход, поэтому пути можно мерить один за другим,
      * ничего не переключая.
+     *
+     * Результат идёт не только в лог, но и в [PathRegistry]: список выходов на экране и
+     * ручной режим круга читают именно его, а не строку лога. Без этого проба честно
+     * находила мёртвый путь, а человек всё равно видел «не проверяли» или «Подключено»
+     * (поймано на стенде 08.08.2026).
      */
     private fun checkPathsHonestly(reason: String) {
         val content = runningConfig ?: return
-        val entries = AutoModeExits.probeEntries(content)
+        val layout = AutoModeExits.parse(content, OlcRtcParams.socksPort)
+        val entries = layout.probeEntries
         if (entries.isEmpty()) {
             Log.w(TAG, "проверка путей ($reason): закреплённых входов нет, мерить нечем")
             return
         }
+        // Реестру нужны имена выходов, чтобы было куда положить замер. Имена обычно
+        // привязывает AutoMode.start(), но при подъёме из погашенного состояния и на
+        // самом первом холодном старте этот заход может случиться раньше него —
+        // привязываем сами по тому же конфигу. Вызов безопасный: bindExits не трогает
+        // уже собранные замеры, только имена (см. его комментарий).
+        PathRegistry.bindExits(main = layout.main, room = layout.room)
         thread(name = "path-selfcheck", isDaemon = true) {
             Log.i(TAG, "проверка путей ($reason): ${entries.size} шт., селектор не трогаем")
             for ((exit, entry) in entries) {
-                val measurement = HonestProbe.measure(
-                    entry,
-                    exit,
-                    // Диагностике важно не только «дошло», но и куда именно путь вывел:
-                    // разные адреса на выходе — это и есть доказательство, что вход
-                    // закреплён за своим выходом, а не за общим выбором.
-                    target = HonestProbe.EGRESS_TARGET,
-                    collectBody = true,
-                )
+                // Цель берём из обычной ротации, а не диагностическую: раньше эта
+                // проверка шла только на холодном старте, и разовый вопрос «каким
+                // адресом меня видно» был дёшев. Теперь она идёт при каждом подъёме
+                // туннеля, а такой запрос — редкий и потому приметный: обычные
+                // проверки связи в трафике теряются, ifconfig.me нет.
+                val measurement = HonestProbe.measure(entry, exit)
                 Log.i(TAG, "путь «$exit»: $measurement")
+                val id = PathRegistry.snapshot.value.byExit(exit)?.def?.id
+                if (id == null) {
+                    Log.w(TAG, "путь «$exit»: реестр не знает такого выхода, замер потерян")
+                    continue
+                }
+                if (measurement.live) {
+                    PathRegistry.alive(id, measurement.latencyMs)
+                } else if (measurement.measured) {
+                    PathRegistry.dead(id, measurement.reason)
+                }
+                // Unmeasurable сюда не попадает: реестру сказать нечего, прошлое знание
+                // не трогаем — своя же гарантия HonestProbe, повторять её тут незачем.
             }
         }
     }
@@ -473,6 +496,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно.
             if (roomWanted) startOlcRtcIfEnabled()
             restartCore()
+            // Ядро только что поднялось начисто — реестр путей пуст или помнит прошлую
+            // сессию. Тот же честный опрос, что и на холодном старте: без него реестр
+            // оставался бы пустым до первого обычного захода автомата, а тот при ручном
+            // выборе выхода основной канал вообще не мерит (round() при выключенном
+            // автомате трогает только комнату). Раньше эта проверка шла лишь при полном
+            // старте сервиса — при подъёме из погашенного состояния не запускалась ни разу
+            // (лог «туннель поднимаем: автомат выключен человеком», реестр пуст).
+            checkPathsHonestly("подъём из погашенного: $reason")
             synchronized(tunnelLock) { tunnelSuspended = false }
             // Ядро снова живо — цепляемся к его тикам. Без этого сессия, начатая дома,
             // так и осталась бы без скоростей, а текст замер бы на «Работает».
