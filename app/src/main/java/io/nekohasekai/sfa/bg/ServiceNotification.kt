@@ -251,12 +251,19 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
      * одну таблицу [PathWords.headline]. Своей цепочки условий у шторки больше нет, а
      * значит нет и способа разойтись с кругом.
      */
-    private fun состояние(): String = PathWords.headline(
-        snapshot = PathRegistry.snapshot.value,
-        chosen = AutoMode.standingOn(),
-        auto = AutoMode.state.value.auto,
-        manualExit = Settings.manualExitName.takeIf { it.isNotBlank() },
-    )
+    private fun состояние(): String {
+        val headline = PathWords.headline(
+            snapshot = PathRegistry.snapshot.value,
+            chosen = AutoMode.standingOn(),
+            auto = AutoMode.state.value.auto,
+            manualExit = Settings.manualExitName.takeIf { it.isNotBlank() },
+        )
+        // Бедные маршруты видно по трафику, но не по тексту. Пока наборов правил нет —
+        // говорим об этом прямо, иначе шторка пишет «Работает» на половине маршрутов.
+        val rules = RuleSetCache.state.value
+        val note = PathWords.rulesNote(total = rules.total, ready = rules.ready)
+        return if (note == null) headline else "$headline · $note"
+    }
 
     override fun updateStatus(status: StatusMessage) {
         uplink = status.uplink
