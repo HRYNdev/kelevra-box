@@ -169,6 +169,24 @@ class AutoModeLogicTest {
         assertTrue(AutoMode.askDetector(broken = true, cachedAgeMillis = 6 * 60_000L))
     }
 
+    @Test
+    fun `узел отвечает — определитель уже нечего добавить`() {
+        // Единственный вердикт определителя, который на что-то влияет, — «белый список».
+        // Ответивший узел его опровергает: под белым списком он недостижим. Значит замер
+        // (до двух соединений с TLS) купил бы ответ, который у нас и так есть.
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = null, nodeAnswers = true))
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = 6 * 60_000L, nodeAnswers = true))
+    }
+
+    @Test
+    fun `узел молчит — довода нет, всё как раньше`() {
+        // Проверка на то, что новый довод не подменил собой старое правило: пока узел
+        // не отозвался, решает по-прежнему возраст подсказки.
+        assertTrue(AutoMode.askDetector(broken = true, cachedAgeMillis = null, nodeAnswers = false))
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = 60_000L, nodeAnswers = false))
+        assertFalse(AutoMode.askDetector(broken = false, cachedAgeMillis = null, nodeAnswers = true))
+    }
+
     // ------------------------------------------------------------ задвижка
 
     @Test
