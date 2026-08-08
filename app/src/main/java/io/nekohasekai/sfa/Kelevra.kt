@@ -44,6 +44,30 @@ object Kelevra {
     fun configUrl(code: String): String = "https://$SUBSCRIPTION_HOST/k/$code"
 
     /**
+     * Маскирует код доступа в произвольном тексте: адрес вида
+     * `https://<host>/k/<код>` несёт код целиком, и текст ошибки от HTTP-клиента
+     * или ядра на Go часто повторяет запрошенный URL внутри себя. В журнал и в
+     * исключения код должен попадать не целиком — домен и длина остаются,
+     * чтобы диагностика не потерялась.
+     */
+    fun maskCode(text: String): String =
+        Regex("(?i)${Regex.escape(SUBSCRIPTION_HOST)}/(?:k/|s/)?([A-Za-z0-9_-]+)").replace(text) { m ->
+            val code = m.groupValues[1]
+            val tail = if (code.length > 2) code.takeLast(2) else code
+            "$SUBSCRIPTION_HOST/***$tail (${code.length} симв.)"
+        }
+
+    /**
+     * Копия исключения с замаскированным сообщением, но с тем же местом падения:
+     * стектрейс диагностировать помогает, а код доступа в нём не нужен.
+     */
+    fun maskThrowable(e: Throwable): Throwable {
+        val masked = RuntimeException(maskCode(e.toString()))
+        masked.stackTrace = e.stackTrace
+        return masked
+    }
+
+    /**
      * Приводит к рабочей ссылке на конфиг:
      *  - короткий код               -> https://<host>/k/<код>
      *  - любая наша ссылка          -> тоже /k/<код>, в какой бы форме её ни дали

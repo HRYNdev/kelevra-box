@@ -95,7 +95,9 @@ fun ConnectScreen(
             result.fold(
                 onSuccess = { step = 2 },
                 onFailure = {
-                    android.util.Log.w("KelevraConnect", "подключение по коду не удалось", it)
+                    // Адрес, который запрашивали, содержит код доступа целиком —
+                    // в лог он маскированным идёт, не как есть.
+                    android.util.Log.w("KelevraConnect", "подключение по коду не удалось", Kelevra.maskThrowable(it))
                     error = humanError(it, context)
                 },
             )

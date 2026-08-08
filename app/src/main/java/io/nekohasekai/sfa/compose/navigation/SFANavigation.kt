@@ -12,6 +12,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -83,6 +84,7 @@ import io.nekohasekai.sfa.compose.screen.usbip.USBIPServerScreen
 import io.nekohasekai.sfa.compose.screen.usbip.USBIPStatusViewModel
 import io.nekohasekai.sfa.constant.Status
 import io.nekohasekai.sfa.database.Settings
+import io.nekohasekai.sfa.update.humanUpdateError
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -583,6 +585,7 @@ fun SFANavHost(
             var обновлениеИдёт by remember { mutableStateOf(false) }
             var обновлениеИтог by remember { mutableStateOf("") }
             val scope = rememberCoroutineScope()
+            val context = LocalContext.current
             SimpleSettingsScreen(
                 autoStart = autoStart,
                 onAutoStartChange = {
@@ -606,19 +609,27 @@ fun SFANavHost(
                 onCheckUpdate = {
                     обновлениеИдёт = true
                     scope.launch(Dispatchers.IO) {
-                        val найдено = runCatching { io.nekohasekai.sfa.vendor.Vendor.checkUpdateAsync() }.getOrNull()
-                        // Окно обновления показывается один раз на версию: если человек
-                        // промахнулся мимо «Обновить», второго шанса не было, а проверка
-                        // просто писала «обновление есть». Ручная проверка снимает эту
-                        // отметку, поэтому окно показывается снова.
-                        Settings.lastShownUpdateVersion = 0
-                        io.nekohasekai.sfa.update.UpdateState.setUpdate(найдено)
-                        обновлениеИдёт = false
-                        обновлениеИтог = if (найдено != null) {
-                            "Есть версия ${найдено.versionName}"
-                        } else {
-                            "Установлена свежая версия"
+                        обновлениеИтог = try {
+                            val найдено = io.nekohasekai.sfa.vendor.Vendor.checkUpdateAsync()
+                            // Окно обновления показывается один раз на версию: если человек
+                            // промахнулся мимо «Обновить», второго шанса не было, а проверка
+                            // просто писала «обновление есть». Ручная проверка снимает эту
+                            // отметку, поэтому окно показывается снова.
+                            Settings.lastShownUpdateVersion = 0
+                            io.nekohasekai.sfa.update.UpdateState.setUpdate(найдено)
+                            if (найдено != null) {
+                                "Есть версия ${найдено.versionName}"
+                            } else {
+                                "Установлена свежая версия"
+                            }
+                        } catch (e: Exception) {
+                            // Сорванная проверка — это не «у вас всё свежее». Раньше ошибка
+                            // глоталась и человек читал ровно противоположное правде.
+                            // Известное обновление при этом не стираем: setUpdate(null) на
+                            // ошибке убирал бы уже найденную версию.
+                            humanUpdateError(e, context)
                         }
+                        обновлениеИдёт = false
                     }
                 },
                 обновлениеПодпись = when {

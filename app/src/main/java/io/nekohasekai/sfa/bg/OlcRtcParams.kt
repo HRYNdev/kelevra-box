@@ -65,6 +65,13 @@ object OlcRtcParams {
     /** Отдал ли сервер блок olcrtc в последний раз, когда мы его читали. */
     val serverOffers: Boolean get() = Settings.olcrtcSrvAvailable
 
+    /**
+     * Можно ли поднимать комнату: параметры есть и аварийный выключатель не нажат.
+     *
+     * Одно место на всех — иначе подъём упирается в ту точку, которую забыли согласовать.
+     */
+    val roomAllowed: Boolean get() = Settings.olcrtcEnabled && hasRoom
+
     /** Откуда приехали параметры — для честной подписи на экране. */
     val source: Source
         get() {
@@ -134,6 +141,15 @@ object OlcRtcParams {
                 Settings.olcrtcSrvVp8BatchSize = 0
             }
             return
+        }
+        // Сервер впервые (или снова) даёт комнату — снимаем аварийный выключатель.
+        // Лечит уже установленные копии: там в настройках лежит записанное «запрещено»
+        // со времён, когда тумблер был разрешением, и автомат из-за него не мог уйти
+        // в комнату вообще. Человека это не обходит: выключенный посреди сессии тумблер
+        // так и остаётся выключенным, пока сервер не перестанет давать комнату и не даст
+        // её заново.
+        if (!Settings.olcrtcSrvAvailable && !Settings.olcrtcEnabled) {
+            Settings.olcrtcEnabled = true
         }
         val vp8 = json.optJSONObject("vp8")
         Settings.olcrtcSrvCarrier = json.optString("carrier")

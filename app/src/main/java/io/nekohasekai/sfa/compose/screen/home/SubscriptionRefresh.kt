@@ -162,7 +162,9 @@ object SubscriptionRefresh {
                 Libbox.checkConfig(text)
                 text
             } catch (e: Exception) {
-                Log.w(TAG, "обновление подписки: настройки не получены", e)
+                // Текст ошибки от HTTP-клиента/ядра часто повторяет запрошенный URL —
+                // с кодом доступа внутри, поэтому в лог идёт замаскированная копия.
+                Log.w(TAG, "обновление подписки: настройки не получены", Kelevra.maskThrowable(e))
                 _state.value = State.Failed(humanError(e))
                 return
             }
@@ -210,7 +212,7 @@ object SubscriptionRefresh {
             }
             _state.value = State.Ok(profile.typed.lastUpdated, note)
         } catch (e: Exception) {
-            Log.w(TAG, "обновление подписки: сорвалось", e)
+            Log.w(TAG, "обновление подписки: сорвалось", Kelevra.maskThrowable(e))
             _state.value = State.Failed(humanError(e))
         } finally {
             lock.unlock()
@@ -227,7 +229,9 @@ object SubscriptionRefresh {
         val code = Kelevra.subscriptionCode(profile.typed.remoteURL) ?: return
         val fresh = Kelevra.configUrl(code)
         if (profile.typed.remoteURL.trimEnd('/') == fresh) return
-        Log.i(TAG, "подписка переведена на свой сборщик: $fresh")
+        // Адрес содержит код доступа человека — в лог целиком его не пишем,
+        // только домен и длину кода: этого хватает, чтобы понять, что перевод случился.
+        Log.i(TAG, "подписка переведена на свой сборщик: ${Kelevra.SUBSCRIPTION_HOST} (код ${code.length} симв.)")
         profile.typed.remoteURL = fresh
         ProfileManager.update(profile)
     }

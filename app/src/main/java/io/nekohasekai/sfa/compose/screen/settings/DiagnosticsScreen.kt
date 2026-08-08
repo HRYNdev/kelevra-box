@@ -72,6 +72,31 @@ private sealed class CheckState {
     data class Done(val ok: Boolean, val detail: String) : CheckState()
 }
 
+/**
+ * Причина словами вместо технического текста HTTP-клиента/ядра на Go. Свои же
+ * исключения («пустой ответ», «не блокируется») уже по-русски и понятны — их не
+ * трогаем, только сетевые формулировки вроде «unable to resolve host».
+ */
+private fun humanCheckError(e: Throwable): String {
+    val text = ((e.message ?: "") + " " + (e.cause?.message ?: "")).lowercase()
+    return when {
+        "no such host" in text || "unable to resolve host" in text ||
+            "unable to resolve" in text || "no address associated" in text ||
+            "network is unreachable" in text || "network is down" in text ||
+            "connection refused" in text || "econnrefused" in text ||
+            "failed to connect" in text || "no route to host" in text ||
+            "unknownhost" in text || "server misbehaving" in text ->
+            "недоступен"
+
+        "timeout" in text || "timed out" in text || "etimedout" in text ||
+            "deadline exceeded" in text || "connection reset" in text ||
+            "eof" == text.trim() || "unexpected eof" in text ->
+            "не отвечает"
+
+        else -> e.message ?: "ошибка"
+    }
+}
+
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -130,7 +155,7 @@ fun DiagnosticsScreen(onBack: () -> Unit = {}) {
                         try {
                             CheckState.Done(true, check.run())
                         } catch (e: Exception) {
-                            CheckState.Done(false, e.message ?: "ошибка")
+                            CheckState.Done(false, humanCheckError(e))
                         }
                     }
                 states = states + (check.title to result)
