@@ -77,6 +77,22 @@ private fun TechHeader(title: String, subtitle: String?, onBack: () -> Unit) {
 }
 
 /** Куда идёт трафик прямо сейчас. */
+/**
+ * Как назвать маршрут человеку.
+ *
+ * Служебные выходы ядро отдаёт своими тегами (`direct`, `block`, `dns`), а пустой тег
+ * экран и так подписывал по-русски — и в списке рядом стояли «direct» и «прямое
+ * подключение», один и тот же путь под двумя именами. Переименовываем только то, что
+ * видит человек: в конфиге теги остаются прежними, иначе сломается маршрутизация.
+ * Имена выходов приходят от сервера уже по-русски и проходят как есть.
+ */
+private fun имяМаршрута(outbound: String): String = when (outbound.lowercase()) {
+    "", "direct", "direct-out" -> "прямое подключение"
+    "block", "block-out" -> "заблокировано"
+    "dns", "dns-out" -> "запрос имени"
+    else -> outbound
+}
+
 @Composable
 fun ConnectionsScreen(onBack: () -> Unit, serviceStatus: Status, modifier: Modifier = Modifier) {
     val colors = K
@@ -119,7 +135,7 @@ fun ConnectionsScreen(onBack: () -> Unit, serviceStatus: Status, modifier: Modif
                                 )
                                 Text(
                                     text = buildString {
-                                        append(conn.outbound.ifBlank { "прямое подключение" })
+                                        append(имяМаршрута(conn.outbound))
                                         if (conn.network.isNotBlank()) append(" · ${conn.network}")
                                     },
                                     fontFamily = RobotoMono,

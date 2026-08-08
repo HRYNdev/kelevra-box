@@ -193,6 +193,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                     notification.show(lastProfileName, R.string.status_home)
                 }
                 AutoMode.start(autoModeHost, AutoMode.Situation.Home)
+                // Ядра тут нет, тиков статуса не будет — но обстановка меняться будет,
+                // и шторка обязана идти за ней. Запускаем ПОСЛЕ AutoMode.start: первое же
+                // значение придёт уже настоящим, без мигания текста. Тики подключит
+                // resumeTunnel, когда автомат поднимет туннель.
+                notification.start(coreLive = false)
                 return
             }
 
@@ -242,7 +247,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_started)
             }
-            notification.start()
+            notification.start(coreLive = true)
             AutoMode.start(autoModeHost)
         } catch (e: Exception) {
             stopAndAlert(Alert.StartService, e.message)
@@ -391,7 +396,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             closeService()
             tunnelSuspended = true
         }
-        runBlocking(Dispatchers.Main) { notification.show(lastProfileName, R.string.status_home) }
+        // Ядро снято — тиков не будет, и прошлые скорости мерили уже несуществующий путь.
+        notification.detachCore()
+        runBlocking(Dispatchers.Main) { notification.refresh(R.string.status_home) }
         return true
     }
 
@@ -406,7 +413,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             if (roomWanted) startOlcRtcIfEnabled()
             restartCore()
             synchronized(tunnelLock) { tunnelSuspended = false }
-            runBlocking(Dispatchers.Main) { notification.show(lastProfileName, R.string.status_started) }
+            // Ядро снова живо — цепляемся к его тикам. Без этого сессия, начатая дома,
+            // так и осталась бы без скоростей, а текст замер бы на «Работает».
+            notification.attachCore()
+            runBlocking(Dispatchers.Main) { notification.refresh(R.string.status_started) }
             true
         } catch (e: Exception) {
             // Сервис не роняем: сеть могла ещё не устояться, следующий заход попробует снова.
