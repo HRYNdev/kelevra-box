@@ -21,6 +21,7 @@ import java.net.InetSocketAddress
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 /**
  * Определитель обстановки: сам решает, каким выходом идти, и сам его включает.
@@ -339,6 +340,47 @@ object AutoMode {
     private const val ROUND_ROOM_MILLIS = 3 * 60_000L
 
     /**
+     * Приглядка из комнаты: разброс паузы между дешёвыми пробами узла.
+     *
+     * Полный заход стоит дорого — резолв, честная проба через локальный вход, перестановка
+     * селектора, — и чаще, чем раз в три минуты, его гонять незачем. Но сам вопрос «пустили
+     * ли обратно» стоит одно рукопожатие: под белым списком адрес узла недостижим на уровне
+     * маршрутизации, и SYN до него просто пропадает. Поэтому между полными заходами идёт
+     * одна TCP-проба — она и ловит момент снятия ограничения.
+     *
+     * Интервал не ровный намеренно: ровный означал бы метроном, а метроном — узнаваемый
+     * след. Разброс 20-40 с даёт около 120 рукопожатий в час, и только в комнате. Для
+     * сравнения, присмотр за самой комнатой ([OlcRtcWatchdog]) в этой же обстановке шлёт
+     * проверку каждые 5 секунд — на порядок чаще. То есть приглядка не добавляет к следу
+     * ничего, чего в нём уже не было.
+     */
+    private const val ROOM_PEEK_MIN_MILLIS = 20_000L
+    private const val ROOM_PEEK_MAX_MILLIS = 40_000L
+
+    /**
+     * Потолок ожидания приглядки. Живой узел отвечает за десятки миллисекунд; под запретом
+     * ответа не будет вовсе, и ждать полные [TCP_TIMEOUT_MILLIS] значит четверть паузы
+     * держать открытый сокет впустую. Опоздали с живым узлом — заметим следующей пробой.
+     */
+    private const val ROOM_PEEK_TIMEOUT_MILLIS = 2_500
+
+    /**
+     * Насколько раньше срока можно проснуться, чтобы это ещё считалось «дождались».
+     * `Object.wait` возвращается не по секундомеру, и без зазора обычное пробуждение
+     * по таймеру иногда выглядело бы событием.
+     */
+    private const val WAKE_SLACK_MILLIS = 250L
+
+    /**
+     * Сколько ответ узла считается свежим доводом.
+     *
+     * Узел принял соединение — белого списка вокруг нет, это единственный вердикт
+     * определителя, который на что-то влияет. Значит и звать определитель в этот момент
+     * незачем: он стоит до двух соединений с TLS ровно там, где мы и так уже знаем ответ.
+     */
+    private const val NODE_ANSWER_TRUST_MILLIS = 90_000L
+
+    /**
      * Паузы серии перепроверок после смены сети.
      *
      * Первая — почти сразу: вайфай к этому моменту обычно уже раздал адрес и DNS.
@@ -432,6 +474,33 @@ object AutoMode {
     @Volatile
     private var lastMainProbe: ProxyProbe.Result? = null
 
+    /**
+     * Когда узел основного канала в последний раз принял соединение. `0` — не принимал
+     * ни разу в этой сессии. Ответ узла — довод против белого списка, и живёт он
+     * [NODE_ANSWER_TRUST_MILLIS].
+     */
+    @Volatile
+    private var nodeAnsweredAt = 0L
+
+    /**
+     * Какой адрес узла спрашивает следующая приглядка. Адреса берутся по очереди, а не
+     * все сразу: одна проба за раз — это и дёшево, и не выглядит веером соединений.
+     */
+    private var peekAt = 0
+
+    /**
+     * Есть ли приглядке что искать.
+     *
+     * Она ищет ровно один момент: когда молчащий адрес узла начнёт отвечать. Если узел
+     * уже отвечает, а канал всё равно мёртвый (ТСПУ душит транспорт, а не установку
+     * соединения), приглядка не узнаёт ничего нового — зато каждым срабатыванием тянет
+     * за собой полный заход с честной пробой и перестановкой селектора. Поэтому включена
+     * она только там, где основной канал объявлен мёртвым по молчанию узла или по
+     * подсказке, и гаснет, как только узел отозвался.
+     */
+    @Volatile
+    private var peekWanted = false
+
     /** За сколько ответила прямая проба дома. Нужна только для записи в реестр. */
     @Volatile
     private var lastHomeLatencyMs: Long? = null
@@ -482,9 +551,16 @@ object AutoMode {
             roomTriedAt = 0L
             roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
             mainFailures = 0
+            nodeAnsweredAt = 0L
+            peekAt = 0
+            peekWanted = false
             // Прошлая сессия про эти пути больше ничего не знает: сеть под нами могла
             // смениться, пока сервиса не было.
             PathRegistry.reset()
+            // Сюда приходит и ручное переподключение: человек дёрнул выключатель именно
+            // потому, что вокруг что-то не так, как мы думаем. Его вмешательство —
+            // такое же событие «обстановка сменилась», как и смена сети.
+            NetworkModeDetector.forget("человек переподключил сервис")
             PathRegistry.bindExits(main = layout.main, room = layout.room)
             link = Link.Unknown
             holdNetwork = physicalNetwork()
@@ -543,6 +619,13 @@ object AutoMode {
         lastValidated = nowValidated
         networkChanged = true
         Log.i(TAG, "сеть сменилась: ${describe(network)}")
+        // Подсказка про режим сети привязана к объекту сети, и другую сеть она уже не
+        // касается сама. Но сюда мы приходим и когда сеть та же, а система только что
+        // подтвердила на ней интернет, — а это ровно то, что происходит, когда с соты
+        // снимают ограничение. Держаться в такой момент за прошлый вердикт значит
+        // проспать снятие до его старости.
+        NetworkModeDetector.forget("сеть сменилась или переподтвердилась")
+        nodeAnsweredAt = 0L
         // Ручной выбор — это «стой здесь», а не «выключи автомат навсегда». Он держится,
         // пока мы в той же сети: под неё человек и выбирал. Сеть другая — обстановка
         // другая, и держаться за прошлый выбор значит увезти человека в мёртвый выход.
@@ -697,16 +780,18 @@ object AutoMode {
             // сама, как только обстановка устоялась.
             val hurry = burst.next(settled)
             if (hurry != null) Log.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
-            waitNext(
-                when {
-                    // Автомат выключен человеком — таймер не нужен, ждём его же переключателя.
-                    idle -> Long.MAX_VALUE
-                    hurry != null -> hurry
-                    // Идёт набор подтверждений — досматриваем быстро, а не через пять минут.
-                    pendingSwitch -> ROUND_SEARCHING_MILLIS
-                    else -> delayFor(situation)
-                },
-            )
+            val wait = when {
+                // Автомат выключен человеком — таймер не нужен, ждём его же переключателя.
+                idle -> Long.MAX_VALUE
+                hurry != null -> hurry
+                // Идёт набор подтверждений — досматриваем быстро, а не через пять минут.
+                pendingSwitch -> ROUND_SEARCHING_MILLIS
+                else -> delayFor(situation)
+            }
+            // Полный ритм комнаты досиживаем не вслепую: между заходами идёт приглядка
+            // за основным каналом. Спешка (серия, набор подтверждений) в этом не нуждается —
+            // там заход и так близко.
+            if (wait == ROUND_ROOM_MILLIS && situation == Situation.Room) waitInRoom(wait) else waitNext(wait)
         }
     }
 
@@ -817,7 +902,7 @@ object AutoMode {
         // Повод спросить режим сети: что-то не сходится. Дом по DNS без трафика — самый
         // сильный из таких поводов, второй — уже провалившийся основной канал.
         val broken = (dnsHome && carried != true) || mainFailures > 0
-        if (hint != NetworkMode.Whitelist && askDetector(broken, hintAge(network))) {
+        if (hint != NetworkMode.Whitelist && askDetector(broken, hintAge(network), nodeAnswers())) {
             hint = askNetworkMode(network)
         }
 
@@ -850,7 +935,10 @@ object AutoMode {
         }
         refreshLink()
         val main = when {
-            home -> false
+            home -> {
+                peekWanted = false
+                false
+            }
             // Подсказка уже всё сказала: под белым списком адрес узла недостижим на
             // уровне маршрутизации, и честная проба потратила бы полминуты, чтобы
             // узнать ровно это. Пишем в реестр подсказкой ([Evidence.Hint]) — видно,
@@ -858,6 +946,9 @@ object AutoMode {
             hint == NetworkMode.Whitelist -> {
                 PathRegistry.dead(PathId.MAIN, WHITELIST_REASON, Evidence.Hint)
                 Log.i(TAG, "основной канал: $WHITELIST_REASON — пробу не тратим")
+                // Канал похоронен подсказкой, а не замером. Вот это и опровергает
+                // приглядка между заходами — иначе ждать пришлось бы старости подсказки.
+                peekWanted = true
                 false
             }
 
@@ -1230,6 +1321,10 @@ object AutoMode {
             val measurement = HonestProbe.measureDirect(network, "дома")
             if (measurement.live) {
                 lastHomeLatencyMs = measurement.latencyMs
+                // Прямой запрос наружу дошёл и вернулся. Цель пробы в белом списке
+                // оператора не значится, значит белого списка вокруг нет — и подсказку
+                // об обратном (если она ещё жива) держать больше не на чем.
+                NetworkModeDetector.forget("прямой трафик наружу проходит")
                 return true
             }
             Log.i(TAG, "дом трафиком не подтверждён (попытка ${attempt + 1}): $measurement")
@@ -1273,11 +1368,34 @@ object AutoMode {
      *
      * @param broken что-то уже не сходится: дом по DNS без трафика или провалившийся канал.
      * @param cachedAgeMillis сколько лет вердикту про **эту** сеть; `null` — на ней не мерили.
+     * @param nodeAnswers узел основного канала только что принял соединение. Из всех
+     *   вердиктов определителя на решения влияет один — [NetworkMode.Whitelist], — а он
+     *   этим фактом уже опровергнут: под белым списком узел недостижим. Спрашивать после
+     *   такого значит платить двумя соединениями с TLS за ответ, который у нас есть.
      */
-    internal fun askDetector(broken: Boolean, cachedAgeMillis: Long?): Boolean = when {
+    internal fun askDetector(
+        broken: Boolean,
+        cachedAgeMillis: Long?,
+        nodeAnswers: Boolean = false,
+    ): Boolean = when {
         !broken -> false
+        nodeAnswers -> false
         cachedAgeMillis == null -> true
         else -> cachedAgeMillis >= HINT_TTL_MILLIS
+    }
+
+    /** Свеж ли довод «узел отвечает». */
+    private fun nodeAnswers(): Boolean = nodeAnsweredAt != 0L &&
+        SystemClock.elapsedRealtime() - nodeAnsweredAt < NODE_ANSWER_TRUST_MILLIS
+
+    /**
+     * Узел принял соединение. Это не «канал работает» — до трафика ещё далеко, — но это
+     * уже доказательство, что вокруг не белый список, и подсказку об обратном оно
+     * опровергает делом.
+     */
+    private fun nodeAnswered(reason: String) {
+        nodeAnsweredAt = SystemClock.elapsedRealtime()
+        NetworkModeDetector.forget(reason)
     }
 
     /** Подсказка про эту сеть, пока она свежая. Ничего не меряет. */
@@ -1339,7 +1457,7 @@ object AutoMode {
             // непрочитанного конфига хуже, чем не заметить белый список.
             null
         } else {
-            endpoints.any { connects(network, it) }.also { open ->
+            endpoints.any { connects(network, it, TCP_TIMEOUT_MILLIS) }.also { open ->
                 Log.i(
                     TAG,
                     if (open) {
@@ -1348,8 +1466,12 @@ object AutoMode {
                         "основной канал: ни один из ${endpoints.size} адресов не отвечает"
                     },
                 )
+                if (open) nodeAnswered("узел основного канала принял соединение")
             }
         }
+        // Узел молчит — приглядке есть что искать. Отозвался (или адресов мы не знаем) —
+        // искать нечего.
+        peekWanted = portOpen == false
         if (portOpen == false) return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
 
         val proxy = layout.localProxy
@@ -1447,6 +1569,9 @@ object AutoMode {
         // выносится выше и от записи не зависит.
         lastMainProbe = result
         val alive = result is ProxyProbe.Result.Live
+        // Через канал прошёл запрос и вернулся ответ — под белым списком такого не бывает
+        // вовсе. Подсказку об обратном опровергаем делом, а не ждём её старости.
+        if (alive) nodeAnswered("через основной канал прошёл запрос")
 
         if (!alive && restore != null && group != null) {
             runCatching { host.selectExit(group, restore) }
@@ -1459,13 +1584,79 @@ object AutoMode {
         return alive
     }
 
-    private fun connects(network: Network, endpoint: AutoModeExits.Endpoint): Boolean = runCatching {
+    private fun connects(
+        network: Network,
+        endpoint: AutoModeExits.Endpoint,
+        timeoutMillis: Int,
+    ): Boolean = runCatching {
         val address = network.getAllByName(endpoint.host).firstOrNull() ?: return false
         network.socketFactory.createSocket().use { socket ->
-            socket.connect(InetSocketAddress(address, endpoint.port), TCP_TIMEOUT_MILLIS)
+            socket.connect(InetSocketAddress(address, endpoint.port), timeoutMillis)
             true
         }
     }.getOrElse { false }
+
+    /**
+     * Приглядка из комнаты: одно рукопожатие до узла основного канала.
+     *
+     * Стоя в комнате, о снятии ограничения мы узнавали только по ритму полных заходов —
+     * то есть в лучшем случае через три минуты, а на деле дольше: подсказка «белый список»
+     * жила своей жизнью и полный заход всё равно не тратил на канал ни одной пробы.
+     * Здесь спрашивается ровно то, что под белым списком отвечать не может: примет ли
+     * адрес узла соединение. Ответил — обстановка сменилась, и дальше разбирается
+     * полный заход, разбуженный сейчас же.
+     *
+     * Адрес берётся один и по очереди, TLS нет, соединения не параллелятся — цена вопроса
+     * один SYN, а под запретом ещё и молчание до [ROOM_PEEK_TIMEOUT_MILLIS].
+     *
+     * @return true — узел ответил, полный заход нужен немедленно.
+     */
+    private fun peekMain(): Boolean {
+        if (!Settings.autoModeEnabled || !peekWanted) return false
+        val endpoints = layout.mainEndpoints
+        if (endpoints.isEmpty()) return false
+        val network = physicalNetwork() ?: return false
+        val endpoint = endpoints[(peekAt++ % endpoints.size).coerceAtLeast(0)]
+        if (!connects(network, endpoint, ROOM_PEEK_TIMEOUT_MILLIS)) {
+            // Молчание — обычный исход под запретом, и вслух о нём говорить незачем, кроме
+            // как для разбора: без этой строки не видно, ходила приглядка вообще или нет.
+            Log.i(TAG, "приглядка из комнаты: узел ${endpoint.host}:${endpoint.port} молчит")
+            return false
+        }
+        Log.i(TAG, "приглядка из комнаты: узел основного канала ответил — проверяю канал целиком")
+        nodeAnswered("узел ответил на приглядку из комнаты")
+        // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
+        // изменилась ровно так же доказанно, а подтверждений задвижка при этом всё равно
+        // требует — переключение остаётся защищённым от одиночного везения.
+        burst.restart()
+        return true
+    }
+
+    /**
+     * Ожидание внутри комнаты: тот же ритм полных заходов, но с приглядкой между ними.
+     *
+     * Пауза режется на куски случайной длины ([ROOM_PEEK_MIN_MILLIS]..[ROOM_PEEK_MAX_MILLIS]),
+     * и на границе каждого идёт одна дешёвая проба. Ровного интервала не получается ни у
+     * проб, ни у заходов — метронома, который видно снаружи, тут нет.
+     *
+     * Разбудили раньше (сменилась сеть, пересобралось ядро) — выходим сразу: заход и так
+     * вот-вот будет, и тратить на приглядку лишнее рукопожатие незачем.
+     */
+    private fun waitInRoom(total: Long) {
+        var left = total
+        while (active && left > 0) {
+            val slice = minOf(left, Random.nextLong(ROOM_PEEK_MIN_MILLIS, ROOM_PEEK_MAX_MILLIS + 1))
+            val before = SystemClock.elapsedRealtime()
+            waitNext(slice)
+            val spent = SystemClock.elapsedRealtime() - before
+            left -= spent
+            if (!active) return
+            // Проснулись до срока — это не наш таймер, а событие.
+            if (spent < slice - WAKE_SLACK_MILLIS) return
+            if (left <= 0) return
+            if (peekMain()) return
+        }
+    }
 
     /**
      * Идёт ли через комнату трафик. Своей пробы не заводим: её владелец один —
