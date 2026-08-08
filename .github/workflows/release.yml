@@ -13,6 +13,11 @@ on:
   push:
     tags:
       - "v*"
+  # Прогрев кеша ядра вызывает warm-core.yml (пуш в dev с правкой ядра). Триггер вынесен
+  # в отдельный файл специально: paths рядом с tags в одном on.push — единственное место,
+  # где поведение GitHub не подтверждено документацией, а ценой ошибки был бы тег, который
+  # вообще не собирает релиз. Job release при вызове не запускается — см. его if.
+  workflow_call:
   workflow_dispatch:
     inputs:
       core_ref:
@@ -60,6 +65,18 @@ jobs:
           path: sing-box-for-android
           submodules: recursive
 
+      # olcrtc берётся по ПЛАВАЮЩЕЙ ветке (master), а в ключе кеша стоит её имя, а не
+      # содержимое: пока апстрим двигался, а кеш промахивался, это не было видно, но при
+      # попадании релиз молча собрался бы из ядра, снятого с прошлого состояния master.
+      # Поэтому в ключ идёт SHA апстрима; ls-remote стоит полсекунды и клона не требует.
+      - name: SHA апстрима olcrtc
+        id: olcrtc-sha
+        run: |
+          SHA=$(git ls-remote https://github.com/openlibrecommunity/olcrtc "$OLCRTC_REF" | cut -f1 | head -1)
+          test -n "$SHA" || { echo "не удалось узнать SHA olcrtc для ref '$OLCRTC_REF'"; exit 1; }
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "olcrtc $OLCRTC_REF = $SHA"
+
       # Ключ сменён относительно libbox-xhttp2-*: под старым ключом лежит ядро БЕЗ olcrtc,
       # и попадание в него молча выпустило бы релиз без комнаты. При правке cores/go.mod
       # или патча xhttp ключ меняется сам (hashFiles).
@@ -68,7 +85,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
-          key: libbox-olcrtc-v2-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ env.OLCRTC_REF }}-${{ hashFiles('sing-box-for-android/cores/go.mod', 'sing-box-for-android/core-xhttp/**', 'sing-box-for-android/core-olcrtc/**') }}
+          key: libbox-olcrtc-v3-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ steps.olcrtc-sha.outputs.sha }}-${{ hashFiles('sing-box-for-android/cores/go.mod', 'sing-box-for-android/core-xhttp/**', 'sing-box-for-android/core-olcrtc/**') }}
 
       - name: Checkout sing-box core
         if: steps.core-cache.outputs.cache-hit != 'true'
@@ -236,7 +253,8 @@ jobs:
     needs: core
     # legacy-ядро может не собраться (API 21 старше того, что ждёт olcrtc) — это не повод
     # отменять релиз. Отсутствие основного ядра ловится ниже проверкой libbox.aar.
-    if: ${{ !cancelled() }}
+    # Пуш в dev — это прогрев кеша ядра, APK там собирать незачем.
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
