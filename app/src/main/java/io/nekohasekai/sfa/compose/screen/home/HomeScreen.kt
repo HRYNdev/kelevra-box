@@ -123,6 +123,10 @@ fun HomeScreen(
     // Что известно про каждый путь. Экран больше ничего не достраивает сам: и круг,
     // и список выходов пересказывают этот снимок, а не собственную версию правды.
     val paths by PathRegistry.snapshot.collectAsState()
+    // Что с наборами правил. Одна и та же строка идёт сюда и в шторку — через одну
+    // таблицу [PathWords], чтобы экран и шторка не разошлись.
+    val ruleSets by io.nekohasekai.sfa.bg.RuleSetCache.state.collectAsState()
+    val rulesNote = PathWords.rulesNote(total = ruleSets.total, ready = ruleSets.ready)
     // Что человек выбрал руками. Читаем при каждой смене состояния автомата и запуска:
     // ядро может молчать, а показать надо правду.
     val manualExit by remember(auto.auto, running) {
@@ -254,6 +258,10 @@ fun HomeScreen(
         Spacer(Modifier.height(16.dp))
         KHint(
             when {
+                // Правила ещё не приехали: туннель поднялся, но маршруты бедные и почти
+                // всё идёт напрямую. Это первое, что человеку надо знать про такой сеанс, —
+                // иначе он видит рабочий круг и не понимает, почему работает не всё.
+                running && rulesNote != null -> rulesNote
                 !hasProfile -> "нажмите, чтобы подключить"
                 busy -> "подождите"
                 home -> "дома интернет и так открыт, туннель выключен"
