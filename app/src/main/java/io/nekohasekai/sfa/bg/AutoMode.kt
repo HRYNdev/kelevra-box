@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.bg.path.Evidence
+import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.bg.path.PathId
 import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.bg.path.PathSnapshot
@@ -14,6 +15,7 @@ import io.nekohasekai.sfa.bg.path.PathStatus
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.runBlocking
 import java.net.InetSocketAddress
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -34,12 +36,18 @@ import java.util.concurrent.TimeUnit
  * канал. Отличить «белый список» от «сети нет вообще» иначе нельзя: чтобы узнать, встаёт ли
  * комната, её надо попробовать поднять. Подъём поэтому **пробный** — см. [trialRaiseRoom].
  *
- *  1. [Situation.Home] — обход уже делает роутер. Признак однозначный и проверен живьём:
- *     домашний DNS отдаёт для проксируемых доменов подменные адреса из 198.18.0.0/15
- *     (`youtube.com → 198.18.3.9`), а для российских — настоящие (`gosuslugi.ru → 213.59.254.7`).
- *     Спрашиваем СИСТЕМНЫМ резолвером физической сети, не через свой туннель, и **мимо
- *     кеша** ([HomeProbe]): кеш помнит ответы прошлой сети и первые секунды после вайфая
- *     врёт «не дома».
+ *  1. [Situation.Home] — обход уже делает роутер. Признаков **два**, и нужны оба:
+ *     - домашний DNS отдаёт для проксируемых доменов подменные адреса из 198.18.0.0/15
+ *       (`youtube.com → 198.18.3.9`), а для российских — настоящие
+ *       (`gosuslugi.ru → 213.59.254.7`). Спрашиваем СИСТЕМНЫМ резолвером физической сети,
+ *       не через свой туннель, и **мимо кеша** ([HomeProbe]): кеш помнит ответы прошлой
+ *       сети и первые секунды после вайфая врёт «не дома»;
+ *     - через этот путь реально уходит наружу запрос и возвращается ответ
+ *       ([homeCarriesTraffic]). Одного DNS мало: он говорит «нам отвечает домашний
+ *       резолвер», а не «наружу проходит трафик». В сети с белым списком верно первое
+ *       и неверно второе — и автомат гасил туннель, показывая «Дома» при мёртвой связи.
+ *     Плюс запрет сверху: если [NetworkModeDetector] говорит «белый список», дом не
+ *     объявляется ни при каких признаках DNS.
  *     Действие: **туннель гасим** — вторая обёртка поверх роутера только грузит телефон.
  *  2. [Situation.Main] — основной канал поднимается. Действие: работаем им.
  *  3. [Situation.Room] — основной канал не поднимается вообще (при белом списке адрес
@@ -223,6 +231,29 @@ object AutoMode {
     private const val TCP_TIMEOUT_MILLIS = 4_000
 
     /**
+     * Сколько раз пробуем подтвердить дом трафиком, прежде чем сказать «не дома».
+     *
+     * Две попытки, а не одна, потому что цели пробы берутся по кругу и одна из них
+     * может лежать сама по себе (или быть закрыта на конкретной точке доступа). Ошибиться
+     * в эту сторону дорого: ложное «не дома» поднимает туннель там, где он не нужен.
+     */
+    private const val HOME_TRAFFIC_TRIES = 2
+
+    /**
+     * Сколько живёт подсказка про режим сети.
+     *
+     * Нужна не для экономии, а против слепоты: под белым списком основной канал
+     * помечается мёртвым без пробы, и если бы подсказка жила вечно, снятие ограничения
+     * на той же сети мы бы не заметили никогда — события смены сети при этом не будет.
+     * Пять минут — это цена вопроса «когда пустят обратно»: не чаще одного замера
+     * за это время, но и не реже.
+     */
+    private const val HINT_TTL_MILLIS = 5 * 60_000L
+
+    /** Как объясняем человеку отказ по подсказке. */
+    private const val WHITELIST_REASON = "сеть пускает наружу только свои адреса"
+
+    /**
      * Куда ходит честная проба основного канала.
      *
      * Имя выбрано не наугад: в конфиге от сервера трафик уводит в селектор набор правил,
@@ -347,6 +378,10 @@ object AutoMode {
     /** Чем кончилась честная проба этого захода. Нужна только для записи в реестр. */
     @Volatile
     private var lastMainProbe: ProxyProbe.Result? = null
+
+    /** За сколько ответила прямая проба дома. Нужна только для записи в реестр. */
+    @Volatile
+    private var lastHomeLatencyMs: Long? = null
 
     /**
      * Сеть, в которой человек выбрал выход руками. Выбор держится, пока мы в ней:
@@ -566,11 +601,18 @@ object AutoMode {
     /**
      * Проба «мы дома» одним вызовом, без запуска автомата. Нужна на старте сервиса:
      * дома туннель не надо поднимать вообще, а не поднимать и через секунду гасить.
+     *
+     * Признаков тут два, и оба обязательны — те же, что в заходе автомата: подменные
+     * адреса от домашнего резолвера И реально уходящий наружу трафик. Одного DNS мало:
+     * в сети с белым списком подменные адреса приходят так же (резолвер-то домашний
+     * никуда не делся, если стоим у себя за роутером), а наружу не проходит ничего, —
+     * и сервис стартовал бы вообще без туннеля, показывая «Дома».
      */
     fun homeRightNow(): Boolean {
         if (!Settings.autoModeEnabled) return false
         val network = physicalNetwork() ?: return false
-        return homeBypass(network)
+        if (!homeBypass(network)) return false
+        return homeCarriesTraffic(network)
     }
 
     private fun loop() {
@@ -689,22 +731,67 @@ object AutoMode {
         // что всё подключено, хотя ещё ничего не проверено.
         PathRegistry.probing(PathId.HOME)
         refreshLink()
+
+        // Готовая подсказка про эту сеть, если её уже снимали. Ничего не меряет.
+        var hint = cachedHint(network)
+
         // Порядок проб важен и стоит денег: дома дальше смотреть незачем, а комнату
         // спрашиваем только когда основной канал уже не отвечает.
-        val home = homeBypass(network)
+        val dnsHome = homeBypass(network)
+        // Трафиком подтверждаем только то, что есть смысл подтверждать. Если подсказка
+        // уже сказала «белый список», дом отменён при любых признаках DNS — и тратить
+        // на него пробу незачем.
+        val carried = if (dnsHome && hint != NetworkMode.Whitelist) homeCarriesTraffic(network) else null
+
+        // Повод спросить режим сети: что-то не сходится. Дом по DNS без трафика — самый
+        // сильный из таких поводов, второй — уже провалившийся основной канал.
+        val broken = (dnsHome && carried != true) || mainFailures > 0
+        if (hint != NetworkMode.Whitelist && askDetector(broken, hintAge(network))) {
+            hint = askNetworkMode(network)
+        }
+
+        val home = homeVerdict(dnsHome, carried, hint)
+        if (dnsHome || home) {
+            // Признак дома был — значит есть что объяснить: почему домом это считается
+            // или почему нет. Без признака писать нечего, там и так обычная сеть.
+            Log.i(
+                TAG,
+                "вердикт «дома»: ${if (home) "да" else "нет"} — признак DNS ${if (dnsHome) "есть" else "нет"}, " +
+                    "трафик ${
+                        when (carried) {
+                            true -> "проходит"
+                            false -> "не проходит"
+                            null -> "не проверяли"
+                        }
+                    }, подсказка о сети $hint",
+            )
+        }
         if (home) {
-            PathRegistry.alive(PathId.HOME)
+            PathRegistry.alive(PathId.HOME, lastHomeLatencyMs)
             // Основной канал этим заходом не мерили — так и записываем. Прошлый его
             // отказ был в другой сети и про эту не говорит ничего.
             PathRegistry.unchecked(PathId.MAIN, "дома обход делает роутер")
         } else {
-            PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+            PathRegistry.dead(PathId.HOME, homeReason(dnsHome, carried, hint))
             // Обе записи одним движением: между ними снимок читателю не показываем,
             // иначе экран мигнёт «связи нет» ровно посреди своей же проверки.
             PathRegistry.probing(PathId.MAIN)
         }
         refreshLink()
-        val main = !home && mainWorks(network, host)
+        val main = when {
+            home -> false
+            // Подсказка уже всё сказала: под белым списком адрес узла недостижим на
+            // уровне маршрутизации, и честная проба потратила бы полминуты, чтобы
+            // узнать ровно это. Пишем в реестр подсказкой ([Evidence.Hint]) — видно,
+            // что канал не мерили, а вывели.
+            hint == NetworkMode.Whitelist -> {
+                PathRegistry.dead(PathId.MAIN, WHITELIST_REASON, Evidence.Hint)
+                Log.i(TAG, "основной канал: $WHITELIST_REASON — пробу не тратим")
+                false
+            }
+
+            else -> mainWorks(network, host)
+        }
         if (home || main) {
             mainFailures = 0
         } else {
@@ -1003,17 +1090,119 @@ object AutoMode {
                 val fake = runCatching { future.get(left, TimeUnit.MILLISECONDS) }.getOrElse { false }
                 if (host == HOME_CONTROL) controlFake = fake else if (fake) hits++
             }
-            val home = hits >= HOME_HITS && !controlFake
+            val sign = hits >= HOME_HITS && !controlFake
+            // Говорим ровно то, что узнали: это признак, а не вердикт. Вердикт «дома»
+            // складывается выше, из признака и прошедшего наружу трафика, — и лог,
+            // который писал здесь «→ дома», врал ровно в той обстановке, ради которой
+            // всё и затевалось.
             Log.i(
                 TAG,
-                "проба дома по сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
+                "признак дома по DNS в сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
                     "контрольный $HOME_CONTROL ${if (controlFake) "тоже подменён" else "настоящий"} → " +
-                    if (home) "дома" else "не дома",
+                    if (sign) "признак есть" else "признака нет",
             )
-            return home
+            return sign
         } finally {
             pool.shutdownNow()
         }
+    }
+
+    /**
+     * Уходит ли через домашний путь трафик наружу **на самом деле**.
+     *
+     * Это вторая половина вердикта «дома», и без неё первая ничего не стоила. Признак
+     * по DNS говорит ровно одно: нам отвечает домашний резолвер. Он отвечает так же и
+     * тогда, когда наружу не проходит ни один пакет, — и ровно так автомат гасил туннель
+     * в сети с белым списком, показывая человеку «Дома, обход на роутере» при мёртвой
+     * связи (стенд `tools/android/whitelist-on.sh`, 08.08.2026).
+     *
+     * Проба идёт [HonestProbe.measureDirect]: тот же запрос, что и для остальных путей,
+     * только напрямую — дома посредника нет, туннель погашен. Сокет привязан к физической
+     * сети, поэтому ответ говорит про путь вокруг нас, а не про наш же туннель, даже
+     * если он в этот момент ещё поднят.
+     */
+    private fun homeCarriesTraffic(network: Network): Boolean {
+        lastHomeLatencyMs = null
+        repeat(HOME_TRAFFIC_TRIES) { attempt ->
+            val measurement = HonestProbe.measureDirect(network, "дома")
+            if (measurement.live) {
+                lastHomeLatencyMs = measurement.latencyMs
+                return true
+            }
+            Log.i(TAG, "дом трафиком не подтверждён (попытка ${attempt + 1}): $measurement")
+        }
+        return false
+    }
+
+    /**
+     * Вердикт «мы дома». Вынесен отдельно и без единого обращения к Android: главное
+     * утверждение — «признак DNS без трафика домом не считается» — должно проверяться
+     * тестом, а не пересказом.
+     *
+     * @param dnsSign домашний резолвер отдал подменные адреса.
+     * @param trafficConfirmed через домашний путь реально прошёл запрос и вернулся ответ.
+     *   `null` — не проверяли (в том числе когда проверять было незачем).
+     * @param hint что говорит определитель режима сети. [NetworkMode.Whitelist] отменяет
+     *   дом при любых признаках: под белым списком подменные адреса ничего не значат.
+     */
+    internal fun homeVerdict(dnsSign: Boolean, trafficConfirmed: Boolean?, hint: NetworkMode): Boolean = when {
+        hint == NetworkMode.Whitelist -> false
+        !dnsSign -> false
+        // Не подтвердилось — не объявляем. «Не проверяли» это тоже «не подтвердилось»:
+        // домом считается только то, через что доказанно ходит трафик.
+        else -> trafficConfirmed == true
+    }
+
+    /** Почему домом не считаем — человеку и в лог. */
+    private fun homeReason(dnsSign: Boolean, trafficConfirmed: Boolean?, hint: NetworkMode): String = when {
+        hint == NetworkMode.Whitelist -> WHITELIST_REASON
+        !dnsSign -> "подменных адресов нет"
+        trafficConfirmed == false -> "подменные адреса есть, но наружу не проходит"
+        else -> "дом не подтверждён трафиком"
+    }
+
+    /**
+     * Стоит ли тратить замер режима сети.
+     *
+     * Определитель дорог: до двух соединений, TLS и десятки килобайт — и, что важнее,
+     * сам паттерн повторяющихся проб различим снаружи. Поэтому спрашиваем его не по
+     * расписанию, а по поводу: пока всё работает, режим сети знать незачем.
+     *
+     * @param broken что-то уже не сходится: дом по DNS без трафика или провалившийся канал.
+     * @param cachedAgeMillis сколько лет вердикту про **эту** сеть; `null` — на ней не мерили.
+     */
+    internal fun askDetector(broken: Boolean, cachedAgeMillis: Long?): Boolean = when {
+        !broken -> false
+        cachedAgeMillis == null -> true
+        else -> cachedAgeMillis >= HINT_TTL_MILLIS
+    }
+
+    /** Подсказка про эту сеть, пока она свежая. Ничего не меряет. */
+    private fun cachedHint(network: Network): NetworkMode {
+        val report = NetworkModeDetector.reportFor(network) ?: return NetworkMode.Unknown
+        val age = System.currentTimeMillis() - report.atMillis
+        if (age !in 0 until HINT_TTL_MILLIS) return NetworkMode.Unknown
+        return report.mode
+    }
+
+    /** Сколько лет вердикту про эту сеть; `null` — на ней не мерили ни разу. */
+    private fun hintAge(network: Network): Long? =
+        NetworkModeDetector.reportFor(network)?.let { System.currentTimeMillis() - it.atMillis }
+
+    /**
+     * Спросить определитель режима сети. Замер идёт по той же физической сети, что и
+     * остальные пробы захода, — иначе вердикт был бы про другое окружение.
+     *
+     * Заход автомата живёт в своём потоке и никуда не спешит, поэтому ждём ответа прямо
+     * здесь: решение этого захода без него неполное.
+     */
+    private fun askNetworkMode(network: Network): NetworkMode = runCatching {
+        val report = runBlocking { NetworkModeDetector.detect(force = true, network = network) }
+        Log.i(TAG, "подсказка о сети: ${report.mode} — ${report.note} (${report.tookMillis} мс)")
+        report.mode
+    }.getOrElse {
+        Log.w(TAG, "режим сети определить не вышло: ${it.message}")
+        NetworkMode.Unknown
     }
 
     private fun resolvesToFakeIp(network: Network, host: String): Boolean =

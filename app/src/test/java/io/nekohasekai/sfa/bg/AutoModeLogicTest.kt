@@ -89,6 +89,85 @@ class AutoModeLogicTest {
         assertTrue(AutoMode.mainVerdict(portOpen = null, trafficFlows = true))
     }
 
+    // --------------------------------------------------------------- вердикт «дома»
+
+    @Test
+    fun `подменные адреса есть, а трафик не идёт — это НЕ дом`() {
+        // Ровно дыра, найденная на стенде белого списка 08.08.2026: домашний резолвер
+        // отвечает как обычно (подменные адреса приходят), а наружу не проходит ничего.
+        // До правки автомат на этом гасил туннель и писал «Дома, обход на роутере».
+        assertFalse(
+            AutoMode.homeVerdict(dnsSign = true, trafficConfirmed = false, hint = NetworkMode.Unknown),
+        )
+    }
+
+    @Test
+    fun `подменные адреса и живой трафик — дом`() {
+        assertTrue(
+            AutoMode.homeVerdict(dnsSign = true, trafficConfirmed = true, hint = NetworkMode.Unknown),
+        )
+    }
+
+    @Test
+    fun `трафик идёт, но подменных адресов нет — это чужая сеть, а не дом`() {
+        // Трафик сам по себе домом не делает: наружу ходит и обычная сеть без обхода.
+        assertFalse(
+            AutoMode.homeVerdict(dnsSign = false, trafficConfirmed = true, hint = NetworkMode.Unknown),
+        )
+    }
+
+    @Test
+    fun `трафик не проверяли — дом не объявляем`() {
+        assertFalse(
+            AutoMode.homeVerdict(dnsSign = true, trafficConfirmed = null, hint = NetworkMode.Unknown),
+        )
+    }
+
+    @Test
+    fun `подсказка «белый список» отменяет дом при любых признаках`() {
+        for (traffic in listOf(true, false, null)) {
+            assertFalse(
+                "белый список бьёт всё: трафик=$traffic",
+                AutoMode.homeVerdict(dnsSign = true, trafficConfirmed = traffic, hint = NetworkMode.Whitelist),
+            )
+        }
+    }
+
+    @Test
+    fun `подсказки «норма» и «DPI» дому не мешают`() {
+        for (hint in listOf(NetworkMode.Normal, NetworkMode.DpiBlacklist, NetworkMode.NoNetwork)) {
+            assertTrue(
+                "дом стоит на своих признаках, подсказка $hint его не отменяет",
+                AutoMode.homeVerdict(dnsSign = true, trafficConfirmed = true, hint = hint),
+            )
+        }
+    }
+
+    // ------------------------------------------------- когда звать определитель режима
+
+    @Test
+    fun `пока всё сходится — определитель не зовём вовсе`() {
+        assertFalse(AutoMode.askDetector(broken = false, cachedAgeMillis = null))
+        assertFalse(AutoMode.askDetector(broken = false, cachedAgeMillis = 10 * 60_000L))
+    }
+
+    @Test
+    fun `сломалось и на этой сети не мерили — зовём`() {
+        assertTrue(AutoMode.askDetector(broken = true, cachedAgeMillis = null))
+    }
+
+    @Test
+    fun `свежая подсказка есть — второй раз не зовём`() {
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = 60_000L))
+    }
+
+    @Test
+    fun `подсказка протухла — спрашиваем заново`() {
+        // Иначе снятие ограничения на той же сети мы бы не заметили никогда: события
+        // смены сети при этом не будет, а основной канал помечается мёртвым без пробы.
+        assertTrue(AutoMode.askDetector(broken = true, cachedAgeMillis = 6 * 60_000L))
+    }
+
     // ------------------------------------------------------------ задвижка
 
     @Test
