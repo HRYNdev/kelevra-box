@@ -203,6 +203,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // значение придёт уже настоящим, без мигания текста. Тики подключит
                 // resumeTunnel, когда автомат поднимет туннель.
                 notification.start(coreLive = false)
+                // Лучшего момента наполнить кэш наборов правил не будет: дома интернет
+                // открыт и наш домен достижим напрямую, а нужен кэш ровно там, где его
+                // уже не наполнить — в урезанной сети. Ядра здесь нет, поэтому список
+                // наборов читаем прямо из профиля.
+                fillRuleSetsAtHome(content)
                 return
             }
 
@@ -367,20 +372,32 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     /**
      * Конфиг, с которым реально стартует sing-box.
      *
-     * Две правки, обе только в памяти — файл профиля приходит с сервера и не наш:
-     *  1. Комната поднялась — в маршруты идёт отказ по UDP/443 ([OlcRtcConfigPatch]).
+     * Три правки, все только в памяти — файл профиля приходит с сервера и не наш:
+     *  1. Наборы правил берутся из своего кэша ([RuleSetLocalPatch]). Идёт первой: без неё
+     *     ядро на старте лезет за 22 наборами на наш домен, и в сети с белым списком старт
+     *     не проходит вовсе — а значит не проходит и всё остальное.
+     *  2. Комната поднялась — в маршруты идёт отказ по UDP/443 ([OlcRtcConfigPatch]).
      *     Выключена или не поднялась — не трогаем: резать QUIC ради мёртвого выхода
      *     незачем, от этого только хуже.
-     *  2. На каждый путь — свой локальный вход и правило, которое привязывает вход к
+     *  3. На каждый путь — свой локальный вход и правило, которое привязывает вход к
      *     выходу ([ProbeInboundPatch]). Без этого спросить «жив ли путь» можно было
      *     только через общий вход, то есть через тот выход, который выбран прямо сейчас,
      *     и ради замера приходилось переставлять селектор живым людям под руку.
      *
-     * Не легла вторая правка — путь просто останется без входа, и проба скажет
+     * Не легла третья правка — путь просто останется без входа, и проба скажет
      * «не проверено». Врать «работает» она в этом случае не имеет права.
      */
     private fun effectiveConfig(content: String): String {
         var result = content
+
+        val rules = RuleSetLocalPatch.useCached(result, RuleSetCache.cached())
+        RuleSetLocalPatch.log(rules)
+        RuleSetCache.report(rules)
+        // Список нужен докачке: после правки удалённых наборов в конфиге уже нет,
+        // и спросить «что вообще положено иметь» будет не у кого.
+        ruleSetRemotes = rules.remotes
+        result = rules.content
+
         if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
             val quic = OlcRtcConfigPatch.addQuicReject(result, OlcRtcParams.socksPort)
             OlcRtcConfigPatch.log(quic)
@@ -402,6 +419,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     @Volatile
     private var runningConfig: String? = null
+
+    /**
+     * Наборы правил, которые просит конфиг сервера. Заполняется при каждой сборке конфига
+     * и живёт до следующей: докачке нужно знать, чего в кэше не хватает, а из готового
+     * конфига это уже не видно — удалённые наборы оттуда убраны.
+     */
+    @Volatile
+    private var ruleSetRemotes: List<RuleSetLocalPatch.Remote> = emptyList()
 
     /**
      * Разовый честный опрос всех путей: сразу после полного старта сервиса и при каждом
@@ -433,6 +458,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         PathRegistry.bindExits(main = layout.main, room = layout.room)
         thread(name = "path-selfcheck", isDaemon = true) {
             Log.i(TAG, "проверка путей ($reason): ${entries.size} шт., селектор не трогаем")
+            // Первый путь, который проба назвала живым: по нему пойдёт докачка наборов.
+            var liveEntry: AutoModeExits.Endpoint? = null
             for ((exit, entry) in entries) {
                 // Цель берём из обычной ротации, а не диагностическую: раньше эта
                 // проверка шла только на холодном старте, и разовый вопрос «каким
@@ -448,12 +475,59 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 }
                 if (measurement.live) {
                     PathRegistry.alive(id, measurement.latencyMs)
+                    if (liveEntry == null) liveEntry = entry
                 } else if (measurement.measured) {
                     PathRegistry.dead(id, measurement.reason)
                 }
                 // Unmeasurable сюда не попадает: реестру сказать нечего, прошлое знание
                 // не трогаем — своя же гарантия HonestProbe, повторять её тут незачем.
             }
+            // Наборы правил докачиваем ровно здесь: связь уже есть и она только что
+            // померена, а не предположена.
+            refreshRuleSets("проверка путей: $reason", liveEntry?.port)
+        }
+    }
+
+    /**
+     * Достаёт недостающие наборы правил — если есть чем.
+     *
+     * Путь выбирается сам и в этом весь смысл. Через общий вход идти нельзя: маршруты
+     * ведут как раз те правила, которых у нас ещё нет, и наш домен ушёл бы «напрямую» —
+     * туда, где в урезанной сети его и срезали. Поэтому берём либо закреплённый за живым
+     * путём вход ([ProbeInboundPatch]), либо socks самой комнаты: комната ходит наружу
+     * своим ходом и в такой сети остаётся единственной живой дорогой.
+     *
+     * Отдельным потоком: зовут в том числе из-под `tunnelLock`, а качать под замком нельзя.
+     */
+    private fun refreshRuleSets(reason: String, liveProbePort: Int?) {
+        val remotes = ruleSetRemotes
+        if (remotes.isEmpty()) return
+        val roomUp = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
+        val port = liveProbePort ?: OlcRtcParams.socksPort.takeIf { roomUp && it > 0 }
+        if (port == null) {
+            Log.i(TAG, "наборы правил не докачиваем ($reason): живого пути нет, комната не поднята")
+            return
+        }
+        thread(name = "ruleset-refresh", isDaemon = true) {
+            RuleSetCache.refresh(remotes, port, reason)
+        }
+    }
+
+    /**
+     * Наполнить кэш наборов, пока мы дома.
+     *
+     * Дома ядра нет и путей нет — мерить нечего, но интернет открыт и наш домен достижим
+     * напрямую ([RuleSetCache.DIRECT]). Момент важный: кэш нужен в урезанной сети, а там
+     * его уже не наполнить. Что просит конфиг — читаем из самого профиля: правку конфига
+     * тут никто не накладывал, и списка наборов иначе взять неоткуда.
+     */
+    private fun fillRuleSetsAtHome(content: String) {
+        val known = RuleSetLocalPatch.useCached(content, RuleSetCache.cached())
+        if (known.remotes.isEmpty()) return
+        RuleSetCache.report(known)
+        ruleSetRemotes = known.remotes
+        thread(name = "ruleset-refresh-home", isDaemon = true) {
+            RuleSetCache.refresh(known.remotes, RuleSetCache.DIRECT, "дома, напрямую")
         }
     }
 
@@ -553,16 +627,26 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun setRoomWanted(wanted: Boolean, reason: String): Boolean {
         // Поднимать нечего, если параметров комнаты нет или человек нажал аварийный
         // выключатель. Гасить — можно всегда.
-        if (wanted && !OlcRtcParams.roomAllowed) return false
+        if (wanted && !OlcRtcParams.roomAllowed) {
+            Log.i(TAG, "комната не поднимается ($reason): комната выключена или нет её параметров")
+            return false
+        }
         synchronized(tunnelLock) {
             if (tunnelSuspended) {
                 // Дома туннеля нет, поднимать комнату некуда и незачем.
+                // Причину пишем вслух: этот отказ выглядит в логе как «попробовал поднять
+                // и через семь миллисекунд не встала», и час разбирательств 08.08.2026
+                // ушёл ровно на то, чтобы понять — комнату никто и не пробовал поднимать.
+                Log.i(TAG, "комната не поднимается ($reason): туннель погашен")
                 roomWanted = false
                 return false
             }
             val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
             roomWanted = wanted
-            if (wanted == up) return false
+            if (wanted == up) {
+                Log.i(TAG, "комната уже ${if (up) "поднята" else "погашена"} ($reason) — оставляю как есть")
+                return false
+            }
 
             if (wanted) {
                 Log.i(TAG, "комната нужна ($reason) — поднимаю ядро")
@@ -579,6 +663,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
             return runCatching {
                 restartCore()
+                // Комната встала — в урезанной сети это единственная дорога наружу, и
+                // именно сейчас появляется возможность дотянуть недостающие наборы правил.
+                if (wanted) refreshRuleSets("комната поднята ($reason)", null)
                 true
             }.getOrElse {
                 Log.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
