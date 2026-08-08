@@ -330,9 +330,16 @@ object AutoMode {
      * Выход, который человек выбрал руками. Нужен, чтобы вернуть его выбор после пересборки
      * ядра. Держится ещё и в настройках: выбор часто делают при выключенной сети, когда
      * отдать команду некому, а память процесса до включения не доживает.
+     *
+     * Читаем [Settings] не здесь, а в [start]: это поле — часть объекта [AutoMode], а Kotlin
+     * инициализирует объект целиком одним `<clinit>` при первом обращении к любому его члену.
+     * Чтение отсюда тянуло DataStore/Room при первом же обращении даже к чистым функциям вроде
+     * [decide] — в том числе из JVM-тестов, где Android не поднят и `Application.application`
+     * не инициализирован (`UninitializedPropertyAccessException` → класс навсегда «битый» для
+     * JVM, дальше любое обращение к [AutoMode] валится `NoClassDefFoundError`).
      */
     @Volatile
-    private var manualExit: String? = Settings.manualExitName.takeIf { it.isNotBlank() }
+    private var manualExit: String? = null
 
     /** Сколько заходов подряд основной канал не поднимается. Считает повод для пробного подъёма. */
     private var mainFailures = 0
@@ -366,6 +373,10 @@ object AutoMode {
         synchronized(lock) {
             stopLocked()
             this.host = host
+            // Персистентный выбор человека подтягиваем только теперь: см. комментарий у поля.
+            // Settings и manualExit всегда синхронны (каждый мутатор пишет в оба разом), так
+            // что повторное чтение на втором start() в том же процессе ничего не меняет.
+            manualExit = Settings.manualExitName.takeIf { it.isNotBlank() }
             layout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
                 ?: AutoModeExits.Layout.EMPTY
             gate.reset(initial)
