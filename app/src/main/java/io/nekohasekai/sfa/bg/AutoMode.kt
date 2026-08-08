@@ -12,6 +12,7 @@ import io.nekohasekai.sfa.bg.path.PathId
 import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.bg.path.PathSnapshot
 import io.nekohasekai.sfa.bg.path.PathStatus
+import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -203,10 +204,47 @@ object AutoMode {
          * Поднимает или гасит ядро комнаты. Вызов идемпотентный: если комната уже
          * в нужном состоянии, ничего не делается.
          *
-         * @return true, если состояние действительно поменяли — тогда ядро sing-box
-         *   пересобрано, и выбор в селекторе надо выставить заново.
+         * @return чем кончилась просьба — см. [RoomAck]. Одного «да/нет» тут не хватает:
+         *   «поднимаю в фоне» и «не стал спрашивать, туннеля нет» — это не отказ комнаты,
+         *   а раньше оба приезжали наверх как `false` и стоили штрафной паузы.
          */
-        fun setRoomWanted(wanted: Boolean, reason: String): Boolean
+        fun setRoomWanted(wanted: Boolean, reason: String): RoomAck
+    }
+
+    /**
+     * Чем кончилась просьба про комнату.
+     *
+     * Раньше ответом было `true`/`false`, и в `false` слипались три разных случая: «уже
+     * и так», «не встала» и «даже не пробовали». Последний оказался дорогим: при погашенном
+     * туннеле сервис отказывал за миллисекунды, автомат считал это неудачей комнаты и
+     * удваивал паузу до следующей попытки. Замер 08.08.2026: две минуты простоя на ровном
+     * месте, попытки при этом не было вовсе.
+     */
+    enum class RoomAck {
+        /** Состояние поменяли, ядро sing-box пересобрано — выбор в селекторе надо выставить заново. */
+        Changed,
+
+        /** Комната уже в нужном состоянии, делать было нечего. */
+        Unchanged,
+
+        /** Подъём пошёл своим потоком. Чем кончится — скажет реестр, ждать тут нечего. */
+        Raising,
+
+        /** Комнату не спрашивали: туннель погашен. Это **не** отказ комнаты. */
+        NoTunnel,
+
+        /** Комнаты нет: выключена аварийным тумблером или нет её параметров. */
+        Unavailable,
+
+        /** Попытка была и не удалась. */
+        Failed,
+        ;
+
+        /** Ядро sing-box пересобрано этим вызовом. */
+        val changed: Boolean get() = this == Changed
+
+        /** Комнату вообще не пробовали поднимать — наказывать паузой не за что. */
+        val untried: Boolean get() = this == NoTunnel || this == Unavailable
     }
 
     // 198.18.0.0 .. 198.19.255.255 — диапазон подменных адресов из конфига роутера.
@@ -362,7 +400,14 @@ object AutoMode {
     @Volatile
     private var settled = false
 
-    /** Что выбрали последним: не дёргаем ядро одним и тем же выбором. */
+    /**
+     * Что выбрали последним: не дёргаем ядро одним и тем же выбором.
+     *
+     * `@Volatile`, потому что стирать его теперь может и чужой поток: подъём комнаты идёт
+     * в стороне от захода и пересобирает ядро уже после того, как заход кончился
+     * (см. [onCoreRebuilt]).
+     */
+    @Volatile
     private var selected: String? = null
 
     /**
@@ -508,6 +553,24 @@ object AutoMode {
             val now = physicalNetwork()
             if (now != null && now != holdNetwork) releaseManualHold(now)
         }
+        synchronized(lock) { lock.notifyAll() }
+    }
+
+    /**
+     * Ядро sing-box пересобрали не в заходе автомата, а где-то сбоку — и ждать нашего
+     * таймера незачем.
+     *
+     * Зовёт [io.nekohasekai.sfa.bg.BoxService], когда в стороне досчитал подъём комнаты.
+     * Дел тут два, и оба про скорость. Первое: пересборка сбрасывает селектор на первый
+     * выход конфига, значит наша память о выбранном протухла. Второе и главное: комната
+     * встаёт до полутора минут, и если после этого досиживать очередной шаг ритма, весь
+     * выигрыш от асинхронного подъёма уходит в ожидание. Будим заход прямо сейчас — он
+     * увидит поднятую комнату той же секундой.
+     */
+    fun onCoreRebuilt(reason: String) {
+        if (!active) return
+        Log.i(TAG, "ядро пересобрано ($reason) — выбор сбрасываю, иду на заход не дожидаясь ритма")
+        selected = null
         synchronized(lock) { lock.notifyAll() }
     }
 
@@ -669,13 +732,13 @@ object AutoMode {
                 }
             }
             val wantRoom = Settings.autoModeManualRoom
-            val changed = runCatching {
+            val ack = runCatching {
                 host.setRoomWanted(wantRoom, if (wantRoom) "комнату выбрал человек" else "человек выбрал обычный выход")
             }.getOrElse {
                 Log.w(TAG, "комнату переключить не вышло: ${it.message}")
-                false
+                RoomAck.Failed
             }
-            if (changed) {
+            if (ack.changed) {
                 // Пересборка ядра сбрасывает выбор в селекторе на первый пункт конфига —
                 // возвращаем то, что выбрал человек.
                 selected = null
@@ -823,26 +886,11 @@ object AutoMode {
     /**
      * Теневая запись про комнату: что о ней говорит её собственное ядро.
      *
-     * Своего мнения тут нет ни на грош — только перевод состояния [OlcRtcCore] в общую
-     * память. Раньше этот перевод делали трое: экран, шторка и автомат, каждый по-своему,
-     * и «Комната» в шторке могла стоять рядом с «Комната не отвечает» на круге.
+     * Сама таблица перевода живёт в [RoomNote] — её пишет ещё и присмотр, который меряет
+     * комнату раз в пять секунд. Раньше писал только автомат отсюда, и между его кругами
+     * реестр про комнату молчал по три минуты.
      */
-    private fun noteRoom() {
-        when (val state = OlcRtcCore.state) {
-            is OlcRtcCore.State.Starting -> PathRegistry.raising(PathId.ROOM)
-
-            is OlcRtcCore.State.Ready -> when (val health = OlcRtcCore.health) {
-                is OlcRtcCore.Health.Live -> PathRegistry.alive(PathId.ROOM, health.latencyMs)
-                is OlcRtcCore.Health.Dead -> PathRegistry.dead(PathId.ROOM, health.reason)
-                // Ядро встало, а присмотр ещё не мерил: это не отказ, комната поднимается.
-                OlcRtcCore.Health.Unknown -> PathRegistry.raising(PathId.ROOM)
-            }
-
-            is OlcRtcCore.State.Failed -> PathRegistry.dead(PathId.ROOM, state.reason)
-            OlcRtcCore.State.Unavailable -> PathRegistry.unavailable(PathId.ROOM, "ядра комнаты в сборке нет")
-            OlcRtcCore.State.Idle -> PathRegistry.unchecked(PathId.ROOM, "комнату не поднимали")
-        }
-    }
+    private fun noteRoom() = RoomNote.note()
 
     /**
      * Пробный подъём комнаты.
@@ -857,33 +905,66 @@ object AutoMode {
      *     комната, которая не встаёт вообще, не съедает батарею попытками.
      */
     private fun trialRaiseRoom(host: Host) {
-        if (roomUp()) return
+        // Уже стоит или как раз встаёт — просить нечего. Подъём теперь идёт своим потоком,
+        // и без этой проверки каждый заход добавлял бы к нему вторую просьбу.
+        if (roomUp() || roomSettling()) return
         if (layout.room == null || !OlcRtcParams.roomAllowed) return
         val now = SystemClock.elapsedRealtime()
         if (roomTriedAt != 0L && now - roomTriedAt < roomTrialPause) return
+
+        // Туннель погашен — комнату поднимать некуда, и сервис откажет, не начав. Раньше
+        // мы всё равно просили, получали мгновенный отказ «туннель погашен» и записывали
+        // его комнате в неудачу: пауза удваивалась до двух минут, хотя попытки не было.
+        // Поэтому порядок обратный — сперва туннель, потом комната.
+        if (!host.tunnelLive()) {
+            if (runCatching { host.resumeTunnel("комната нужна, а туннель погашен") }
+                    .getOrElse {
+                        Log.w(TAG, "туннель поднять не вышло: ${it.message}")
+                        false
+                    }
+            ) {
+                selected = null
+            }
+            if (!host.tunnelLive()) {
+                // Туннеля так и нет. Это обстоятельство туннеля, а не комнаты:
+                // ни попытки, ни штрафа.
+                Log.i(TAG, "туннель не поднялся — комнату в этом заходе не просим, паузу не растим")
+                return
+            }
+        }
+
         roomTriedAt = now
         PathRegistry.raising(PathId.ROOM)
         Log.i(TAG, "основной канал не поднимается $mainFailures заход(а) подряд — пробую поднять комнату")
-        val changed = runCatching { host.setRoomWanted(true, "проверяю, встаёт ли комната") }
+        val ack = runCatching { host.setRoomWanted(true, "проверяю, встаёт ли комната") }
             .getOrElse {
                 Log.w(TAG, "комнату поднять не вышло: ${it.message}")
-                false
+                RoomAck.Failed
             }
-        if (changed) selected = null
-        // Удалась попытка или нет — спрашиваем у самого ядра. Раньше спрашивали
-        // [roomAlive], а он ждёт ещё и вердикта присмотра: тот меряет раз в пять секунд,
-        // и под нагрузкой ответ приходит за 2-9 с (замер 07.08.2026). Поднявшаяся комната
-        // успевала посчитаться невставшей, и пауза до следующей попытки удваивалась
-        // вплоть до десяти минут — на пустом месте.
-        if (roomUp()) {
-            roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
-            Log.i(TAG, "комната поднялась, жду вердикта присмотра")
-        } else {
-            roomTrialPause = (roomTrialPause * 2).coerceAtMost(ROOM_TRIAL_PAUSE_CAP_MILLIS)
-            // Остывание помнит реестр, но распоряжается им по-прежнему [roomTrialPause]:
-            // решения из общей памяти на этом шаге не принимает никто.
-            PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
-            Log.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
+        if (ack.changed) selected = null
+        when {
+            // Комнату не спрашивали вовсе — штрафовать не за что и попытки не было.
+            ack.untried -> {
+                roomTriedAt = 0L
+                PathRegistry.coolDown(PathId.ROOM, 0L)
+                Log.i(TAG, "комнату не спрашивали ($ack) — пауза не растёт")
+            }
+
+            // Подъём идёт. Ответа тут ждать нельзя: он стоит до полутора минут, а автомат
+            // всё это время был бы слеп (замер 08.08.2026 — 69 с). Итог принесёт реестр:
+            // его пишет присмотр, а пересборку ядра — сам сервис через [onCoreRebuilt].
+            ack == RoomAck.Raising || roomUp() || roomSettling() -> {
+                roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+                Log.i(TAG, "комната поднимается, жду вердикта присмотра")
+            }
+
+            else -> {
+                roomTrialPause = (roomTrialPause * 2).coerceAtMost(ROOM_TRIAL_PAUSE_CAP_MILLIS)
+                // Остывание помнит реестр, но распоряжается им по-прежнему [roomTrialPause]:
+                // решения из общей памяти на этом шаге не принимает никто.
+                PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
+                Log.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
+            }
         }
     }
 
@@ -903,7 +984,13 @@ object AutoMode {
         when (situation) {
             Situation.Home -> {
                 // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
-                if (!repeat && host.suspendTunnel("дома обход делает роутер")) selected = null
+                //
+                // Зовём и на повторе тоже. Вызов идемпотентный (погашенный туннель отвечает
+                // «ничего не делал»), а поднять туннель теперь может не только [apply]:
+                // [trialRaiseRoom] делает это сам, когда комната нужна, а туннеля нет.
+                // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
+                // следующей смены обстановки — то есть ровно то, чего дом и избегает.
+                if (host.suspendTunnel("дома обход делает роутер")) selected = null
             }
 
             Situation.Main -> {
@@ -913,14 +1000,14 @@ object AutoMode {
                 // Ушли на основной канал — видеозвонок больше не нужен. Держать его
                 // «на всякий случай» нельзя: круглосуточная сессия и есть то, чего
                 // вся схема избегает.
-                if (setRoom(host, false, "идём основным каналом")) selected = null
+                if (setRoom(host, false, "идём основным каналом").changed) selected = null
                 choose(host, layout.main)
             }
 
             Situation.Room -> {
                 if (host.resumeTunnel("основной канал не поднимается")) selected = null
                 // Обычно комната уже поднята пробно — вызов идемпотентный и ничего не делает.
-                if (setRoom(host, true, "уходим в комнату")) selected = null
+                if (setRoom(host, true, "уходим в комнату").changed) selected = null
                 choose(host, layout.room)
             }
 
@@ -933,9 +1020,17 @@ object AutoMode {
                 // повторный заход гасил комнату ровно в тот момент, когда она поднималась,
                 // и автомат навсегда оставался в «ищу путь» (поймано 06.08.2026).
                 // Гасим либо по решению задвижки, либо когда присмотр уже вынес приговор.
-                val judged = OlcRtcCore.health is OlcRtcCore.Health.Dead
+                //
+                // Приговор спрашиваем у самого присмотра, а не у последней пробы. Первая
+                // проба только что поднятой комнаты врёт чаще всего: нога заходит в неё до
+                // десяти секунд, и одиночный отказ — это почти всегда попадание в её
+                // пересборку. Прогон 09.08.2026: комната встала за 7.5 с, первая проба
+                // не дождалась ответа, автомат погасил её через 31 секунду и заплатил
+                // вторым подъёмом — 66 секунд на ровном месте. У присмотра для того же
+                // вопроса три отказа подряд, и он же лечит канал сам, не роняя видеозвонок.
+                val judged = OlcRtcWatchdog.condemned
                 if (!roomSettling() && (!repeat || judged) &&
-                    setRoom(host, false, "комната канала не дала")
+                    setRoom(host, false, "комната канала не дала").changed
                 ) {
                     selected = null
                 }
@@ -944,18 +1039,18 @@ object AutoMode {
             // Сети нет и обстановка неизвестна: не поднимаем ничего. Комнату при этом
             // гасим — без сети она всё равно мертва, а присмотр за ней будет впустую
             // долбиться в подъём. Поднимется сеть — придёт событие, и заход случится сам.
-            Situation.NoNetwork -> if (setRoom(host, false, "сети нет")) selected = null
+            Situation.NoNetwork -> if (setRoom(host, false, "сети нет").changed) selected = null
 
             Situation.Unknown -> Unit
         }
     }
 
-    /** @return true, если ядро комнаты действительно переключили (и sing-box пересобран). */
-    private fun setRoom(host: Host, wanted: Boolean, reason: String): Boolean =
+    /** @return чем кончилась просьба. `Changed` — ядро sing-box пересобрано. */
+    private fun setRoom(host: Host, wanted: Boolean, reason: String): RoomAck =
         runCatching { host.setRoomWanted(wanted, reason) }
             .getOrElse {
                 Log.w(TAG, "комнату переключить не вышло ($reason): ${it.message}")
-                false
+                RoomAck.Failed
             }
 
     /** Какой выход соответствует обстановке. Нужен, когда [selected] стёрт пересборкой ядра. */
