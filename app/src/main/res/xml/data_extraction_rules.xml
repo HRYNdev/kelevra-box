@@ -1,25 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  То же, что и в backup_rules.xml, но для Android 12 и новее: ни в облако, ни при
+  переносе на другое устройство наши данные не отдаём. Причина — в соседнем файле.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <include
+        <exclude
             domain="database"
-            path="profiles.db" />
-        <include
-            domain="database"
-            path="settings.db" />
-        <include
+            path="." />
+        <exclude
             domain="file"
-            path="configs" />
+            path="." />
+        <exclude
+            domain="sharedpref"
+            path="." />
     </cloud-backup>
     <device-transfer>
-        <include
+        <exclude
             domain="database"
-            path="profiles.db" />
-        <include
-            domain="database"
-            path="settings.db" />
-        <include
+            path="." />
+        <exclude
             domain="file"
-            path="configs" />
+            path="." />
+        <exclude
+            domain="sharedpref"
+            path="." />
     </device-transfer>
 </data-extraction-rules>
