@@ -1,10 +1,12 @@
 package io.nekohasekai.sfa.bg
 
 import io.nekohasekai.sfa.bg.path.HonestProbe
+import io.nekohasekai.sfa.bg.path.PathRegistry
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -34,9 +36,11 @@ class ProbeInboundPatchTest {
         val content = serverConfig()
         val layout = AutoModeExits.parse(content, socksPort)
 
-        // Что вообще собираемся мерить: выход селектора и прямой выход.
-        assertTrue("нашли что мерить: ${layout.measurable}", layout.measurable.size >= 2)
-        assertTrue(layout.measurable.contains("direct"))
+        // Что вообще собираемся мерить: основной путь, и только его. Прямой выход
+        // конфига сюда не входит намеренно — замер по нему было некуда положить,
+        // см. `прямой выход не меряем`.
+        assertEquals(listOfNotNull(layout.main), layout.measurable)
+        assertFalse(layout.measurable.contains("direct"))
 
         val result = ProbeInboundPatch.addProbeInbounds(content, layout.measurable)
         assertTrue(result.note, result.patched)
@@ -99,8 +103,45 @@ class ProbeInboundPatchTest {
         assertTrue(after.mainPinned)
         assertNotEquals("проба ушла с общего входа на свой", 2412, after.localProxy?.port)
         assertEquals(after.entryFor(after.main), after.localProxy)
-        // Прямой выход тоже меряется отдельно, и другим входом.
-        assertNotEquals(after.entryFor("direct"), after.entryFor(after.main))
+    }
+
+    // ------------------------------------------- мерим только то, что есть кому запомнить
+
+    @Test
+    fun `каждый закреплённый вход реестр умеет узнать`() {
+        // Замер, который некуда положить, — это потраченные время и запрос наружу впустую.
+        // Ровно так на стенде 10.08.2026 дважды терялся замер выхода «direct»: проба
+        // честно ходила и отвечала «жив, 1094 мс», а реестр такого пути не знал.
+        val content = serverConfig()
+        val layout = AutoModeExits.parse(content, socksPort)
+        val patched = ProbeInboundPatch.addProbeInbounds(content, layout.measurable)
+        assertTrue(patched.entries.isNotEmpty())
+        try {
+            PathRegistry.bindExits(main = layout.main, room = layout.room)
+            val snapshot = PathRegistry.snapshot.value
+            for (exit in patched.entries.keys) {
+                assertNotNull("реестр обязан знать выход «$exit»", snapshot.byExit(exit))
+            }
+        } finally {
+            // Реестр общий на весь процесс: имена от одного теста не должны доставаться
+            // соседним.
+            PathRegistry.bindExits(main = null, room = null)
+        }
+    }
+
+    @Test
+    fun `прямой выход не меряем`() {
+        // Он есть в конфиге, и вход ему когда-то закреплялся. Но выбрать его нельзя —
+        // в селекторе его нет, — а живой «direct» при мёртвом канале означал бы для
+        // реестра «связь есть». Плюс докачка наборов правил взяла бы его как первый
+        // живой вход и ушла напрямую, туда, где в урезанной сети наш домен и срезан.
+        val content = serverConfig()
+        assertTrue("в конфиге прямой выход есть", content.contains("\"direct\""))
+        val layout = AutoModeExits.parse(content, socksPort)
+        val patched = ProbeInboundPatch.addProbeInbounds(content, layout.measurable)
+
+        assertNull(AutoModeExits.parse(patched.content, socksPort).entryFor("direct"))
+        assertFalse(patched.entries.containsKey("direct"))
     }
 
     // ------------------------------------------------------------- битые и чужие конфиги

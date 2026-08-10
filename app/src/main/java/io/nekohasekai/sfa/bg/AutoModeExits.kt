@@ -43,9 +43,9 @@ object AutoModeExits {
          */
         val localProxy: Endpoint? = null,
         /**
-         * Пути, которые имеет смысл уметь мерить по отдельности: выходы селектора мимо
-         * комнаты плюс прямой выход. Комната сюда не попадает — у неё свой закреплённый
-         * SOCKS в ядре olcRTC, закреплять её ещё раз незачем.
+         * Пути, которые имеет смысл уметь мерить по отдельности. Список короткий и
+         * закрытый: мерим только то, что есть кому запомнить, — почему именно так,
+         * см. в [parse0].
          */
         val measurable: List<String> = emptyList(),
         /**
@@ -110,10 +110,23 @@ object AutoModeExits {
         val endpoints = endpointsOf(main, byTag, mutableSetOf())
             .ifEmpty { allEndpoints(byTag) }
 
-        val direct = byTag.entries.firstOrNull { it.value.optString("type") == "direct" }?.key
-        val measurable = (
-            chooser?.let { members(byTag.getValue(it)) }.orEmpty() + listOfNotNull(direct)
-            ).filter { it != room }.distinct()
+        // Мерить по отдельности имеет смысл ровно те пути, которые есть кому запомнить,
+        // а помнит их [io.nekohasekai.sfa.bg.path.PathRegistry], и путей у него три.
+        // Комната сюда не попадает — у неё свой закреплённый SOCKS в ядре olcRTC,
+        // закреплять её ещё раз незачем. Дом меряется вообще без посредника: дома
+        // туннеля нет, и вопрос «уходит ли трафик» задаётся прямо по физической сети
+        // ([io.nekohasekai.sfa.bg.path.HonestProbe.measureDirect]). Остаётся основной канал.
+        //
+        // Прямой выход конфига (`type: direct`) тут был и оказался лишним. Замер до него
+        // доходил, стоил времени и запроса наружу, а положить его было некуда: реестр
+        // такого пути не знает, и [io.nekohasekai.sfa.bg.BoxService] честно писал
+        // «замер потерян» (стенд 10.08.2026, дважды за прогон). Заводить под него путь
+        // тоже неправильно: выбрать прямой выход нельзя — его нет в селекторе, — а живой
+        // «direct» при мёртвом канале означал бы для реестра «связь есть», то есть ровно
+        // ту ложь, ради которой реестр и заводили. Хуже того, докачка наборов правил
+        // берёт первый живой вход ([BoxService.refreshRuleSets]) и ушла бы напрямую —
+        // туда, где в урезанной сети наш домен и срезан.
+        val measurable = listOfNotNull(main).filter { it != room }
 
         val entries = probeEntries(root)
 
