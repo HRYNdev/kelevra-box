@@ -1,14 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Ничего не отдаём облаку.
+
+  Донорский sing-box выгружал в Google Диск profiles.db, settings.db и папку configs —
+  то есть код доступа и конфиги с ключами от сети. Это и объясняло фокус, замеченный
+  10.08.2026: приложение сносили начисто, ставили заново, и оно оказывалось уже
+  настроенным — Android возвращал данные из облака.
+
+  Для своей сети это неприемлемо: ключи хранятся у стороннего хранилища и переживают
+  удаление приложения. Ценой удобства (перенос настроек на новый телефон) отключаем
+  выгрузку целиком; в манифесте вдобавок стоит android:allowBackup="false".
+-->
 <full-backup-content>
-
-    <include
+    <exclude
         domain="database"
-        path="profiles.db" />
-    <include
-        domain="database"
-        path="settings.db" />
-    <include
+        path="." />
+    <exclude
         domain="file"
-        path="configs" />
-
+        path="." />
+    <exclude
+        domain="sharedpref"
+        path="." />
 </full-backup-content>
