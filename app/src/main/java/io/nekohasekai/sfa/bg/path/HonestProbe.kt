@@ -177,8 +177,8 @@ object HonestProbe {
     }
 
     /**
-     * Меряет путь **напрямую**: без SOCKS, без туннеля, обычным сокетом, привязанным
-     * к физической сети.
+     * Меряет путь **напрямую**: без SOCKS, без туннеля, обычным сокетом — защищённым от
+     * нашего tun и привязанным к физической сети.
      *
      * Нужна ровно для одного случая — дома. Там локального входа нет вовсе (туннель
      * погашен, потому что обход делает роутер), а вопрос стоит тот же самый: уходит ли
@@ -186,11 +186,12 @@ object HonestProbe {
      * это была дыра: домашний резолвер отдаёт подменные адреса и в сети, где наружу не
      * проходит вообще ничего, — признак «дома» получался, а связи не было.
      *
-     * Привязка к [Network] здесь не деталь, а суть: сокет создаётся через
-     * `network.socketFactory`, а имя резолвится через `network.getAllByName` — оба идут
-     * мимо маршрутов и резолвера нашего же туннеля, даже если он в этот момент ещё поднят.
-     * Тот же приём, которым пользуются [io.nekohasekai.sfa.bg.AutoMode] и
-     * [io.nekohasekai.sfa.bg.HomeProbe].
+     * Мимо своего туннеля проба идёт не привязкой к сети: правило per-uid для VPN стоит
+     * выше неё, и привязанный сокет всё равно уходил в наш же tun — при поднятом туннеле
+     * проба мерила туннель и подтверждала дом сама себе. Уводит сокет [ProbeSocket]
+     * (`VpnService.protect`), привязка к сети идёт следом. Имя резолвится через
+     * `network.getAllByName`, то есть системным резолвером сети: он ходит мимо туннеля
+     * и без всякой защиты.
      *
      * @param network физическая сеть, по которой мерим. VPN-сеть сюда передавать нельзя:
      *   получится замер собственного туннеля, а не обстановки.
@@ -288,15 +289,18 @@ object HonestProbe {
      * Разница с [request] ровно в двух строчках — откуда берётся адрес и куда идёт
      * `connect`. Всё, что после соединения, общее: тот же запрос, тот же разбор ответа,
      * та же граница между «ответа нет» и «ответ не тот».
+     *
+     * В факты пишем, была ли защита от своего tun: незащищённый замер при поднятом
+     * туннеле меряет туннель, и по логу это должно быть видно сразу, а не выясняться
+     * разбором.
      */
     private fun directRequest(network: Network, goal: Target, timeoutMillis: Int): Measurement {
-        val facts = "напрямую, цель $goal"
+        val facts = "напрямую (${if (ProbeSocket.protecting) "мимо своего tun" else "без защиты от tun"}), цель $goal"
         val startedAt = SystemClock.elapsedRealtime()
         val address = runCatching { network.getAllByName(goal.host).firstOrNull() }.getOrNull()
             ?: return Measurement.dead("адрес цели не узнать: сеть не ответила на запрос имени", facts)
         return try {
-            network.socketFactory.createSocket().use { socket ->
-                socket.tcpNoDelay = true
+            ProbeSocket.open { network.bindSocket(it) }.use { socket ->
                 socket.soTimeout = timeoutMillis
                 socket.connect(InetSocketAddress(address, goal.port), DIRECT_CONNECT_TIMEOUT_MILLIS)
                 exchange(
