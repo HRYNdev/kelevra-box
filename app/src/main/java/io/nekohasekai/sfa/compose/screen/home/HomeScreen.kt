@@ -135,9 +135,7 @@ fun HomeScreen(
     val rulesNote = PathWords.rulesNote(total = ruleSets.total, ready = ruleSets.ready)
     // Что человек выбрал руками. Читаем при каждой смене состояния автомата и запуска:
     // ядро может молчать, а показать надо правду.
-    val manualExit by remember(auto.auto, running) {
-        mutableStateOf(io.nekohasekai.sfa.database.Settings.manualExitName)
-    }
+    val manualExit = io.nekohasekai.sfa.database.Settings.manualExitName
 
     LaunchedEffect(hasProfile, running) {
         if (hasProfile) {
@@ -291,7 +289,7 @@ fun HomeScreen(
             // карточка выхода видна всегда, когда подписка есть: до запуска сети
             // ядро ещё не отдало список, но человек должен понимать, куда пойдёт трафик
             if (hasProfile) {
-                KCard(onClick = { if (channels.isNotEmpty()) showExits = true }) {
+                KCard(onClick = { showExits = true }) {
                     KRowItem(
                         label = "Выход",
                         title = when {
@@ -317,7 +315,7 @@ fun HomeScreen(
                             else -> "выбран вами · автомат вернётся при смене сети"
                         },
                         badge = if (home) null else badgeOf(activeOutbound),
-                        chevron = channels.isNotEmpty(),
+                        chevron = true,
                     )
                 }
                 Spacer(Modifier.height(KDim.Gap))
