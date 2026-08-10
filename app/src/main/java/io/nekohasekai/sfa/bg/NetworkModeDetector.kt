@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import io.nekohasekai.sfa.Application
+import io.nekohasekai.sfa.bg.path.ProbeSocket
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -401,10 +402,14 @@ object NetworkModeDetector {
      * в него, и прибор покажет состояние туннеля, а не обстановки вокруг. Поэтому:
      *
      *  - берём конкретный [Network], у которого нет транспорта `TRANSPORT_VPN`;
-     *  - все сокеты создаём **только** через `network.socketFactory`, а имена резолвим
-     *    только через `network.getAllByName` — оба привязывают к выбранной сети мимо
-     *    маршрутов туннеля (тот же приём, которым в проекте уже пользуются
-     *    [AutoMode] и [HomeProbe]);
+     *  - каждый сокет защищаем от нашего же tun и только потом привязываем к этой сети
+     *    ([ProbeSocket]). Одной привязки мало, и это стоило боевого бага: правило per-uid
+     *    для VPN стоит выше неё, поэтому сокет, созданный через `network.socketFactory`,
+     *    всё равно уходил в наш туннель — прибор мерил туннель и мог объявить белый
+     *    список там, где его нет. А вердикт «белый список» отменяет дом при любых
+     *    признаках, то есть телефон запирался в туннеле по второму кругу;
+     *  - имена резолвим через `network.getAllByName`: системный резолвер сети ходит
+     *    мимо туннеля и без защиты;
      *  - физической сети не нашлось — возвращаем [NetworkMode.NoNetwork] и **не шлём
      *    ничего**. Отката на обычный сокет нет намеренно: лучше не измерить, чем
      *    измерить свой же туннель и выдать это за обстановку.
@@ -451,10 +456,11 @@ object NetworkModeDetector {
         if (addresses.isEmpty()) return Opened(ProbeOutcome.Failed, null)
         var outcome = ProbeOutcome.Failed
         for (address in addresses) {
-            val socket = runCatching { network.socketFactory.createSocket() }
+            // Защита от своего tun ставится внутри и до привязки к сети: соединять
+            // защищённый сокет можно, защищать соединённый — уже нет.
+            val socket = runCatching { ProbeSocket.open { network.bindSocket(it) } }
                 .getOrElse { return Opened(ProbeOutcome.Failed, null) }
             try {
-                socket.tcpNoDelay = true
                 socket.connect(InetSocketAddress(address, endpoint.port), TCP_TIMEOUT_MILLIS)
                 socket.soTimeout = READ_TIMEOUT_MILLIS
                 return Opened(ProbeOutcome.Ok, socket)
@@ -491,6 +497,10 @@ object NetworkModeDetector {
      * Ровно это нам и нужно: разрешённый адрес с неразрешённым именем.
      *
      * Сокет возвращается и при неудаче: им владеет вызывающий, он же закрывает.
+     *
+     * Своей защиты от нашего tun здесь не нужно: TLS садится поверх уже открытого
+     * сокета, то есть на тот же дескриптор, а он защищён и привязан к сети ещё в
+     * [openTcp].
      */
     private fun startTls(plain: Socket, sni: String, port: Int): Handshake {
         val ssl = runCatching {
@@ -562,8 +572,10 @@ object NetworkModeDetector {
         return try {
             val address = InetAddress.getByName(resolver)
             val query = dnsQuery("example.com")
-            socket = DatagramSocket()
-            network.bindSocket(socket)
+            // Датаграммам правило per-uid для VPN мешает так же, как и TCP: без защиты
+            // запрос ушёл бы в наш туннель, и «отвечает ли внешний резолвер» было бы
+            // ответом про туннель.
+            socket = ProbeSocket.openDatagram { network.bindSocket(it) }
             socket.soTimeout = TCP_TIMEOUT_MILLIS
             socket.send(DatagramPacket(query, query.size, address, 53))
             val answer = ByteArray(512)
