@@ -19,9 +19,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
 import java.net.InetSocketAddress
+import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
-import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
 /**
@@ -52,6 +53,21 @@ import kotlin.random.Random
  *     Плюс запрет сверху: если [NetworkModeDetector] говорит «белый список», дом не
  *     объявляется ни при каких признаках DNS.
  *     Действие: **туннель гасим** — вторая обёртка поверх роутера только грузит телефон.
+ *
+ *     Два признака спрашиваются **разом**, а не по очереди: они про разное и друг друга
+ *     не ждут. Порядок стоил секунд ровно там, где их считает человек, — 2.5 с резолвера
+ *     плюс 5.1 с прямого запроса = 7.6 с до вердикта при возвращении домой (замер
+ *     10.08.2026). Пробу вперёд пускаем только когда её ответ почти наверняка нужен
+ *     (см. `speculateHomeTraffic`), поэтому запросов наружу не прибавляется.
+ *
+ *     Признак DNS при этом **живёт дольше одного захода** ([HomeSign]). Свежий вайфай
+ *     первые секунды отвечает через раз, и сводка мигает: 3 из 3 → 0 из 3 → 3 из 3.
+ *     На «0 из 3» автомат объявлял обычную сеть и поднимал туннель у себя же дома.
+ *     Теперь слепая сводка признак не отменяет — отменяет его только опровержение
+ *     делом: не прошедший наружу прямой запрос или подсказка «белый список».
+ *
+ *     И спрашиваем мы это только там, где дом возможен: наш роутер раздаёт вайфай или
+ *     кабель, в соте дома нет по устройству ([HomeSign.reachable]).
  *  2. [Situation.Main] — основной канал поднимается. Действие: работаем им.
  *  3. [Situation.Room] — основной канал не поднимается вообще (при белом списке адрес
  *     VPS недостижим на уровне маршрутизации), а комната стоит: её несущая — видеозвонок,
@@ -272,7 +288,19 @@ object AutoMode {
     private const val HOME_CONTROL = "gosuslugi.ru"
 
     private const val DNS_BUDGET_MILLIS = 2_500L
+
+    /**
+     * Потолок ожидания рукопожатия с узлом основного канала.
+     *
+     * Срок прежний, а вот адреса теперь спрашиваются разом, а не по очереди: раньше
+     * молчащий узел с двумя адресами в конфиге стоил заходу восемь секунд подряд, и все
+     * восемь экран честно писал «Связи нет». Один SYN на адрес, один раз за заход —
+     * пакетов столько же, сколько было, просто они больше не ждут друг друга.
+     */
     private const val TCP_TIMEOUT_MILLIS = 4_000
+
+    /** Запас поверх таймаута соединения: пул должен успеть отдать последний ответ. */
+    private const val CONNECT_SLACK_MILLIS = 500L
 
     /**
      * Сколько раз пробуем подтвердить дом трафиком, прежде чем сказать «не дома».
@@ -518,6 +546,21 @@ object AutoMode {
     private var lastHomeLatencyMs: Long? = null
 
     /**
+     * Когда в последний раз видели признак дома и на какой сети.
+     *
+     * Свежий вайфай первые секунды отвечает через раз, и сводка на нём мигает: замер
+     * 10.08.2026 — 3 из 3, следом 0 из 3, следом снова 3 из 3. На «0 из 3» автомат
+     * объявлял обычную сеть и поднимал туннель прямо у себя дома. Память о признаке эту
+     * дыру и закрывает: слепая сводка признак не отменяет, отменяет его только
+     * опровержение делом — см. [HomeSign.stands].
+     */
+    @Volatile
+    private var homeSignAt = 0L
+
+    @Volatile
+    private var homeSignNetwork: Network? = null
+
+    /**
      * Сеть, в которой человек выбрал выход руками. Выбор держится, пока мы в ней:
      * см. [chooseManually] и [onNetworkChanged].
      */
@@ -566,6 +609,7 @@ object AutoMode {
             nodeAnsweredAt = 0L
             peekAt = 0
             peekWanted = false
+            forgetHomeSign()
             // Прошлая сессия про эти пути больше ничего не знает: сеть под нами могла
             // смениться, пока сервиса не было.
             PathRegistry.reset()
@@ -777,6 +821,10 @@ object AutoMode {
     fun homeRightNow(): Boolean {
         if (!Settings.autoModeEnabled) return false
         val network = physicalNetwork() ?: return false
+        // В соте дома не бывает, а этот вопрос задаётся до подъёма ядра — то есть человек
+        // ждёт подключения ровно столько, сколько мы его задаём. Четыре запроса к
+        // резолверу ради заранее известного ответа тут стоили до 2.5 секунд.
+        if (!homeReachable(network)) return false
         if (!homeBypass(network)) return false
         return homeCarriesTraffic(network)
     }
@@ -903,29 +951,65 @@ object AutoMode {
         }
         // Пока меряем — так и говорим. Иначе экран весь этот десяток секунд утверждает,
         // что всё подключено, хотя ещё ничего не проверено.
+        //
+        // Держится это ровно на время захода: заход всегда дописывает дому итог ниже,
+        // а «проверяю» на экране бьёт «связи нет» — и правильно бьёт, пока проба идёт.
         PathRegistry.probing(PathId.HOME)
         refreshLink()
 
         // Готовая подсказка про эту сеть, если её уже снимали. Ничего не меряет.
         var hint = cachedHint(network)
 
-        // Порядок проб важен и стоит денег: дома дальше смотреть незачем, а комнату
-        // спрашиваем только когда основной канал уже не отвечает.
-        val dnsHome = homeBypass(network)
+        // Дом — это наш собственный роутер, а он раздаёт вайфай или кабель. В соте
+        // спрашивать резолвер незачем: ответ известен заранее, а стоил он до 2.5 секунд
+        // на каждом заходе (замер 10.08.2026).
+        val canBeHome = homeReachable(network)
+
+        // Признак дома (резолвер) и прямой запрос наружу отвечают на разные вопросы и
+        // друг друга не ждут. Раньше они шли по очереди, и возвращение домой стоило
+        // суммы двух проб вместо большей из них: 2.5 с DNS плюс 5.1 с трафика = 7.6 с
+        // до вердикта (замер 10.08.2026). Пробу пускаем вперёд только там, где ответ
+        // и так почти наверняка понадобится, — сразу после смены сети и когда стоим
+        // дома. На чужом вайфае в обычном ритме лишних запросов не появляется.
+        val ahead = if (canBeHome && hint != NetworkMode.Whitelist && speculateHomeTraffic()) {
+            aheadHomeTraffic(network)
+        } else {
+            null
+        }
+
+        val dnsNow = if (canBeHome) homeBypass(network) else false
+        if (dnsNow) rememberHomeSign(network)
+        // Одна слепая сводка признак не отменяет — отменяет его только опровержение делом.
+        val dnsHome = HomeSign.stands(
+            seenNow = dnsNow,
+            ageMillis = homeSignAge(network),
+            refuted = hint == NetworkMode.Whitelist,
+        )
         // Трафиком подтверждаем только то, что есть смысл подтверждать. Если подсказка
         // уже сказала «белый список», дом отменён при любых признаках DNS — и тратить
         // на него пробу незачем.
-        val carried = if (dnsHome && hint != NetworkMode.Whitelist) homeCarriesTraffic(network) else null
+        val carried = when {
+            ahead != null -> ahead()
+            dnsHome && hint != NetworkMode.Whitelist -> homeCarriesTraffic(network)
+            else -> null
+        }
+        // Наружу не прошло — признак опровергнут делом, и держаться за память о нём
+        // больше не на чем.
+        if (carried == false) forgetHomeSign()
 
         // Повод спросить режим сети: что-то не сходится. Дом по DNS без трафика — самый
         // сильный из таких поводов, второй — уже провалившийся основной канал.
-        val broken = (dnsHome && carried != true) || mainFailures > 0
+        val broken = brokenEnough(
+            homeMismatch = dnsHome && carried != true,
+            mainFailed = mainFailures > 0,
+            settling = burst.active,
+        )
         if (hint != NetworkMode.Whitelist && askDetector(broken, hintAge(network), nodeAnswers())) {
             hint = askNetworkMode(network)
         }
 
         val home = homeVerdict(dnsHome, carried, hint)
-        if (dnsHome || home) {
+        if (canBeHome && (dnsHome || home)) {
             // Признак дома был — значит есть что объяснить: почему домом это считается
             // или почему нет. Без признака писать нечего, там и так обычная сеть.
             Log.i(
@@ -946,7 +1030,15 @@ object AutoMode {
             // отказ был в другой сети и про эту не говорит ничего.
             PathRegistry.unchecked(PathId.MAIN, "дома обход делает роутер")
         } else {
-            PathRegistry.dead(PathId.HOME, homeReason(dnsHome, carried, hint))
+            // «Не отвечает» и «спрашивать было незачем» — разные вещи, и путать их дорого:
+            // отказавший путь на экране означает «Связи нет», а в соте дома нет и быть
+            // не может. Раньше мобильная сеть каждым заходом получала отказ дома, и все
+            // те секунды, что мерился основной канал, человек читал «Связи нет».
+            if (canBeHome) {
+                PathRegistry.dead(PathId.HOME, homeReason(dnsHome, carried, hint))
+            } else {
+                PathRegistry.unchecked(PathId.HOME, "дома можно быть только за своим роутером")
+            }
             // Обе записи одним движением: между ними снимок читателю не показываем,
             // иначе экран мигнёт «связи нет» ровно посреди своей же проверки.
             PathRegistry.probing(PathId.MAIN)
@@ -1290,19 +1382,48 @@ object AutoMode {
     private fun homeBypass(network: Network): Boolean {
         val pool = Executors.newFixedThreadPool(HOME_DOMAINS.size + 1)
         try {
-            val probes: List<Pair<String, Future<Boolean>>> =
-                (HOME_DOMAINS + HOME_CONTROL).map { host ->
-                    host to pool.submit<Boolean> { resolvesToFakeIp(network, host) }
-                }
-            val deadline = SystemClock.elapsedRealtime() + DNS_BUDGET_MILLIS
-            var hits = 0
-            var controlFake = false
-            for ((host, future) in probes) {
-                val left = (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0)
-                val fake = runCatching { future.get(left, TimeUnit.MILLISECONDS) }.getOrElse { false }
-                if (host == HOME_CONTROL) controlFake = fake else if (fake) hits++
+            val answers = ExecutorCompletionService<Pair<String, Boolean>>(pool)
+            for (host in HOME_DOMAINS + HOME_CONTROL) {
+                // Ответ приходит вместе с именем, и сам вопрос никогда не бросает: иначе
+                // на сорвавшейся пробе было бы не понять, чей это ответ.
+                answers.submit { host to runCatching { resolvesToFakeIp(network, host) }.getOrDefault(false) }
             }
-            val sign = hits >= HOME_HITS && !controlFake
+            val startedAt = SystemClock.elapsedRealtime()
+            val deadline = startedAt + DNS_BUDGET_MILLIS
+            var hits = 0
+            var misses = 0
+            var control = HomeSign.Control.Waiting
+            var sign: Boolean? = null
+            var answered = 0
+            // Разбираем ответы по мере прихода и закрываем сводку, как только итог ясен.
+            // Раньше заход дожидался всех четырёх до конца бюджета, и один задумавшийся
+            // домен стоил 2.5 секунды всему решению.
+            while (answered < HOME_DOMAINS.size + 1) {
+                // Ждём ровно столько, сколько ещё может что-то изменить: пока не хватает
+                // совпадений — весь бюджет, а когда их уже хватает и ждём только контроль —
+                // его короткий срок. Молчащий контроль и раньше засчитывался настоящим.
+                val until = if (hits >= HOME_HITS && control == HomeSign.Control.Waiting) {
+                    minOf(deadline, startedAt + HomeSign.CONTROL_BUDGET_MILLIS)
+                } else {
+                    deadline
+                }
+                val left = until - SystemClock.elapsedRealtime()
+                if (left <= 0) break
+                val done = runCatching { answers.poll(left, TimeUnit.MILLISECONDS) }.getOrNull() ?: break
+                answered++
+                val (host, fake) = runCatching { done.get() }.getOrNull() ?: continue
+                when {
+                    host == HOME_CONTROL -> control = if (fake) HomeSign.Control.Fake else HomeSign.Control.Real
+                    fake -> hits++
+                    else -> misses++
+                }
+                val decided = HomeSign.verdict(hits, misses, HOME_DOMAINS.size, HOME_HITS, control)
+                if (decided != null) {
+                    sign = decided
+                    break
+                }
+            }
+            val result = sign ?: HomeSign.settle(hits, HOME_HITS, control)
             // Говорим ровно то, что узнали: это признак, а не вердикт. Вердикт «дома»
             // складывается выше, из признака и прошедшего наружу трафика, — и лог,
             // который писал здесь «→ дома», врал ровно в той обстановке, ради которой
@@ -1310,13 +1431,77 @@ object AutoMode {
             Log.i(
                 TAG,
                 "признак дома по DNS в сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
-                    "контрольный $HOME_CONTROL ${if (controlFake) "тоже подменён" else "настоящий"} → " +
-                    if (sign) "признак есть" else "признака нет",
+                    "контрольный $HOME_CONTROL $control, " +
+                    "за ${SystemClock.elapsedRealtime() - startedAt} мс → " +
+                    if (result) "признак есть" else "признака нет",
             )
-            return sign
+            return result
         } finally {
             pool.shutdownNow()
         }
+    }
+
+    /**
+     * Может ли эта сеть быть домом. Про сеть, транспорт которой не выяснить, отказа
+     * не выдумываем: спрашиваем резолвер, как раньше.
+     */
+    private fun homeReachable(network: Network): Boolean {
+        val caps = runCatching { Application.connectivity.getNetworkCapabilities(network) }.getOrNull()
+            ?: return true
+        return HomeSign.reachable(
+            wifi = caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI),
+            ethernet = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET),
+            cellular = caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR),
+        )
+    }
+
+    /**
+     * Стоит ли пускать прямую пробу вперёд сводки резолвера.
+     *
+     * Только там, где её ответ почти наверняка понадобится: сразу после смены сети
+     * (серия перепроверок идёт) и когда мы уже стоим дома. В обычном ритме на чужой
+     * сети параллельная проба была бы лишним запросом наружу каждым заходом — а число
+     * запросов мы не увеличиваем.
+     */
+    private fun speculateHomeTraffic(): Boolean = burst.active || gate.current == Situation.Home
+
+    /**
+     * Пускает прямую пробу отдельным потоком и отдаёт способ дождаться её итога.
+     * Пока она идёт, заход успевает спросить резолвер.
+     */
+    private fun aheadHomeTraffic(network: Network): () -> Boolean {
+        val answer = AtomicBoolean(false)
+        val worker = Thread(
+            { answer.set(runCatching { homeCarriesTraffic(network) }.getOrDefault(false)) },
+            "home-traffic",
+        ).apply {
+            isDaemon = true
+            start()
+        }
+        // Своего срока тут нет и не надо: проба ограничена собственными таймаутами,
+        // а лишний срок поверх них превратил бы медленный ответ в выдуманный отказ.
+        return {
+            runCatching { worker.join() }
+            answer.get()
+        }
+    }
+
+    /** Признак дома видели прямо сейчас — запоминаем вместе с сетью, на которой это было. */
+    private fun rememberHomeSign(network: Network) {
+        homeSignNetwork = network
+        homeSignAt = SystemClock.elapsedRealtime()
+    }
+
+    /** Признак опровергнут делом или относится к другой сети — держаться за него не на чем. */
+    private fun forgetHomeSign() {
+        homeSignNetwork = null
+        homeSignAt = 0L
+    }
+
+    /** Сколько прошло с последнего признака на **этой** сети; `null` — на ней его не видели. */
+    private fun homeSignAge(network: Network): Long? {
+        if (homeSignAt == 0L || homeSignNetwork != network) return null
+        return SystemClock.elapsedRealtime() - homeSignAt
     }
 
     /**
@@ -1378,6 +1563,24 @@ object AutoMode {
         trafficConfirmed == false -> "подменные адреса есть, но наружу не проходит"
         else -> "дом не подтверждён трафиком"
     }
+
+    /**
+     * Считается ли обстановка «сломанной» настолько, чтобы звать определитель режима сети.
+     *
+     * Замер стоит до полутора десятков секунд прямо посреди захода (TCP, TLS, короткая
+     * передача), и в первые секунды после смены сети он покупает ответ, который ничего
+     * не решает: свежий вайфай честно не пропускает наружу первый запрос, а «белый список»
+     * так не выглядит — он не наступает вместе с подключением к сети. Поэтому пока сеть
+     * настраивается, поводом остаётся только уже провалившийся основной канал: под белым
+     * списком он проваливается тем же заходом, и определитель отстаёт ровно на один шаг
+     * серии (секунду), а не пропускается.
+     *
+     * @param homeMismatch дом по DNS есть, а трафик через него не идёт.
+     * @param mainFailed основной канал уже не поднялся хотя бы раз.
+     * @param settling идёт серия перепроверок после смены сети.
+     */
+    internal fun brokenEnough(homeMismatch: Boolean, mainFailed: Boolean, settling: Boolean): Boolean =
+        if (settling) mainFailed else homeMismatch || mainFailed
 
     /**
      * Стоит ли тратить замер режима сети.
@@ -1477,7 +1680,7 @@ object AutoMode {
             // непрочитанного конфига хуже, чем не заметить белый список.
             null
         } else {
-            endpoints.any { connects(network, it, TCP_TIMEOUT_MILLIS) }.also { open ->
+            anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS).also { open ->
                 Log.i(
                     TAG,
                     if (open) {
@@ -1622,6 +1825,42 @@ object AutoMode {
             true
         }
     }.getOrElse { false }
+
+    /**
+     * Примет ли соединение **хоть один** из адресов узла.
+     *
+     * Спрашиваем разом, а не по очереди. Молчащий узел — обычное дело под белым списком,
+     * и при двух адресах в конфиге очередь стоила заходу два полных таймаута подряд:
+     * восемь секунд, все из которых экран честно писал «Связи нет». Пакетов при этом
+     * столько же, сколько было, — по одному SYN на адрес, один раз за заход; они просто
+     * больше не ждут друг друга. Первый согласившийся адрес закрывает вопрос, остальные
+     * снимаются.
+     */
+    private fun anyConnects(
+        network: Network,
+        endpoints: List<AutoModeExits.Endpoint>,
+        timeoutMillis: Int,
+    ): Boolean {
+        if (endpoints.isEmpty()) return false
+        if (endpoints.size == 1) return connects(network, endpoints[0], timeoutMillis)
+        val pool = Executors.newFixedThreadPool(endpoints.size)
+        try {
+            val answers = ExecutorCompletionService<Boolean>(pool)
+            endpoints.forEach { endpoint ->
+                answers.submit { connects(network, endpoint, timeoutMillis) }
+            }
+            val deadline = SystemClock.elapsedRealtime() + timeoutMillis + CONNECT_SLACK_MILLIS
+            repeat(endpoints.size) {
+                val left = deadline - SystemClock.elapsedRealtime()
+                if (left <= 0) return false
+                val done = runCatching { answers.poll(left, TimeUnit.MILLISECONDS) }.getOrNull() ?: return false
+                if (runCatching { done.get() }.getOrDefault(false)) return true
+            }
+            return false
+        } finally {
+            pool.shutdownNow()
+        }
+    }
 
     /**
      * Приглядка из комнаты: одно рукопожатие до узла основного канала.

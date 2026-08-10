@@ -227,6 +227,64 @@ class PathWordsTest {
     }
 
     @Test
+    fun `в соте дом не спрашивают — «Ищу путь» от этого не пропадает`() {
+        // Дома в мобильной сети быть не может, и отказа ему туда больше не пишут:
+        // «не отвечает» и «спрашивать было незачем» — разные вещи. Строка при этом
+        // обязана остаться прежней, иначе правка про дом молча испортила бы шторку.
+        PathRegistry.unchecked(PathId.HOME, "дома можно быть только за своим роутером")
+        PathRegistry.dead(PathId.MAIN, "ответа не дождались")
+        assertEquals("Ищу путь", headline(chosen = null))
+    }
+
+    // ------------------------------------------------------ «меряем» против «связи нет»
+
+    @Test
+    fun `пока путь меряется — это замер, а не отказ`() {
+        // Ровно жалоба владельца 10.08.2026: дом отвечает первым (его сводка дешёвая),
+        // основной канал после него меряется ещё до двадцати секунд — и все двадцать
+        // экран писал «Связи нет, выбранный путь не отвечает» при живом канале.
+        PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+        PathRegistry.probing(PathId.MAIN)
+
+        assertTrue(PathWords.measuring(snapshot()))
+        assertFalse("«Связи нет» посреди собственной проверки", PathWords.linkDead(snapshot()))
+    }
+
+    @Test
+    fun `замер кончился отказом всех путей — вот теперь связи нет`() {
+        PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+        PathRegistry.dead(PathId.MAIN, "ответа не дождались")
+
+        assertFalse(PathWords.measuring(snapshot()))
+        assertTrue(PathWords.linkDead(snapshot()))
+    }
+
+    @Test
+    fun `один живой путь важнее двух отказавших`() {
+        PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+        PathRegistry.dead(PathId.ROOM, "данных нет")
+        PathRegistry.alive(PathId.MAIN, latencyMs = 120)
+
+        assertFalse(PathWords.linkDead(snapshot()))
+    }
+
+    @Test
+    fun `ещё ничего не мерили — это тоже замер, а не отказ`() {
+        assertTrue(PathWords.measuring(snapshot()))
+        assertFalse(PathWords.linkDead(snapshot()))
+    }
+
+    @Test
+    fun `непроверенный дом сам по себе связь мёртвой не делает`() {
+        // В соте дом получает «не проверяли», а не отказ. Если бы это считалось отказом,
+        // мобильная сеть с живым каналом читалась бы как «Связи нет».
+        PathRegistry.unchecked(PathId.HOME, "дома можно быть только за своим роутером")
+        PathRegistry.alive(PathId.MAIN, latencyMs = 120)
+
+        assertFalse(PathWords.linkDead(snapshot()))
+    }
+
+    @Test
     fun `на мёртвом канале «Подключено» не появляется ни в одной строке таблицы`() {
         // Главное требование ко всей затее, поэтому проверяется отдельно и целиком.
         PathRegistry.dead(PathId.HOME, "подменных адресов нет")
