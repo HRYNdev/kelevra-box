@@ -442,6 +442,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         ruleSetRemotes = rules.remotes
         result = rules.content
 
+        // Страховка идёт сразу после наборов и до всего остального: если правила не
+        // доехали, дальше править было бы уже нечего — трафик ушёл бы в `final: direct`.
+        val lifeline = LifelinePatch.addLifeline(result)
+        LifelinePatch.log(lifeline)
+        result = lifeline.content
+
         if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
             val quic = OlcRtcConfigPatch.addQuicReject(result, OlcRtcParams.socksPort)
             OlcRtcConfigPatch.log(quic)
