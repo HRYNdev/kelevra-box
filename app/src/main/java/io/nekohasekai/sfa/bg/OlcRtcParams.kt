@@ -1,7 +1,12 @@
 package io.nekohasekai.sfa.bg
 
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.util.Log
+import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.database.Settings
 import org.json.JSONObject
+import java.net.Inet4Address
 import java.util.UUID
 
 /**
@@ -16,6 +21,8 @@ import java.util.UUID
  * разница — в лог он не попадает даже частями.
  */
 object OlcRtcParams {
+    private const val TAG = "OlcRtcParams"
+
     private const val DEFAULT_CARRIER = "wbstream"
     private const val DEFAULT_TRANSPORT = "vp8channel"
     private const val DEFAULT_SOCKS_PORT = 8808
@@ -117,7 +124,60 @@ object OlcRtcParams {
         wbToken = pick(Settings.olcrtcWbToken, Settings.olcrtcSrvWbToken, "").first,
         vp8Fps = pick(Settings.olcrtcVp8Fps, Settings.olcrtcSrvVp8Fps, DEFAULT_VP8_FPS).first,
         vp8BatchSize = pick(Settings.olcrtcVp8BatchSize, Settings.olcrtcSrvVp8BatchSize, DEFAULT_VP8_BATCH).first,
+        dnsServer = physicalDns(),
     )
+
+    /**
+     * Резолвер той сети, что вокруг нас, — для ядра комнаты.
+     *
+     * Без него ядро спрашивает имена у системы, а при поднятом туннеле система ведёт
+     * запрос внутрь туннеля. Под белым списком это замкнутый круг: комната — единственный
+     * выход наружу, но поднять её нельзя, потому что имя `stream.wb.ru` не разрешается
+     * через мёртвый туннель. Ровно так оно и легло у Вовы на МТС 10.08.2026:
+     * `join room: dial tcp: lookup stream.wb.ru: i/o timeout`, три попытки подряд.
+     *
+     * Берём резолвер физической сети (у оператора он в белом списке всегда — иначе не
+     * работал бы и его собственный портал) и отдаём ядру: дальше оно спрашивает само,
+     * своим сокетом, а тот защищён от нашего tun через ProbeSocket.Protector.
+     *
+     * Только IPv4: строка уходит в ядро как `host:port`, а адрес IPv6 туда без скобок
+     * не положить. Пусто — прежнее поведение, ядро идёт к системе.
+     */
+    private fun physicalDns(): String {
+        // Перебор ВСЕХ сетей обязателен, и это не перестраховка: комната нужна ровно
+        // тогда, когда туннель уже поднят, а при поднятом туннеле и `defaultNetwork`,
+        // и `activeNetwork` — это он сам. Спрашивать только их значит всегда получать
+        // пусто именно в тот момент, ради которого всё написано (проверено боем 10.08).
+        val candidates = buildList {
+            runCatching { DefaultNetworkMonitor.defaultNetwork }.getOrNull()?.let(::add)
+            runCatching { Application.connectivity.activeNetwork }.getOrNull()?.let(::add)
+            @Suppress("DEPRECATION")
+            runCatching { Application.connectivity.allNetworks.toList() }.getOrNull()?.let(::addAll)
+        }
+        val address = candidates.asSequence()
+            .filter(::physical)
+            .mapNotNull { network ->
+                runCatching {
+                    Application.connectivity.getLinkProperties(network)?.dnsServers
+                        ?.filterIsInstance<Inet4Address>()
+                        ?.firstOrNull()
+                        ?.hostAddress
+                }.getOrNull()
+            }
+            .firstOrNull()
+        if (address == null) {
+            Log.w(TAG, "резолвер физической сети не найден — ядро комнаты пойдёт к системному")
+            return ""
+        }
+        Log.i(TAG, "ядру комнаты отдаём резолвер физической сети $address")
+        return "$address:53"
+    }
+
+    /** Физическая — значит не наш собственный туннель: у него свой резолвер. */
+    private fun physical(network: Network): Boolean = runCatching {
+        Application.connectivity.getNetworkCapabilities(network)
+            ?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == false
+    }.getOrElse { false }
 
     /**
      * Кладёт в настройки то, что пришло с сервера.
