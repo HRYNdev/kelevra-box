@@ -380,6 +380,13 @@ object AutoMode {
     private const val ROUND_ROOM_MILLIS = 3 * 60_000L
 
     /**
+     * Ритм в ручном режиме: решений автомат не принимает, но раз в минуту перемеряет
+     * выбранный путь, чтобы экран не показывал протухшую запись. Реже — человек долго
+     * видит неправду, чаще — платим за то, чем никто не пользуется.
+     */
+    private const val ROUND_MANUAL_MILLIS = 60_000L
+
+    /**
      * Приглядка из комнаты: разброс паузы между дешёвыми пробами узла.
      *
      * Полный заход стоит дорого — резолв, честная проба через локальный вход, перестановка
@@ -557,8 +564,9 @@ object AutoMode {
     @Volatile
     private var homeSignAt = 0L
 
+    /** Не объект сети, а её отпечаток: см. [networkKey]. */
     @Volatile
-    private var homeSignNetwork: Network? = null
+    private var homeSignNetwork: String? = null
 
     /**
      * Сеть, в которой человек выбрал выход руками. Выбор держится, пока мы в ней:
@@ -841,8 +849,13 @@ object AutoMode {
             val hurry = burst.next(settled)
             if (hurry != null) Log.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
             val wait = when {
-                // Автомат выключен человеком — таймер не нужен, ждём его же переключателя.
-                idle -> Long.MAX_VALUE
+                // Автомат выключен человеком — но спать вечно нельзя. Реестр путей
+                // остаётся с тем, что было записано до ручного выбора, и экран пишет
+                // «не отвечает» на живом канале: поймано на телефоне 10.08.2026 —
+                // выбрали Нидерланды после комнаты, сайт открывается, а круг врёт.
+                // Раз в минуту перемеряем выбранный путь: решать он ничего не будет,
+                // но человеку показывается правда, а не старая запись.
+                idle -> ROUND_MANUAL_MILLIS
                 hurry != null -> hurry
                 // Идёт набор подтверждений — досматриваем быстро, а не через пять минут.
                 pendingSwitch -> ROUND_SEARCHING_MILLIS
@@ -901,10 +914,17 @@ object AutoMode {
             // (поймано в эмуляторе 07.08.2026). Лишних команд нет: choose молчит, когда
             // выбранное уже стоит.
             manualExit?.let { choose(host, it) }
-            // Пробы тут не идут, но про комнату её ядро говорит и без нас: без этой записи
-            // выбранная руками комната выглядела бы «непроверенной» всё время выбора.
-            // Итог проб ([refreshLink]) при этом не трогаем — мерять действительно некому.
+            // Про комнату её ядро говорит и без нас: без этой записи выбранная руками
+            // комната выглядела бы «непроверенной» всё время выбора.
             noteRoom()
+            // А вот обычный выход мерить некому, кроме нас. Без этого реестр держит то,
+            // что записали до ручного выбора, и круг пишет «не отвечает» на живом канале.
+            if (!wantRoom) {
+                physicalNetwork()?.let { net ->
+                    runCatching { mainWorks(net, host) }
+                        .onFailure { Log.w(TAG, "замер выбранного выхода не удался: ${it.message}") }
+                }
+            }
             idle = true
             burst.cancel()
             settled = true
@@ -1004,7 +1024,16 @@ object AutoMode {
             mainFailed = mainFailures > 0,
             settling = burst.active,
         )
-        if (hint != NetworkMode.Whitelist && askDetector(broken, hintAge(network), nodeAnswers())) {
+        // Дома определитель не спрашиваем вовсе, и это не экономия, а правильность.
+        // Замер на телефоне 10.08.2026, возврат на домашний вайфай: сеть ещё не устоялась,
+        // TLS не успел подняться, определитель выдал «DPI» за 4187 мс — и этот выдуманный
+        // вердикт выкинул автомат из дома в туннель на полторы секунды. Со стороны это
+        // и есть «на вайфае зачем-то включается VPN». Дома вопрос «режут ли нас по дороге»
+        // смысла не имеет: наружу ходит роутер, а не мы.
+        val atHome = dnsHome && carried != false
+        if (hint != NetworkMode.Whitelist && !atHome &&
+            askDetector(broken, hintAge(network), nodeAnswers())
+        ) {
             hint = askNetworkMode(network)
         }
 
@@ -1488,7 +1517,7 @@ object AutoMode {
 
     /** Признак дома видели прямо сейчас — запоминаем вместе с сетью, на которой это было. */
     private fun rememberHomeSign(network: Network) {
-        homeSignNetwork = network
+        homeSignNetwork = networkKey(network)
         homeSignAt = SystemClock.elapsedRealtime()
     }
 
@@ -1500,9 +1529,41 @@ object AutoMode {
 
     /** Сколько прошло с последнего признака на **этой** сети; `null` — на ней его не видели. */
     private fun homeSignAge(network: Network): Long? {
-        if (homeSignAt == 0L || homeSignNetwork != network) return null
+        if (homeSignAt == 0L || homeSignNetwork != networkKey(network)) return null
         return SystemClock.elapsedRealtime() - homeSignAt
     }
+
+    /**
+     * Отпечаток сети: тот же вайфай остаётся тем же, даже если система выдала ему
+     * новый номер.
+     *
+     * Помнить признак дома по объекту [Network] оказалось нельзя. Замер на живом
+     * телефоне 10.08.2026: четыре переключения вайфая за минуту, на каждом Android
+     * выдаёт новый номер (1025 → 1026), память о доме обнуляется, и на возврате домой
+     * автомат успевает поднять туннель на полторы секунды, прежде чем понять, что мы
+     * дома. Со стороны это и есть «то включается, то выключается».
+     *
+     * Отпечаток берём из того, что у домашней сети постоянно и не требует разрешений:
+     * транспорт, адреса её резолверов и наш адрес с длиной префикса. SSID подошёл бы
+     * лучше, но с Android 10 за него спрашивают разрешение на местоположение — платить
+     * им за узнавание своей же сети не станем.
+     */
+    private fun networkKey(network: Network): String = runCatching {
+        val caps = Application.connectivity.getNetworkCapabilities(network)
+        val link = Application.connectivity.getLinkProperties(network)
+        val transport = when {
+            caps == null -> "?"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cell"
+            else -> "other"
+        }
+        // Только транспорт и резолверы сети. Свой адрес в отпечаток класть нельзя:
+        // при переподключении к тому же вайфаю DHCP выдаёт другой, отпечаток «меняется»,
+        // и память о доме слетает ровно там, ради чего написана. Проверено на телефоне
+        // 10.08.2026: с адресом в ключе туннель всё равно подскакивал на каждом возврате.
+        val dns = link?.dnsServers?.mapNotNull { it.hostAddress }?.sorted()?.joinToString(",").orEmpty()
+        "$transport|$dns"
+    }.getOrElse { "network-${network.hashCode()}" }
 
     /**
      * Уходит ли через домашний путь трафик наружу **на самом деле**.
