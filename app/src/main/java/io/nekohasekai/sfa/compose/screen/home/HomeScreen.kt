@@ -45,6 +45,12 @@ import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
 import io.nekohasekai.sfa.constant.Status
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 
 /** Канал в списке: имя, задержка, выбран ли сейчас. */
 data class ChannelRow(val name: String, val delayMs: Int, val selected: Boolean)
@@ -163,10 +169,11 @@ fun HomeScreen(
     // «Подключено» — это утверждение про канал, а не про сервис. Пока проба не прошла,
     // сказать про канал нечего; когда она провалилась — тем более (06.08.2026 экран
     // писал «Подключено» на мёртвом канале).
-    val measuring = running && !manualHold && !noNetwork &&
-        (paths.anyIs(PathStatus.Probing) || !paths.any { it.usable || it.refused })
-    val linkDead = running && !manualHold && !noNetwork &&
-        !paths.any { it.usable } && paths.any { it.refused }
+    // Сами правила «меряем» и «связи нет» живут в [PathWords] и проверяются тестами:
+    // экран их пересказывал своей цепочкой условий, и цепочка разошлась — «Связи нет»
+    // объявлялось прямо посреди замера основного канала (жалоба владельца 10.08.2026).
+    val measuring = running && !manualHold && !noNetwork && PathWords.measuring(paths)
+    val linkDead = running && !manualHold && !noNetwork && PathWords.linkDead(paths)
     // Путь, который человек выбрал руками. Раньше в ручном режиме круг показывал
     // состояние ядра, а не то, что реально намерили: проба секундами раньше называла
     // тот же путь мёртвым, а круг писал «Подключено» (поймано на стенде 08.08.2026).
@@ -295,7 +302,9 @@ fun HomeScreen(
                             // человек выбрал сам, и оно же поедет в ядро при включении.
                             else -> activeOutbound
                                 ?: manualExit.takeIf { it.isNotBlank() && !auto.auto }
-                                ?: "Автоматически"
+                                // Ручной режим без выбранного выхода: писать
+                                // «Автоматически» здесь значит врать — автомат выключен.
+                                ?: if (auto.auto) "Автоматически" else "Не выбран"
                         },
                         subtitle = when {
                             home -> "дома работает роутер"
@@ -304,6 +313,7 @@ fun HomeScreen(
                             // Ручной выбор больше не выключает автомат навсегда: он
                             // держится, пока не сменится сеть. Так и пишем, иначе
                             // «выбран вручную» читается как «автомат сломался».
+                            activeOutbound == null && manualExit.isBlank() -> "нажмите, чтобы выбрать"
                             else -> "выбран вами · автомат вернётся при смене сети"
                         },
                         badge = if (home) null else badgeOf(activeOutbound),
@@ -346,23 +356,28 @@ fun HomeScreen(
                     color = colors.Text,
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
-                // Первым — сам автомат. Он же и есть способ вернуться к нему после того,
-                // как человек один раз выбрал выход руками.
-                ExitRow(
-                    name = "Автоматически",
-                    delayMs = 0,
-                    selected = auto.auto,
-                    subtitle = if (auto.auto) {
-                        "подбирает выход под обстановку"
-                    } else {
-                        "вернётся сам при смене сети"
-                    },
-                    onClick = {
-                        AutoMode.setEnabled(true)
-                        showExits = false
-                    },
+                // Режим — переключателем на две стороны, а не пунктом в списке выходов.
+                // Прежняя «Автоматически» первой строкой читалась как ещё один выход,
+                // хотя это не выход, а способ его выбирать. Формулировка Вовы 10.08.2026:
+                // «такой переключатель, 1 сторона ручной режим, и 1 сторона авто режим,
+                // и в ручном чтоб нормально все отображалось, а авто мод сам работал».
+                ModeSwitch(
+                    auto = auto.auto,
+                    onAuto = { AutoMode.setEnabled(true) },
+                    onManual = { AutoMode.setEnabled(false) },
                 )
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (auto.auto) {
+                        "выход подбирается под обстановку"
+                    } else {
+                        "выход держится тот, что выбран"
+                    },
+                    fontFamily = Montserrat,
+                    fontSize = 12.sp,
+                    color = colors.Dim,
+                    modifier = Modifier.padding(start = 4.dp, bottom = 10.dp),
+                )
                 channels.forEach { ch ->
                     // Что мы про этот выход знаем.
                     //
@@ -392,6 +407,51 @@ fun HomeScreen(
                 Spacer(Modifier.height(20.dp))
             }
         }
+    }
+}
+
+/**
+ * Переключатель режима: автомат или ручной выбор.
+ *
+ * Две половины одной полосы, а не две карточки: половины показывают, что это один
+ * выбор из двух, и что третьего положения нет. Подсвечена та, что действует сейчас.
+ */
+@Composable
+private fun ModeSwitch(auto: Boolean, onAuto: () -> Unit, onManual: () -> Unit) {
+    val colors = K
+    val shape = RoundedCornerShape(KDim.RadiusM)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(colors.Surface)
+            .border(BorderStroke(1.dp, colors.Border), shape)
+            .padding(4.dp),
+    ) {
+        ModeHalf("Автоматически", selected = auto, modifier = Modifier.weight(1f), onClick = onAuto)
+        ModeHalf("Вручную", selected = !auto, modifier = Modifier.weight(1f), onClick = onManual)
+    }
+}
+
+@Composable
+private fun ModeHalf(text: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    val colors = K
+    val shape = RoundedCornerShape(KDim.RadiusS)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(if (selected) colors.Accent else Color.Transparent)
+            .clickable(enabled = !selected, onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            fontFamily = Montserrat,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            fontSize = 14.sp,
+            color = if (selected) colors.Bg else colors.Dim,
+        )
     }
 }
 

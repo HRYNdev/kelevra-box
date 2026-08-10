@@ -144,7 +144,167 @@ class AutoModeLogicTest {
         }
     }
 
+    // ------------------------------------------------------- где дом возможен вообще
+
+    @Test
+    fun `дома можно быть за своим роутером — по вайфаю или кабелю`() {
+        assertTrue(HomeSign.reachable(wifi = true, ethernet = false, cellular = false))
+        assertTrue(HomeSign.reachable(wifi = false, ethernet = true, cellular = false))
+    }
+
+    @Test
+    fun `в соте дома нет — резолвер спрашивать незачем`() {
+        // Четыре запроса к резолверу стоили до 2.5 секунд на каждом заходе и столько же
+        // перед самым стартом сервиса, где их ждал человек. Ответ при этом известен
+        // заранее: наш роутер соту не раздаёт.
+        assertFalse(HomeSign.reachable(wifi = false, ethernet = false, cellular = true))
+    }
+
+    @Test
+    fun `сота вместе с вайфаем — это ещё не сота`() {
+        // Возвращение домой: мобильная сеть висит рядом с вайфаем до полуминуты, и оба
+        // транспорта видны разом. Отказать тут значит проспать сам приход домой.
+        assertTrue(HomeSign.reachable(wifi = true, ethernet = false, cellular = true))
+    }
+
+    @Test
+    fun `транспорт неизвестен — отказа не выдумываем`() {
+        assertTrue(HomeSign.reachable(wifi = false, ethernet = false, cellular = false))
+    }
+
+    // ------------------------------------------------------- когда закрывать DNS-сводку
+
+    @Test
+    fun `совпадений набрано и контроль настоящий — признак есть, ждать нечего`() {
+        assertEquals(
+            true,
+            HomeSign.verdict(hits = 2, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Real),
+        )
+    }
+
+    @Test
+    fun `контроль подменён — это не наш роутер, дальше не смотрим`() {
+        // Резолвер, который подменяет всё подряд, домом не делает. Ответ готов сразу,
+        // даже когда совпадений ещё нет.
+        assertEquals(
+            false,
+            HomeSign.verdict(hits = 0, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Fake),
+        )
+        assertEquals(
+            false,
+            HomeSign.verdict(hits = 3, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Fake),
+        )
+    }
+
+    @Test
+    fun `до нужного числа совпадений уже не добрать — ответ готов, не дожидаясь остальных`() {
+        // Ровно мобильная сеть: два домена вернули настоящие адреса, третий ещё думает,
+        // но признака не будет при любом его ответе.
+        assertEquals(
+            false,
+            HomeSign.verdict(hits = 0, misses = 2, domains = 3, needed = 2, control = HomeSign.Control.Waiting),
+        )
+    }
+
+    @Test
+    fun `совпадений хватает, а контроль молчит — ждём его, но недолго`() {
+        // Пока контроль не ответил, вердикта нет: он единственный, кто может признак
+        // отменить. Ждать его весь бюджет незачем — на то и свой короткий срок.
+        assertEquals(
+            null,
+            HomeSign.verdict(hits = 2, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Waiting),
+        )
+        assertTrue("срок контроля обязан быть короче общего бюджета", HomeSign.CONTROL_BUDGET_MILLIS < 2_500L)
+    }
+
+    @Test
+    fun `совпадений пока мало, но добрать ещё можно — ждём`() {
+        assertEquals(
+            null,
+            HomeSign.verdict(hits = 1, misses = 1, domains = 3, needed = 2, control = HomeSign.Control.Real),
+        )
+    }
+
+    @Test
+    fun `ждать больше нечего — молчащий контроль засчитывается настоящим`() {
+        // Так было и до правки: неотвеченный контроль считался настоящим адресом,
+        // только платили за это полным бюджетом. Вердикт не поменялся, поменялось время.
+        assertTrue(HomeSign.settle(hits = 2, needed = 2, control = HomeSign.Control.Waiting))
+        assertFalse(HomeSign.settle(hits = 1, needed = 2, control = HomeSign.Control.Waiting))
+        assertFalse(HomeSign.settle(hits = 3, needed = 2, control = HomeSign.Control.Fake))
+    }
+
+    // ------------------------------------------------------- сколько живёт признак дома
+
+    @Test
+    fun `слепая сводка признак не отменяет`() {
+        // Ровно то, из-за чего дома включался туннель: на свежем вайфае сводка мигает
+        // 3 из 3 → 0 из 3 → 3 из 3 (замер 10.08.2026). На «0 из 3» автомат объявлял
+        // обычную сеть и поднимал туннель у себя же дома.
+        assertTrue(
+            HomeSign.stands(seenNow = false, ageMillis = 3_000L, refuted = false),
+        )
+    }
+
+    @Test
+    fun `признак видели только что — стоит без всякой памяти`() {
+        assertTrue(HomeSign.stands(seenNow = true, ageMillis = null, refuted = false))
+    }
+
+    @Test
+    fun `опровержение делом бьёт память, но не свежее наблюдение`() {
+        // Под белым списком дома резолвер честно отдаёт подменные адреса — врать про
+        // признак незачем, дом всё равно не объявится: вердикт требует трафика.
+        assertFalse(HomeSign.stands(seenNow = false, ageMillis = 3_000L, refuted = true))
+        assertTrue(HomeSign.stands(seenNow = true, ageMillis = 3_000L, refuted = true))
+    }
+
+    @Test
+    fun `признак постарел — держаться за него больше не на чем`() {
+        assertFalse(
+            HomeSign.stands(seenNow = false, ageMillis = HomeSign.MEMORY_MILLIS + 1, refuted = false),
+        )
+    }
+
+    @Test
+    fun `на этой сети признака не видели — памяти нет`() {
+        assertFalse(HomeSign.stands(seenNow = false, ageMillis = null, refuted = false))
+    }
+
+    @Test
+    fun `память признака переживает самый длинный шаг серии перепроверок`() {
+        // Иначе серия сама себя и подведёт: между шагами признак успевал бы протухнуть,
+        // и слепая сводка снова объявляла бы обычную сеть.
+        assertTrue(
+            "признак обязан пережить шаг серии вместе с самим заходом",
+            HomeSign.MEMORY_MILLIS > AutoMode.BURST_STEPS.max(),
+        )
+    }
+
     // ------------------------------------------------- когда звать определитель режима
+
+    @Test
+    fun `сеть настраивается — одного несовпадения по дому мало для замера`() {
+        // Свежий вайфай честно не пропускает наружу первый запрос, и на нём «дом по DNS
+        // без трафика» — обычное дело, а не белый список. Замер режима стоит до полутора
+        // десятков секунд прямо в заходе, и в эти секунды он покупает пустой ответ.
+        assertFalse(AutoMode.brokenEnough(homeMismatch = true, mainFailed = false, settling = true))
+    }
+
+    @Test
+    fun `провалившийся канал — повод и пока сеть настраивается`() {
+        // Под белым списком основной канал проваливается тем же заходом, поэтому
+        // определитель отстаёт на один шаг серии, а не пропускается.
+        assertTrue(AutoMode.brokenEnough(homeMismatch = false, mainFailed = true, settling = true))
+        assertTrue(AutoMode.brokenEnough(homeMismatch = true, mainFailed = true, settling = true))
+    }
+
+    @Test
+    fun `сеть устоялась — правило прежнее`() {
+        assertTrue(AutoMode.brokenEnough(homeMismatch = true, mainFailed = false, settling = false))
+        assertTrue(AutoMode.brokenEnough(homeMismatch = false, mainFailed = true, settling = false))
+        assertFalse(AutoMode.brokenEnough(homeMismatch = false, mainFailed = false, settling = false))
+    }
 
     @Test
     fun `пока всё сходится — определитель не зовём вовсе`() {
