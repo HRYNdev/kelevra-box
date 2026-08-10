@@ -31,6 +31,7 @@ import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.ProbeSocket
 import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.compose.MainActivity
 import io.nekohasekai.sfa.constant.Action
@@ -47,6 +48,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.DatagramSocket
+import java.net.Socket
 import kotlin.concurrent.thread
 
 class BoxService(private val service: Service, private val platformInterface: PlatformInterface) : CommandServerHandler {
@@ -331,6 +334,35 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     /**
+     * Отдаёт пробам защиту от нашего же tun.
+     *
+     * Пробы ходят по физической сети, но привязки к ней мало: правило per-uid для VPN
+     * стоит выше неё, и при поднятом туннеле «прямая» проба уходила в наш собственный
+     * tun — то есть подтверждала дом сама себе. `protect(fd)` есть только у `VpnService`,
+     * поэтому крючок ставит сервис, а [ProbeSocket] его только зовёт.
+     *
+     * Общий обход (`allowBypass`) для этого не годится: он открыл бы дорогу мимо туннеля
+     * всем приложениям сразу. Постоянный вывод себя из tun — тоже: тогда мимо туннеля
+     * пойдёт весь наш трафик, а не одна проба.
+     */
+    private fun installProbeProtector() {
+        val vpn = service as? VpnService ?: return
+        ProbeSocket.useProtector(
+            object : ProbeSocket.Protector {
+                override fun protect(socket: Socket): Boolean = note(vpn.protect(socket))
+
+                override fun protect(socket: DatagramSocket): Boolean = note(vpn.protect(socket))
+
+                /** Незащищённая проба меряет наш же туннель — это должно быть видно в логе. */
+                private fun note(ok: Boolean): Boolean {
+                    if (!ok) Log.w(TAG, "проба: сокет защитить не вышло, замер пойдёт через наш же tun")
+                    return ok
+                }
+            },
+        )
+    }
+
+    /**
      * Поднимает ядро olcRTC, если его включили в настройках.
      *
      * Защита от петли. Ядро само ходит наружу по WebRTC, и если его сокеты попадут
@@ -460,6 +492,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val entries = layout.probeEntries
         if (entries.isEmpty()) {
             Log.w(TAG, "проверка путей ($reason): закреплённых входов нет, мерить нечем")
+            // Мерить нечем — но наборы правил всё равно нужны, и своя дорога у докачки
+            // есть: socks самой комнаты. Раньше сюда доходила проба прямого выхода, и
+            // докачка ехала на ней; выхода этого больше не меряем (см. измеряемые пути
+            // в [AutoModeExits]), и без этого вызова конфиг без селектора остался бы
+            // вообще без наборов.
+            refreshRuleSets("проверка путей: $reason", liveProbePort = null)
             return
         }
         // Реестру нужны имена выходов, чтобы было куда положить замер. Имена обычно
@@ -482,6 +520,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 Log.i(TAG, "путь «$exit»: $measurement")
                 val id = PathRegistry.snapshot.value.byExit(exit)?.def?.id
                 if (id == null) {
+                    // Сюда попадать больше нечему: мерим ровно те выходы, которые реестр
+                    // умеет помнить (см. [AutoModeExits.Layout.measurable]). Проверка
+                    // остаётся сторожем — потраченная наружу проба, которую некуда
+                    // положить, должна быть видна сразу, а не выясняться разбором.
                     Log.w(TAG, "путь «$exit»: реестр не знает такого выхода, замер потерян")
                     continue
                 }
@@ -549,11 +591,22 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * Именно этим отличается от остановки: `stopSelf` убил бы и подписку на смену сети,
      * а тогда возвращение туннеля при уходе из дома пришлось бы чем-то будить.
      *
-     * @return false, если уже погашено — автомату это значит «ничего не делал».
+     * Гасить или нет — решаем по делу, а не по флагу ([TunnelFacts]): пока решал флаг,
+     * любой подъём ядра мимо автомата запирал систему намертво. Флаг говорил «погашено»,
+     * tun при этом висел, и каждый заход автомата упирался в честное «нечего делать».
+     *
+     * @return false, если гасить нечего: и флаг говорит «погашено», и на деле ничего
+     *   не живо. Автомату это значит «ничего не делал».
      */
     private fun suspendTunnel(reason: String): Boolean {
         synchronized(tunnelLock) {
-            if (tunnelSuspended) return false
+            val tunOpen = fileDescriptor != null
+            val roomLive = OlcRtcCore.isRunning()
+            if (!TunnelFacts.suspendNeeded(tunnelSuspended, tunOpen, roomLive)) return false
+            if (tunnelSuspended) {
+                val alive = listOfNotNull("tun".takeIf { tunOpen }, "комната".takeIf { roomLive })
+                Log.w(TAG, "туннель числился погашенным, а живо: ${alive.joinToString(", ")} — гашу по факту")
+            }
             Log.i(TAG, "туннель гасим: $reason")
             // Комната без туннеля бессмысленна: дома обход делает роутер.
             roomWanted = false
@@ -792,6 +845,18 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             return
         }
         lastProfileName = profile.name
+        // Дома ядра нет намеренно: обход делает роутер, туннель на телефоне лишний.
+        // Перечитывание конфига (расписание UpdateProfileWork, обновление подписки,
+        // экран настроек) поднимало ядро обратно мимо автомата и мимо флага. Дальше
+        // автомат считал туннель погашенным, на каждом заходе звал гашение, а то честно
+        // отвечало «уже погашено» и ничего не делало — tun висел до ручного выключения,
+        // и выглядело это как «сам включился и не выключается».
+        // Новый конфиг не теряется: при следующем подъёме restartCore читает файл заново.
+        if (synchronized(tunnelLock) { tunnelSuspended }) {
+            Log.i(TAG, "конфиг перечитан, но мы дома — ядро не поднимаем")
+            fillRuleSetsAtHome(content)
+            return
+        }
         try {
             commandServer.startOrReloadService(
                 effectiveConfig(content),
@@ -853,6 +918,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Автомат снимаем первым: иначе обычное выключение выглядит для него как
         // обстановка, в которой надо срочно что-то поднять.
         AutoMode.stop()
+        // Сервис уходит — его protect(fd) больше ничего не делает, и держать крючок
+        // значит обещать пробам защиту, которой уже нет.
+        ProbeSocket.useProtector(null)
         GlobalScope.launch(Dispatchers.IO) {
             val pfd = fileDescriptor
             if (pfd != null) {
@@ -886,6 +954,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private suspend fun stopAndAlert(type: Alert, message: String? = null) {
         Settings.startedByUser = false
         AutoMode.stop()
+        ProbeSocket.useProtector(null)
         val pfd = fileDescriptor
         if (pfd != null) {
             pfd.close()
@@ -917,6 +986,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     internal fun onStartCommand(): Int {
         if (status.value != Status.Stopped) return Service.START_NOT_STICKY
         status.value = Status.Starting
+        // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
+        // идёт с первого же захода — и защита ей нужна ровно тогда же.
+        installProbeProtector()
 
         if (!receiverRegistered) {
             ContextCompat.registerReceiver(

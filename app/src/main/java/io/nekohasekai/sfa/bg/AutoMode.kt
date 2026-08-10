@@ -12,6 +12,7 @@ import io.nekohasekai.sfa.bg.path.PathId
 import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.bg.path.PathSnapshot
 import io.nekohasekai.sfa.bg.path.PathStatus
+import io.nekohasekai.sfa.bg.path.ProbeSocket
 import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,14 +69,18 @@ import kotlin.random.Random
  * только обстановка устоялась.
  *
  * Почему не жжёт батарею. Ритм зависит от того, где мы стоим: пока ничего не работает —
- * часто, но с растущей паузой; когда встали на рабочий выход — редко; из комнаты назад
- * смотрим совсем лениво (раз в 15 минут), потому что нормальный повод вернуться — это
- * смена сети, а не таймер. Когда сети нет, таймера нет вообще: ждём события.
+ * часто, но с растущей паузой; когда встали на рабочий выход — редко. Когда сети нет,
+ * таймера нет вообще: ждём события. Полные заходы при этом не единственное, что у нас
+ * есть: там, где заход дорог, а вопрос между заходами дёшев, паузу режет одна короткая
+ * проба — из комнаты [peekMain], дома [peekHome].
  *
  * Слежение при погашенном туннеле. Гасится ядро и tun, а сам сервис остаётся жить
  * передним планом — вместе с ним живёт и подписка на смену сети ([DefaultNetworkListener],
  * тот же колбэк, что уже слушает sing-box). Поэтому уход из дома виден бесплатно, и
- * разрешение на VPN второй раз не спрашивается: сервис не умирал.
+ * разрешение на VPN второй раз не спрашивается: сервис не умирал. Но событие приходит
+ * не на всякую беду: ограничение, наступившее на той же сети, системе не видно, пока она
+ * сама не переспросит интернет — замер 10.08.2026 дал 2 минуты 44 секунды «дома» при
+ * мёртвой связи. Это окно и режет [peekHome], см. [HomeWatch].
  */
 object AutoMode {
     private const val TAG = "AutoMode"
@@ -325,6 +330,13 @@ object AutoMode {
     /** Ритм проверок для каждой обстановки. */
     private const val ROUND_SEARCHING_MILLIS = 12_000L
     private const val ROUND_SEARCHING_CAP_MILLIS = 120_000L
+
+    /**
+     * Полный заход дома. Пять минут — и они намеренно не сокращаются: заход дома стоит
+     * четырёх запросов к резолверу и до двух прямых запросов наружу, а вопрос между
+     * заходами стоит одного. Поэтому окно слепоты режется приглядкой ([HomeWatch]),
+     * а не учащением заходов: заходов в час остаётся ровно двенадцать.
+     */
     private const val ROUND_HOME_MILLIS = 5 * 60_000L
     private const val ROUND_MAIN_MILLIS = 5 * 60_000L
 
@@ -788,10 +800,16 @@ object AutoMode {
                 pendingSwitch -> ROUND_SEARCHING_MILLIS
                 else -> delayFor(situation)
             }
-            // Полный ритм комнаты досиживаем не вслепую: между заходами идёт приглядка
-            // за основным каналом. Спешка (серия, набор подтверждений) в этом не нуждается —
+            // Полный ритм комнаты и дома досиживаем не вслепую: между заходами идёт одна
+            // дешёвая проба. Спешка (серия, набор подтверждений) в этом не нуждается —
             // там заход и так близко.
-            if (wait == ROUND_ROOM_MILLIS && situation == Situation.Room) waitInRoom(wait) else waitNext(wait)
+            when {
+                wait == ROUND_ROOM_MILLIS && situation == Situation.Room -> waitInRoom(wait)
+                // Дома проба ловит то, о чём иначе некому сказать: ограничение, наступившее
+                // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
+                wait == ROUND_HOME_MILLIS && situation == Situation.Home -> waitAtHome(wait)
+                else -> waitNext(wait)
+            }
         }
     }
 
@@ -1311,9 +1329,11 @@ object AutoMode {
      * связи (стенд `tools/android/whitelist-on.sh`, 08.08.2026).
      *
      * Проба идёт [HonestProbe.measureDirect]: тот же запрос, что и для остальных путей,
-     * только напрямую — дома посредника нет, туннель погашен. Сокет привязан к физической
-     * сети, поэтому ответ говорит про путь вокруг нас, а не про наш же туннель, даже
-     * если он в этот момент ещё поднят.
+     * только напрямую — дома посредника нет, туннель погашен. Одной привязки сокета к
+     * физической сети для этого мало (правило per-uid для VPN стоит выше неё), поэтому
+     * сокет ещё и защищён от нашего же tun — [ProbeSocket]. Без защиты при поднятом
+     * туннеле проба меряла туннель, то есть подтверждала дом сама себе, и осечка вердикта
+     * становилась незакрывающейся: поднятый туннель не давал ей разойтись.
      */
     private fun homeCarriesTraffic(network: Network): Boolean {
         lastHomeLatencyMs = null
@@ -1584,13 +1604,20 @@ object AutoMode {
         return alive
     }
 
+    /**
+     * Примет ли адрес соединение.
+     *
+     * Сокет уводится мимо нашего же tun ([ProbeSocket]): одна привязка к сети от правила
+     * per-uid не спасает, и при поднятом туннеле «узел отвечает» означало только то, что
+     * узел отвечает через наш собственный туннель.
+     */
     private fun connects(
         network: Network,
         endpoint: AutoModeExits.Endpoint,
         timeoutMillis: Int,
     ): Boolean = runCatching {
         val address = network.getAllByName(endpoint.host).firstOrNull() ?: return false
-        network.socketFactory.createSocket().use { socket ->
+        ProbeSocket.open { network.bindSocket(it) }.use { socket ->
             socket.connect(InetSocketAddress(address, endpoint.port), timeoutMillis)
             true
         }
@@ -1655,6 +1682,72 @@ object AutoMode {
             if (spent < slice - WAKE_SLACK_MILLIS) return
             if (left <= 0) return
             if (peekMain()) return
+        }
+    }
+
+    /**
+     * Приглядка дома: один прямой запрос наружу между полными заходами.
+     *
+     * Дома мы слепы по устройству: туннель погашен, ядра нет, своих исходящих нет — и
+     * ограничению, наступившему на той же сети, не через что о себе заявить. На стенде
+     * 10.08.2026 это стоило 2 минут 44 секунд «дома» при мёртвой связи, причём разбудило
+     * автомат в итоге не наблюдение, а система: она сама сняла с сети признак VALIDATED,
+     * когда её собственная проверка интернета не прошла.
+     *
+     * Спрашиваем ровно то, что в такой сети умирает первым, — проходит ли наружу запрос.
+     * Резолвер для этого не годится, хотя он и дешевле: под ограничением он продолжает
+     * отвечать подменными адресами как ни в чём не бывало, и признак дома остаётся верным.
+     * Почему так и сколько это стоит — [HomeWatch].
+     *
+     * Удачная проба не пропадает: это тот же самый замер пути «дома», что делает полный
+     * заход ([homeCarriesTraffic]), и в реестр он ложится так же.
+     *
+     * @return true — наружу перестало проходить, полный заход нужен немедленно.
+     */
+    private fun peekHome(): Boolean {
+        if (!Settings.autoModeEnabled) return false
+        // Сети не стало — заход разберётся сам, и позовёт его событие от системы.
+        val network = physicalNetwork() ?: return true
+        val measurement = HonestProbe.measureDirect(network, "дома, приглядка")
+        if (!HomeWatch.wake(measurement.live)) {
+            // Замер настоящий и ровно про путь «дома» — терять его незачем: без этой
+            // записи экран все пять минут показывал бы возраст последнего полного захода.
+            PathRegistry.alive(PathId.HOME, measurement.latencyMs)
+            refreshLink()
+            return false
+        }
+        Log.i(TAG, "приглядка дома: наружу не проходит ($measurement) — проверяю обстановку целиком")
+        // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
+        // изменилась так же доказанно, а подтверждений задвижка при этом всё равно
+        // требует — переключение остаётся защищённым от одиночного невезения.
+        burst.restart()
+        return true
+    }
+
+    /**
+     * Ожидание дома: тот же ритм полных заходов, но с дешёвой пробой между ними.
+     *
+     * Устроено так же, как ожидание в комнате: пауза режется на куски случайной длины
+     * ([HomeWatch.slice]), и на границе каждого идёт одна проба. Разбудили раньше
+     * (сменилась сеть, пересобралось ядро) — выходим сразу: заход и так вот-вот будет,
+     * и тратить на пробу лишний запрос незачем.
+     */
+    private fun waitAtHome(total: Long) {
+        var left = total
+        while (active && left > 0) {
+            val slice = HomeWatch.slice(
+                left,
+                Random.nextLong(HomeWatch.MIN_MILLIS, HomeWatch.MAX_MILLIS + 1),
+            )
+            val before = SystemClock.elapsedRealtime()
+            waitNext(slice)
+            val spent = SystemClock.elapsedRealtime() - before
+            left -= spent
+            if (!active) return
+            // Проснулись до срока — это не наш таймер, а событие.
+            if (spent < slice - WAKE_SLACK_MILLIS) return
+            if (left <= 0) return
+            if (peekHome()) return
         }
     }
 
