@@ -310,10 +310,24 @@ jobs:
           rm -f /tmp/local.properties
           test -s app/release.keystore
 
+      - name: Номер сборки — из тега, а не из номера прогона
+        run: |
+          set -e
+          # Номер прогона живёт своей жизнью (перезапуски, отменённые сборки, прогоны
+          # других веток), и 10.08.2026 тег kelevra58 выпустил версию 1.14.54: имя тега
+          # и версия разъехались, а телефон с более высоким номером обновление с сервера
+          # уже не принимал. Берём номер из имени тега; без тега остаётся прогон.
+          n="${GITHUB_REF_NAME#v1.14.0-kelevra}"
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$n" != "$GITHUB_REF_NAME" ] && [ -n "$n" ]; then
+            echo "KELEVRA_BUILD=$n" >> "$GITHUB_ENV"
+            echo "номер сборки из тега: $n"
+          else
+            echo "KELEVRA_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+            echo "тега нет, номер сборки из прогона: $GITHUB_RUN_NUMBER"
+          fi
+
       - name: Build APK
         working-directory: sing-box-for-android
-        env:
-          KELEVRA_BUILD: ${{ github.run_number }}
         run: |
           chmod +x gradlew
           ./gradlew assembleOtherRelease --no-daemon
