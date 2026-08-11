@@ -1091,7 +1091,7 @@ object AutoMode {
                 false
             }
 
-            else -> mainWorks(network, host)
+            else -> mainWorks(network, host, inRoom = gate.current == Situation.Room)
         }
         if (home || main) {
             mainFailures = 0
@@ -1732,8 +1732,17 @@ object AutoMode {
      * Проба идёт общими маршрутами, то есть через тот выход, который выбран прямо сейчас.
      * Значит, спрашивать «жив ли основной» ею можно только когда выбран основной — этим
      * и занимается [probeThroughMain].
+     *
+     * Исключение — когда мы уже стоим в комнате ([inRoom]). Там первая проба перестаёт
+     * быть достаточной: 11.08.2026 Вова просидел в комнате 47 минут, хотя ядро всё это
+     * время видело основной канал живым (166-308 мс, десять замеров подряд), а выбор
+     * выхода за весь день не менялся ни разу — то есть до второй пробы автомат не
+     * доходил вовсе. Молчание одного рукопожатия — слишком слабый довод, чтобы держать
+     * человека на медленном пути: в комнате спрашиваем канал целиком, даже если адрес
+     * узла молчит. Стоит это одну пробу раз в [ROUND_ROOM_MILLIS], и платим мы её
+     * только внутри комнаты.
      */
-    private fun mainWorks(network: Network, host: Host): Boolean {
+    private fun mainWorks(network: Network, host: Host, inRoom: Boolean = false): Boolean {
         lastMainProbe = null
         val endpoints = layout.mainEndpoints
         val portOpen = if (endpoints.isEmpty()) {
@@ -1756,7 +1765,12 @@ object AutoMode {
         // Узел молчит — приглядке есть что искать. Отозвался (или адресов мы не знаем) —
         // искать нечего.
         peekWanted = portOpen == false
-        if (portOpen == false) return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
+        if (portOpen == false && !inRoom) {
+            return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
+        }
+        if (portOpen == false) {
+            Log.i(TAG, "основной канал: адрес узла молчит, но мы в комнате — спрашиваю канал целиком")
+        }
 
         val proxy = layout.localProxy
         val trafficFlows = when {
@@ -1805,10 +1819,14 @@ object AutoMode {
      *   не было (нет локального входа в конфиге или туннель сейчас погашен).
      */
     internal fun mainVerdict(portOpen: Boolean?, trafficFlows: Boolean?): Boolean = when {
-        // Порт молчит — до трафика дело не дойдёт, и честную пробу мы даже не звали.
-        portOpen == false -> false
-        // Честная проба главнее: она видит весь путь, а не только рукопожатие.
+        // Честная проба главнее всего: она видит весь путь, а не только рукопожатие.
+        // Порядок тут важен. Раньше первым стояло «порт молчит — канал мёртв», и вердикт
+        // не менялся, даже если через канал в этот же миг прошёл запрос и вернулся ответ.
+        // Обычно противоречия нет — но именно в комнате мы теперь спрашиваем канал целиком
+        // при молчащем адресе узла, и старый порядок обесценил бы этот вопрос.
         trafficFlows != null -> trafficFlows
+        // Честной пробы не было — остаётся верить рукопожатию.
+        portOpen == false -> false
         // Честной пробы нет — остаётся верить порту, как до правки.
         portOpen != null -> portOpen
         // Про канал не известно ничего. Отказ не выдумываем.
