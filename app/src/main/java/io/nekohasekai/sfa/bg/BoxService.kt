@@ -448,11 +448,23 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         LifelinePatch.log(lifeline)
         result = lifeline.content
 
+        // Стек туннеля и предел ожидания распознавания правим всегда, а не только под
+        // комнатой: и порты трансляции, и бесконечное ожидание первых байт бьют по
+        // любому выходу — в комнате это было просто заметнее.
+        val stack = OlcRtcConfigPatch.tunnelStack(result)
+        OlcRtcConfigPatch.log(stack)
+        result = stack.content
+
+        val sniff = OlcRtcConfigPatch.sniffTimeout(result)
+        OlcRtcConfigPatch.log(sniff)
+        result = sniff.content
+
         if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
             val v4 = OlcRtcConfigPatch.onlyIpv4(result)
             OlcRtcConfigPatch.log(v4)
             result = v4.content
         }
+
 
         if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
             val quic = OlcRtcConfigPatch.addQuicReject(result, OlcRtcParams.socksPort)
