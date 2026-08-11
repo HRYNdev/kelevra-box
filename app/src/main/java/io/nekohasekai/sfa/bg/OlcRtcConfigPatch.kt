@@ -80,6 +80,69 @@ object OlcRtcConfigPatch {
         )
     }
 
+    /**
+     * Пока идём через комнату — весь путь только по IPv4.
+     *
+     * SOCKS-сервер комнаты понимает ровно два вида адреса: IPv4 и доменное имя
+     * (olcrtc, `internal/client/client.go`, `readSocks5Addr`) — IPv6 он отвергает.
+     * Отсюда две правки:
+     *
+     *  1. Подменные адреса раздаём только IPv4. Приложение, которое ходит по адресам
+     *     без имён, иначе получает IPv6 и молча умирает.
+     *  2. У туннеля снимаем адрес IPv6. Замер сокетов телеграма 11.08.2026: он держал
+     *     соединение к своему дата-центру по `2001:67c:4e8::…` на порт 5222 МИМО
+     *     туннеля — пока у туннеля есть адрес IPv6, система считает, что IPv6 живёт
+     *     сам по себе. Без него приложение идёт по IPv4, который комната умеет.
+     *
+     * Распознавание протокола (`sniff`) здесь НЕ трогается, и это важно. 11.08.2026 я
+     * снял его целиком, решив, что ядро ждёт первых байт, — и получил обратное:
+     * из туннеля домен взять стало неоткуда, правило с доменными наборами не
+     * досчитывалось никогда, и соединения зависали навсегда, не дойдя до комнаты
+     * (263 тысячи за день, из них 70 тысяч — лавина повторов телеграма). Трафик через
+     * локальный прокси, где домен известен без распознавания, при этом проходил.
+     */
+    fun onlyIpv4(content: String): Result = runCatching { patchIpv4(content) }.getOrElse {
+        Result(content, "правка про IPv4 не легла (${it.javaClass.simpleName}), конфиг как есть", false)
+    }
+
+    private fun patchIpv4(content: String): Result {
+        val root = JSONObject(content)
+
+        var ranges = 0
+        val servers = root.optJSONObject("dns")?.optJSONArray("servers")
+        for (i in 0 until (servers?.length() ?: 0)) {
+            val server = servers?.optJSONObject(i) ?: continue
+            if (server.optString("type") != "fakeip") continue
+            if (server.has("inet6_range")) {
+                server.remove("inet6_range")
+                ranges++
+            }
+        }
+
+        var addresses = 0
+        val inbounds = root.optJSONArray("inbounds")
+        for (i in 0 until (inbounds?.length() ?: 0)) {
+            val inbound = inbounds?.optJSONObject(i) ?: continue
+            if (inbound.optString("type") != "tun") continue
+            val list = inbound.optJSONArray("address") ?: continue
+            val kept = JSONArray()
+            for (a in 0 until list.length()) {
+                val value = list.optString(a)
+                if (value.contains(':')) addresses++ else kept.put(value)
+            }
+            inbound.put("address", kept)
+        }
+
+        if (ranges == 0 && addresses == 0) {
+            return Result(content, "комната: IPv6 в конфиге и так нет", false)
+        }
+        return Result(
+            root.toString(),
+            "комната: идём только по IPv4 (подменных диапазонов снято $ranges, адресов туннеля $addresses)",
+            true,
+        )
+    }
+
     private fun quicRejectRule(): JSONObject = JSONObject()
         .put("action", "reject")
         .put("network", "udp")
