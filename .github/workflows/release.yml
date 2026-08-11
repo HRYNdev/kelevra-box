@@ -363,13 +363,15 @@ jobs:
           done
 
       - name: Метаданные версии
-        env:
-          BUILD_NUMBER: ${{ github.run_number }}
         run: |
+          # Номер берём ТОТ ЖЕ, что у APK ($KELEVRA_BUILD из имени тега), а не номер
+          # прогона. Пока здесь стоял github.run_number, релиз kelevra67 выкладывал APK
+          # 1.14.67 и файл версии 1.14.59 — приложение сравнивало себя с чужим номером
+          # и обновление не предлагало вовсе (поймано 11.08.2026 на телефоне хозяина).
           # ровно та же формула, что versionCode в app/build.gradle.kts
           VERSION_CODE=$(grep '^VERSION_CODE=' sing-box-for-android/version.properties | cut -d= -f2)
-          CODE=$(( VERSION_CODE * 1000 + BUILD_NUMBER ))
-          echo "{\"version_code\": $CODE, \"version_name\": \"1.14.$BUILD_NUMBER\"}" > kelevra-version.json
+          CODE=$(( VERSION_CODE * 1000 + KELEVRA_BUILD ))
+          echo "{\"version_code\": $CODE, \"version_name\": \"1.14.$KELEVRA_BUILD\"}" > kelevra-version.json
           cat kelevra-version.json
 
       - name: Upload APK
