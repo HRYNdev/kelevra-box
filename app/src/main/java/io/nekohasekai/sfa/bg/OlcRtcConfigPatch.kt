@@ -33,9 +33,6 @@ object OlcRtcConfigPatch {
     /** Стек туннеля без своей таблицы трансляции портов — см. [tunnelStack]. */
     private const val STACK = "gvisor"
 
-    /** Сколько ждём первые байты на распознавании протокола — см. [sniffTimeout]. */
-    private const val SNIFF_TIMEOUT = "300ms"
-
     /** Что получилось: сам конфиг и человекочитаемое объяснение для лога. */
     data class Result(val content: String, val note: String, val patched: Boolean)
 
@@ -131,40 +128,6 @@ object OlcRtcConfigPatch {
      * Правка живёт и в шаблоне на сервере, но профиль у людей закэширован, а обновляется
      * он не сразу. Клиент чинит это у себя, чтобы не ждать.
      */
-    /**
-     * Ограничение ожидания на распознавании протокола.
-     *
-     * Распознаватель ждёт первые байты соединения, чтобы вытащить имя. Приложения,
-     * которые молчат до ответа сервера, ждут вместе с ним — и если предела нет, ждут
-     * бесконечно. Телеграм ведёт себя ровно так: 11.08.2026 он висел на «Соединение…»
-     * и с комнатой, и через основной канал, а дома с погашенным туннелем работал.
-     * Отсюда же вчерашнее наблюдение, ради которого я снял распознавание целиком:
-     * без него телеграм оживал, но ломались доменные правила — имя брать стало неоткуда.
-     *
-     * Верно не «снять», а «не ждать вечно»: за [SNIFF_TIMEOUT] TLS и HTTP успевают
-     * представиться всегда, а молчащее соединение уходит дальше по адресу.
-     */
-    fun sniffTimeout(content: String): Result = runCatching {
-        val root = JSONObject(content)
-        val rules = root.optJSONObject("route")?.optJSONArray("rules")
-            ?: return@runCatching Result(content, "в конфиге нет правил маршрутизации", false)
-        var changed = 0
-        for (i in 0 until rules.length()) {
-            val rule = rules.optJSONObject(i) ?: continue
-            if (rule.optString("action") != "sniff") continue
-            if (rule.has("timeout")) continue
-            rule.put("timeout", SNIFF_TIMEOUT)
-            changed++
-        }
-        if (changed == 0) {
-            Result(content, "распознавание протокола и так с пределом ожидания", false)
-        } else {
-            Result(root.toString(), "распознавание протокола ждёт не дольше $SNIFF_TIMEOUT (правил: $changed)", true)
-        }
-    }.getOrElse {
-        Result(content, "предел ожидания распознавания не встал (${it.javaClass.simpleName}), конфиг как есть", false)
-    }
-
     fun tunnelStack(content: String): Result = runCatching {
         val root = JSONObject(content)
         val inbounds = root.optJSONArray("inbounds") ?: return@runCatching Result(content, "в конфиге нет входов", false)

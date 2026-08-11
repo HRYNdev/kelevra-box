@@ -7,18 +7,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Проверки двух правок туннеля, найденных замерами на телефоне 11.08.2026.
+ * Проверки правки стека туннеля, найденной замерами на телефоне 11.08.2026.
  *
- * Обе лечат одну и ту же стену: соединения из туннеля не доходят до выхода вообще,
- * и в журнале у них есть только строка «нашёл приложение». Первая причина — своя
- * таблица трансляции портов у стека `mixed` (`NAT port space exhausted`, 220 раз
- * за минуту), вторая — ожидание первых байт без предела у распознавания протокола.
+ * Стена выглядела так: соединения из туннеля не доходят до выхода вообще, и в журнале
+ * у них есть только строка «нашёл приложение». Причина — своя таблица трансляции портов
+ * у стека `mixed`: `ipv4: tcp: NAT port space exhausted`, 220 раз за минуту. Запись в ней
+ * освобождается только по простою (пять минут), закрытие соединения её не отдаёт, а при
+ * переполнении пакет молча выбрасывается — приложение отказа не получает и висит.
  */
 class OlcRtcTunnelPatchTest {
 
-    private fun config(stack: String = "mixed", sniffTimeout: String? = null): String {
+    private fun config(stack: String = "mixed"): String {
         val sniff = JSONObject().put("action", "sniff")
-        if (sniffTimeout != null) sniff.put("timeout", sniffTimeout)
         return JSONObject(
             """
             {
@@ -62,42 +62,11 @@ class OlcRtcTunnelPatchTest {
         assertFalse(result.patched)
     }
 
-    // ------------------------------------------------- предел ожидания распознавания
-
-    @Test
-    fun `распознаванию протокола ставится предел ожидания`() {
-        val result = OlcRtcConfigPatch.sniffTimeout(config())
-        assertTrue(result.patched)
-
-        val rule = JSONObject(result.content).getJSONObject("route").getJSONArray("rules").getJSONObject(0)
-        assertEquals("sniff", rule.getString("action"))
-        assertEquals("300ms", rule.getString("timeout"))
-    }
-
-    @Test
-    fun `чужой предел ожидания не перебиваем`() {
-        val result = OlcRtcConfigPatch.sniffTimeout(config(sniffTimeout = "1s"))
-
-        assertFalse(result.patched)
-        val rule = JSONObject(result.content).getJSONObject("route").getJSONArray("rules").getJSONObject(0)
-        assertEquals("1s", rule.getString("timeout"))
-    }
-
-    @Test
-    fun `само распознавание остаётся на месте`() {
-        val result = OlcRtcConfigPatch.sniffTimeout(config())
-
-        val rules = JSONObject(result.content).getJSONObject("route").getJSONArray("rules")
-        val sniff = (0 until rules.length()).count { rules.getJSONObject(it).optString("action") == "sniff" }
-        assertEquals("правило распознавания снимать нельзя — из туннеля домен брать больше неоткуда", 1, sniff)
-    }
-
     // ------------------------------------------------------------------------ отказы
 
     @Test
     fun `испорченный конфиг не роняет старт`() {
         assertFalse(OlcRtcConfigPatch.tunnelStack("не json").patched)
-        assertFalse(OlcRtcConfigPatch.sniffTimeout("не json").patched)
         assertEquals("не json", OlcRtcConfigPatch.tunnelStack("не json").content)
     }
 }
