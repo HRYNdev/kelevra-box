@@ -718,7 +718,28 @@ object AutoMode {
         if (!active) return
         Log.i(TAG, "ядро пересобрано ($reason) — выбор сбрасываю, иду на заход не дожидаясь ритма")
         selected = null
+        // И перечитываем раскладку. Проверочные входы ([ProbeInboundPatch]) занимают
+        // СВОБОДНЫЕ порты, а свободные они каждый раз разные: после пересборки старые
+        // номера ведут в никуда. Раньше раскладка читалась только на старте автомата,
+        // и проба честно стучалась в порт из прошлой жизни ядра — на телефоне это
+        // выглядело как «Не отвечает» при живом канале (11.08.2026: путь «Нидерланды»
+        // отвечал за 336 мс через свежий вход, а «основной канал» молчал на старом).
+        refreshLayout(reason)
         synchronized(lock) { lock.notifyAll() }
+    }
+
+    /** Перечитывает раскладку выходов и входов из конфига, который сейчас в ядре. */
+    private fun refreshLayout(reason: String) {
+        val content = runCatching { host?.profileConfig() }.getOrNull() ?: return
+        val fresh = runCatching { AutoModeExits.parse(content, OlcRtcParams.socksPort) }.getOrNull() ?: return
+        if (fresh.localProxy == layout.localProxy && fresh.mainEndpoints == layout.mainEndpoints) return
+        layout = fresh
+        PathRegistry.bindExits(main = fresh.main, room = fresh.room)
+        Log.i(
+            TAG,
+            "раскладка перечитана ($reason): вход основного ${fresh.localProxy?.port ?: "нет"}, " +
+                "адресов узла ${fresh.mainEndpoints.size}",
+        )
     }
 
     /** Сеть сменилась — ручной выбор больше ничего не значит, автомат снова сам. */
