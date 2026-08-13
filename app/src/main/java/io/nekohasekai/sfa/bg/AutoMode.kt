@@ -359,6 +359,9 @@ object AutoMode {
     private const val ROUND_SEARCHING_MILLIS = 12_000L
     private const val ROUND_SEARCHING_CAP_MILLIS = 120_000L
 
+    /** Страховочный тик, когда сети нет: чтобы ложный вердикт не усыплял автомат навсегда. */
+    private const val ROUND_NO_NETWORK_MILLIS = 300_000L
+
     /**
      * Полный заход дома. Пять минут — и они намеренно не сокращаются: заход дома стоит
      * четырёх запросов к резолверу и до двух прямых запросов наружу, а вопрос между
@@ -575,6 +578,18 @@ object AutoMode {
     @Volatile
     private var holdNetwork: Network? = null
 
+    /**
+     * Отпечаток той же сети ([networkKey]): транспорт плюс её резолверы.
+     *
+     * Объекта `Network` для сравнения не хватает: система выдаёт новый объект на каждое
+     * переподключение к одному и тому же вайфаю (и тогда выбор отпускался зря), а на
+     * мобильной, наоборот, держит один и тот же объект сутками — и выбор не отпускался
+     * никогда, даже когда человек уезжал в другую сеть того же оператора. Замер
+     * 12.08.2026: на МТС объект сети не сменился за весь день.
+     */
+    @Volatile
+    private var holdKey: String? = null
+
     /** Последняя пробная попытка поднять комнату — чтобы не долбить её каждым заходом. */
     private var roomTriedAt = 0L
     private var roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
@@ -628,6 +643,7 @@ object AutoMode {
             PathRegistry.bindExits(main = layout.main, room = layout.room)
             link = Link.Unknown
             holdNetwork = physicalNetwork()
+            holdKey = holdNetwork?.let { networkKey(it) }
             publish(Settings.autoModeEnabled, initial)
             active = true
             thread = Thread(::loop, "automode").apply {
@@ -698,7 +714,11 @@ object AutoMode {
         // как его сделали.
         if (!Settings.autoModeEnabled) {
             val now = physicalNetwork()
-            if (now != null && now != holdNetwork) releaseManualHold(now)
+            val nowKey = now?.let { networkKey(it) }
+            // Сеть считаем сменившейся по отпечатку, а не по объекту: см. [holdKey].
+            if (now != null && nowKey != null && holdKey != null && nowKey != holdKey) {
+                releaseManualHold(now)
+            }
         }
         synchronized(lock) { lock.notifyAll() }
     }
@@ -746,6 +766,7 @@ object AutoMode {
     private fun releaseManualHold(network: Network?) {
         Log.i(TAG, "сеть сменилась — ручной выбор «${manualExit ?: "нет"}» отпущен, автомат снова сам")
         holdNetwork = network
+        holdKey = network?.let { networkKey(it) }
         manualExit = null
         Settings.manualExitName = ""
         Settings.autoModeManualRoom = false
@@ -796,7 +817,7 @@ object AutoMode {
      * должен пережить перезапуск сервиса — иначе после перезагрузки телефона выбранная
      * комната оказалась бы выбранной, но не поднятой.
      */
-    fun chooseManually(tag: String) {
+    fun chooseManually(tag: String): Boolean {
         manualExit = tag
         Settings.manualExitName = tag
         // Экран сразу применяет выбор в ядре, поэтому запоминаем его и мы: иначе автомат
@@ -821,6 +842,7 @@ object AutoMode {
         Settings.autoModeEnabled = false
         // Сеть, под которую сделан выбор. Сменится — автомат вернётся сам.
         holdNetwork = physicalNetwork()
+        holdKey = holdNetwork?.let { networkKey(it) }
         // Прошлые замеры делались под выбор автомата: держать их и показывать как правду
         // про выход, который человек выбрал сам, значит врать.
         PathRegistry.reset()
@@ -835,6 +857,21 @@ object AutoMode {
                 "держим до смены сети",
         )
         synchronized(lock) { lock.notifyAll() }
+        // Применять ли выбор в ядре немедленно. Для обычного выхода — да. Для комнаты —
+        // только если она уже стоит: её ядро поднимается в своём потоке и на живом
+        // телефоне это заняло 103 секунды (замер 12.08.2026). Пока socks комнаты не
+        // слушает, переставленный селектор отправляет туда весь проксируемый трафик, и он
+        // получает мгновенный отказ `connection refused`, хотя круг уже пишет
+        // «Подключено». Выбор применится сам, когда комната встанет: подъём заканчивается
+        // пересборкой ядра и вызовом [onCoreRebuilt], а заход в ручном режиме возвращает
+        // выбор человека каждым кругом.
+        val roomChosen = Settings.autoModeManualRoom
+        val roomUp = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
+        if (roomChosen && !roomUp) {
+            Log.i(TAG, "комната ещё не стоит — выбор применю, когда поднимется")
+            return false
+        }
+        return true
     }
 
     /**
@@ -927,6 +964,14 @@ object AutoMode {
                 // Пересборка ядра сбрасывает выбор в селекторе на первый пункт конфига —
                 // возвращаем то, что выбрал человек.
                 selected = null
+                // Гашение комнаты тоже пересобирает ядро — тем же движением, что и на
+                // старте сервиса, входы для пробы получают новые свободные порты
+                // ([ProbeInboundPatch]). Раскладку раньше здесь не перечитывали: только
+                // подъём комнаты и возврат из дома звали [onCoreRebuilt]. Экран после
+                // возврата из комнаты мерил основной канал по номеру входа из прошлой
+                // жизни ядра — вход никто не слушал, и живой канал висел «Не отвечает»
+                // до следующего повода перечитать раскладку (поймано 13.08.2026).
+                refreshLayout("комната переключена вручную (комната: $wantRoom)")
             }
             // Выбор возвращаем каждым заходом, а не только когда трогали комнату. На старте
             // сервиса комнату поднимает уже BoxService, setRoomWanted отвечает «ничего не
@@ -1285,6 +1330,20 @@ object AutoMode {
                 ) {
                     selected = null
                 }
+                // Пока ищем, выход не трогали вовсе, и селектор оставался на том, что стоит
+                // в конфиге первым, то есть на основном канале — даже когда комната УЖЕ
+                // поднялась и везёт. Задвижке нужно набрать подтверждения, и всё это время
+                // трафик уходил в мёртвый узел. Если комната готова, а канала нет,
+                // переключаем сразу: хуже точно не будет, а решение задвижки останется
+                // за ней.
+                if (OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()) {
+                    layout.room?.let { room ->
+                        if (selected != room) {
+                            Log.i(TAG, "ищу путь, но комната уже стоит — иду ей, не дожидаясь подтверждений")
+                            choose(host, room)
+                        }
+                    }
+                }
             }
 
             // Сети нет и обстановка неизвестна: не поднимаем ничего. Комнату при этом
@@ -1302,6 +1361,17 @@ object AutoMode {
             .getOrElse {
                 Log.w(TAG, "комнату переключить не вышло ($reason): ${it.message}")
                 RoomAck.Failed
+            }
+            .also {
+                // `Changed` тут бывает только с одной стороны — гашением комнаты
+                // (подъём всегда уходит в свой поток и отвечает `Raising`, см.
+                // [RoomAck]). Пересборка ядра выдаёт входу пробы новый свободный порт
+                // ([ProbeInboundPatch]), а раскладку до сих пор перечитывали только на
+                // старте сервиса и на возврате из дома ([onCoreRebuilt]). Круг после
+                // выхода из комнаты на основной канал стучался в порт из прошлой жизни
+                // ядра, получал молчание и писал «Не отвечает» на живом канале, пока
+                // раскладку не обновлял какой-нибудь другой повод (поймано 13.08.2026).
+                if (it.changed) refreshLayout(reason)
             }
 
     /** Какой выход соответствует обстановке. Нужен, когда [selected] стёрт пересборкой ядра. */
@@ -1327,8 +1397,12 @@ object AutoMode {
         Situation.Home -> ROUND_HOME_MILLIS
         Situation.Main -> ROUND_MAIN_MILLIS
         Situation.Room -> ROUND_ROOM_MILLIS
-        // Сети нет — таймера нет вообще, ждём события от системы.
-        Situation.NoNetwork -> Long.MAX_VALUE
+        // Сети нет — работы для нас нет, но и спать навсегда нельзя. Раньше здесь стояло
+        // «ждём только события от системы» (`Long.MAX_VALUE` = `wait(0)`), а вердикт «сети
+        // нет» принимается по ОДНОМУ наблюдению. Ошиблись один раз — и разбудить нас может
+        // только смена сети, которой в этой же сети не будет. Страховочный тик стоит одну
+        // дешёвую проверку в пять минут и снимает залипание насовсем.
+        Situation.NoNetwork -> ROUND_NO_NETWORK_MILLIS
         Situation.Searching, Situation.Unknown -> {
             searchingRounds++
             val grown = ROUND_SEARCHING_MILLIS shl (searchingRounds - 1).coerceIn(0, 5)
@@ -1861,9 +1935,14 @@ object AutoMode {
      * стоим на основном канале, это ровно то, что нужно. Пока стоим в комнате — надо
      * на время пробы переставить селектор на основной и вернуть обратно, если он не ожил.
      *
-     * Цена перестановки маленькая и платится редко: до неё дело доходит только когда порт
-     * узла уже отвечает (при белом списке не отвечает никогда), а существующие соединения
-     * селектор не рвёт — на другой выход уходят только новые.
+     * Но переставлять надо только тогда, когда иначе путь не измерить. У основного канала
+     * есть свой закреплённый вход ([AutoModeExits.Layout.mainPinned]), и через него проба
+     * идёт мимо селектора. Раньше перестановка делалась всегда: у боевого селектора стоит
+     * `interrupt_exist_connections: true`, поэтому каждая проба из комнаты рвала ВСЕ живые
+     * соединения, и дважды — туда и обратно. При ритме заходов в комнате раз в три минуты
+     * это давало два разрыва всего живого каждые три минуты. Комментарий на этом месте
+     * раньше утверждал обратное («существующие соединения селектор не рвёт») и потому
+     * дефект жил.
      */
     private fun probeThroughMain(host: Host, proxy: AutoModeExits.Endpoint): Boolean {
         val group = layout.chooser
@@ -1872,7 +1951,7 @@ object AutoMode {
         // Куда вернуть выбор, если основной так и не ожил. null — возвращать некуда:
         // либо переключать нечем, либо мы и так стоим на основном.
         var restore: String? = null
-        if (group != null && main != null && selected != main) {
+        if (group != null && main != null && selected != main && !layout.mainPinned) {
             // Пересборка ядра (её делает подъём комнаты) стирает [selected], и тогда
             // возвращать было некуда: селектор оставался на мёртвом основном канале,
             // хотя стояли мы в комнате. Знать, где стоим, можно и без [selected] —
