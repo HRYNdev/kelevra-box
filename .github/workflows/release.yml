@@ -18,6 +18,12 @@ on:
   # где поведение GitHub не подтверждено документацией, а ценой ошибки был бы тег, который
   # вообще не собирает релиз. Job release при вызове не запускается — см. его if.
   workflow_call:
+    inputs:
+      core_only:
+        description: "Только прогрев ядра: APK не собирать"
+        type: boolean
+        required: false
+        default: false
   workflow_dispatch:
     inputs:
       core_ref:
@@ -272,7 +278,10 @@ jobs:
     # legacy-ядро может не собраться (API 21 старше того, что ждёт olcrtc) — это не повод
     # отменять релиз. Отсутствие основного ядра ловится ниже проверкой libbox.aar.
     # Пуш в dev — это прогрев кеша ядра, APK там собирать незачем.
-    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
+    # `core_only` пришёл из warm-core: при РУЧНОМ прогреве event_name здесь тоже
+    # `workflow_dispatch`, и без этого флага job стартовал и падал на пустых секретах
+    # подписи (секреты в вызванный сценарий не наследуются). Поймано 13.08.2026.
+    if: ${{ !cancelled() && !inputs.core_only && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
