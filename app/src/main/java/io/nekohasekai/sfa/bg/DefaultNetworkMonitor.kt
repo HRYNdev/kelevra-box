@@ -17,7 +17,15 @@ object DefaultNetworkMonitor {
             checkDefaultInterfaceUpdate(it)
         }
         defaultNetwork = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Application.connectivity.activeNetwork
+            // Только не-VPN сеть. Слушатель ниже отдаёт именно такие
+            // (`NetworkRequest` по умолчанию требует `NOT_VPN`), а этот прямой вопрос
+            // системе на старте мог вернуть наш собственный tun — и тогда ядру называют
+            // интерфейсом по умолчанию его же туннель. В конфиге при этом стоит
+            // `override_android_vpn: true`, то есть штатной защиты от петли нет.
+            Application.connectivity.activeNetwork?.takeIf { network ->
+                Application.connectivity.getNetworkCapabilities(network)
+                    ?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) != true
+            }
         } else {
             DefaultNetworkListener.get()
         }
@@ -57,6 +65,11 @@ object DefaultNetworkMonitor {
                     continue
                 }
                 listener.updateDefaultInterface(linkProperties.interfaceName, interfaceIndex, false, false)
+                // Цикл был нужен, чтобы дождаться готовности свойств сети, а не чтобы
+                // повторять само сообщение. Без выхода ядро получало «интерфейс сменился»
+                // десять раз на каждое шевеление соты, и каждое такое сообщение запускает
+                // полную перепроверку всех узлов группы (таймаут узла до 15 с).
+                break
             }
         } else {
             listener.updateDefaultInterface("", -1, false, false)

@@ -395,8 +395,9 @@ fun HomeScreen(
                             // передумает, и человек увидит, что его выбор не держится.
                             // Он же поднимает комнату, если выбрали именно её: ядро
                             // olcRTC больше не висит всегда.
-                            AutoMode.chooseManually(ch.name)
-                            onSelectChannel(ch.name)
+                            // Выбор комнаты применяется в ядре не сразу, а когда она встанет,
+                            // иначе трафик уходит в неслушающий socks — см. chooseManually.
+                            if (AutoMode.chooseManually(ch.name)) onSelectChannel(ch.name)
                             showExits = false
                         },
                     )

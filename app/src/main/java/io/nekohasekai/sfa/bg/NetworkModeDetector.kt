@@ -159,7 +159,18 @@ object NetworkModeDetector {
     ) {
         companion object {
             val DEFAULT = Targets(
-                unlisted = Endpoint(literals = listOf("77.239.102.44"), port = 443),
+                // Три независимые точки, а не только свой VPS: вердикт «белый список»
+                // выносится лишь когда молчат все. Проверено по списку оператора
+                // (`tools/android/whitelist-data/ipwhitelist-*.txt`, снят 08.08.2026):
+                // 8.8.8.8 и 9.9.9.9 в белом списке ОТСУТСТВУЮТ, то есть под фильтром
+                // молчат, а в обычной сети принимают 443 (замер с телефона 12.08.2026:
+                // 302 и 505 соответственно). А вот 1.1.1.1 в список оператора ВХОДИТ,
+                // поэтому в качестве неразрешённой точки он не годится.
+                unlisted =
+                    Endpoint(
+                        literals = listOf("77.239.102.44", "8.8.8.8", "9.9.9.9"),
+                        port = 443,
+                    ),
                 allowed =
                     Endpoint(
                         host = "ya.ru",
@@ -318,7 +329,7 @@ object NetworkModeDetector {
 
             // Проба 1: TCP к неразрешённому адресу. Самая дешёвая и самая решающая.
             // Литералом, без резолвера — DNS не должен влиять на вердикт о белом списке.
-            val tcp = openTcp(network, targets.unlisted)
+            val tcp = openTcp(network, targets.unlisted, requireAllSilent = true)
             owned = tcp.socket
             signals = signals.copy(tcpUnlisted = tcp.outcome)
 
@@ -451,10 +462,25 @@ object NetworkModeDetector {
 
     private class Opened(val outcome: ProbeOutcome, val socket: Socket?)
 
-    private fun openTcp(network: Network, endpoint: Endpoint): Opened {
-        val addresses = resolve(network, endpoint)
+    private fun openTcp(
+        network: Network,
+        endpoint: Endpoint,
+        /**
+         * Требовать, чтобы молчали ВСЕ адреса, прежде чем считать тишину признаком.
+         *
+         * Для контроля и канарейки достаточно первого молчания: там тишина и есть
+         * искомое. Для неразрешённого адреса это неверно: одна молчащая точка не
+         * отличает «в сети фильтр по адресам» от «именно эта точка недоступна». Пока
+         * точка была одна, и та наш собственный VPS, любое точечное придушивание
+         * нашего узла читалось как белый список, и телефон уходил в комнату, погасив
+         * рабочий канал.
+         */
+        requireAllSilent: Boolean = false,
+    ): Opened {
+        val addresses = resolve(network, endpoint, if (requireAllSilent) MAX_UNLISTED_ADDRESSES else MAX_ADDRESSES)
         if (addresses.isEmpty()) return Opened(ProbeOutcome.Failed, null)
         var outcome = ProbeOutcome.Failed
+        var silent = 0
         for (address in addresses) {
             // Защита от своего tun ставится внутри и до привязки к сети: соединять
             // защищённый сокет можно, защищать соединённый — уже нет.
@@ -469,25 +495,37 @@ object NetworkModeDetector {
                 outcome = ProbeFailure.onConnect(error)
                 // Тишина — уже готовый признак. Перебирать остальные адреса значит
                 // слать лишние SYN туда, где нам молчат.
-                if (outcome == ProbeOutcome.Silence) return Opened(outcome, null)
+                if (outcome == ProbeOutcome.Silence) {
+                    if (!requireAllSilent) return Opened(outcome, null)
+                    silent++
+                }
             }
+        }
+        // Молчали не все — значит это не сеть с фильтром по адресам, а отдельная точка.
+        // Отдаём наверх последний не-тихий исход, чтобы вердикт не встал на тишине.
+        if (requireAllSilent && silent in 1 until addresses.size) {
+            Log.i(TAG, "неразрешённые адреса: молчат $silent из ${addresses.size} — это не белый список")
+            return Opened(ProbeOutcome.Unreachable, null)
         }
         return Opened(outcome, null)
     }
 
     /** Литералы — первыми и без резолвера. Имя — только если литералов нет. */
-    private fun resolve(network: Network, endpoint: Endpoint): List<InetAddress> {
+    private fun resolve(network: Network, endpoint: Endpoint, limit: Int = MAX_ADDRESSES): List<InetAddress> {
         val literals = endpoint.literals.mapNotNull {
             runCatching { InetAddress.getByName(it) }.getOrNull()
         }
-        if (literals.isNotEmpty()) return literals.take(MAX_ADDRESSES)
+        if (literals.isNotEmpty()) return literals.take(limit)
         if (endpoint.host.isBlank()) return emptyList()
         return runCatching { network.getAllByName(endpoint.host).toList() }
             .getOrElse { emptyList() }
-            .take(MAX_ADDRESSES)
+            .take(limit)
     }
 
     private const val MAX_ADDRESSES = 2
+
+    /** Неразрешённых точек три: вердикт о белом списке не должен зависеть от одной. */
+    private const val MAX_UNLISTED_ADDRESSES = 3
 
     private class Handshake(val outcome: ProbeOutcome, val socket: SSLSocket?)
 

@@ -684,6 +684,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * Пересобирает ядро с текущим конфигом. В отличие от [serviceReload0] не роняет
      * сервис при неудаче: сюда приходят из автомата, где неудача — это просто «ещё раз
      * через минуту», а не повод выключить всё.
+     *
+     * ПРО УТЕЧКУ tun. Здесь её нет и лечить её отсюда нечем — проверено замерами
+     * 13.08.2026, см. [VPNService.awaitOldTunGone]. Порядок закрытия тут уже верный:
+     * своя копия дескриптора снимается до того, как ядро откроет новый интерфейс, а свою
+     * копию (`dup`) нативная сторона закрывает сама, гася прежний экземпляр внутри
+     * [io.nekohasekai.libbox.CommandServer.startOrReloadService]. Отдельное «полное
+     * закрытие» перед пересборкой ([CommandServer.closeService] на пути гашения комнаты)
+     * пробовали — стало ХУЖЕ: 3 утёкших интерфейса из 6 переходов против 1 из 6 без него,
+     * поэтому его тут нет.
      */
     private fun restartCore() {
         val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) }
@@ -691,6 +700,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val content = File(profile.typed.path).readText()
         if (content.isBlank()) error("конфиг пуст")
         lastProfileName = profile.name
+        // Свою копию дескриптора снимаем ДО того, как ядро откроет новый интерфейс.
+        fileDescriptor?.let { old ->
+            val closed = runCatching { old.close() }.isSuccess
+            Log.i(TAG, "пересборка ядра: прежний tun отпущен (закрыт: $closed)")
+        }
+        fileDescriptor = null
         commandServer.startOrReloadService(
             effectiveConfig(content),
             OverrideOptions().apply {
