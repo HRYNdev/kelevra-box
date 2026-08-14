@@ -91,6 +91,9 @@ object SettingsKey {
     /** Имя выхода, выбранного руками: выбор должен пережить выключенную сеть и перезапуск. */
     const val AUTO_MODE_MANUAL_EXIT = "auto_mode_manual_exit"
 
+    /** Номер жалобы, ответ на которую человек уже прочитал: показывать его снова незачем. */
+    const val COMPLAINT_REPLY_SEEN = "complaint_reply_seen"
+
     // cache
     const val STARTED_BY_USER = "started_by_user"
     const val CACHED_UPDATE_INFO = "cached_update_info"
