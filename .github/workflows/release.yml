@@ -31,15 +31,15 @@ on:
         required: false
         default: "v1.14.0-beta.4"
       olcrtc_ref:
-        description: "Ветка/тег olcrtc"
+        description: "Ветка/тег/SHA olcrtc"
         required: false
-        default: "master"
+        default: "513be68c0056eb720a0151d36f662d75cbe8f437"
 
 env:
   NDK_VERSION: "28.0.13004108"
   CORE_REPO: "SagerNet/sing-box"
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
-  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'master' }}
+  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || '513be68c0056eb720a0151d36f662d75cbe8f437' }}
 
 jobs:
   # Ядро для обоих флейворов приложения: other -> libbox.aar, otherLegacy -> libbox-legacy.aar.
@@ -71,7 +71,7 @@ jobs:
           path: sing-box-for-android
           submodules: recursive
 
-      # olcrtc берётся по ПЛАВАЮЩЕЙ ветке (master), а в ключе кеша стоит её имя, а не
+      # olcrtc берётся по ПРИШПИЛЕННОМУ коммиту (см. OLCRTC_REF), а в ключе кеша стоит ref, а не
       # содержимое: пока апстрим двигался, а кеш промахивался, это не было видно, но при
       # попадании релиз молча собрался бы из ядра, снятого с прошлого состояния master.
       # Поэтому в ключ идёт SHA апстрима; ls-remote стоит полсекунды и клона не требует.
@@ -79,6 +79,11 @@ jobs:
         id: olcrtc-sha
         run: |
           SHA=$(git ls-remote https://github.com/openlibrecommunity/olcrtc "$OLCRTC_REF" | cut -f1 | head -1)
+          # ref может быть уже полным SHA коммита: ls-remote отдаёт только имена ссылок
+          # и на такой ref молчит. Это не ошибка — берём его как есть.
+          if [ -z "$SHA" ] && printf '%s' "$OLCRTC_REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            SHA="$OLCRTC_REF"
+          fi
           test -n "$SHA" || { echo "не удалось узнать SHA olcrtc для ref '$OLCRTC_REF'"; exit 1; }
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "olcrtc $OLCRTC_REF = $SHA"
@@ -120,8 +125,11 @@ jobs:
       # Без этого патча datachannel через WbStream не поднимается вообще: ответ сервера
       # на рукопожатие теряется, потому что участник LiveKit начинает получать данные
       # не сразу после входа в комнату. Разбор и замеры → core-olcrtc/README.md.
-      # Патч рассчитан на 513be68; если апстрим уедет и он перестанет ложиться — сборка
-      # падает намеренно, чтобы ядро без datachannel не уехало в релиз незамеченным.
+      # Патч рассчитан на 513be68, и OLCRTC_REF теперь пришпилен ровно к нему: апстрим
+      # 11.08 переписал рукопожатие (ProtoVersion 1->3, challenge/response) и клиента
+      # ("replace mobile singleton"), после чего заплатка перестала ложиться и прогрев
+      # упал 14.08 00:59. Поднимать ref — только вместе с переносом apply.py на новый
+      # протокол; сборка по-прежнему падает намеренно, если патч не лёг.
       - name: Патч olcrtc (рабочий datachannel)
         if: steps.core-cache.outputs.cache-hit != 'true'
         run: |
