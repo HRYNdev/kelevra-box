@@ -40,7 +40,8 @@ env:
   CORE_REPO: "SagerNet/sing-box"
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
   # Свой форк, а не апстрим: наши правки лежат в нём коммитами на ветке kelevra
-  # (база 513be68 = апстрим от 10.08). Чужой master уронил ночной прогрев 14.08,
+  # (база 3339cd36 = апстрим от 11.08, из него собраны релизы kelevra90/92/93 в бою).
+  # Чужой master уронил ночной прогрев 14.08,
   # переписав протокол; из форка апстрим до сборки не дотягивается вообще.
   OLCRTC_REPO: "HRYNdev/olcrtc"
   OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'kelevra' }}
