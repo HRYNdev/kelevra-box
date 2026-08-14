@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.bg.AutoMode
+import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.bg.path.PathId
 import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.bg.path.PathStatus
@@ -36,6 +37,7 @@ import io.nekohasekai.sfa.bg.path.PathWords
 import io.nekohasekai.sfa.compose.theme.DialState
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KBadge
+import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDial
 import io.nekohasekai.sfa.compose.theme.KDim
@@ -125,6 +127,9 @@ fun HomeScreen(
     // Сводку держит общий объект: её же обновляет кнопка в расширенных, и карточка
     // должна показать новое сразу, без перезахода в приложение.
     val subscription by SubscriptionRefresh.info.collectAsState()
+    // Какой ответ на жалобу уже прочитан. В памяти экрана — чтобы карточка исчезла по
+    // нажатию сразу, на диске — чтобы не появилась снова после перезахода.
+    var replySeen by remember { mutableStateOf(Settings.complaintReplySeen) }
     val auto by AutoMode.state.collectAsState()
     // Что известно про каждый путь. Экран больше ничего не достраивает сам: и круг,
     // и список выходов пересказывают этот снимок, а не собственную версию правды.
@@ -322,6 +327,35 @@ fun HomeScreen(
             }
 
             val sub = subscription
+            // Ответ на жалобу. Раньше жалоба уходила в пустоту: человек писал и больше
+            // ничего не узнавал — а половина жалоб это вопрос, а не сообщение.
+            val answer = sub?.reply
+            if (answer != null && replySeen != answer.id.toString()) {
+                KCard {
+                    KRowItem(
+                        label = "Ответ на вашу жалобу",
+                        title = answer.about.take(64).ifBlank { "Жалоба №${answer.id}" },
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = answer.text,
+                        fontFamily = Montserrat,
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp,
+                        color = colors.Text,
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    KButton(
+                        text = "Понятно",
+                        ghost = true,
+                        onClick = {
+                            Settings.complaintReplySeen = answer.id.toString()
+                            replySeen = answer.id.toString()
+                        },
+                    )
+                }
+                Spacer(Modifier.height(KDim.Gap))
+            }
             if (sub != null) {
                 KCard {
                     // имя аккаунта из панели человеку ничего не говорит: показываем состояние

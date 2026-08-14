@@ -25,6 +25,8 @@ data class SubscriptionInfo(
     val bypassPackages: List<String> = emptyList(),
     /** параметры комнаты olcRTC, если сеть их раздаёт; токен внутри — только владельцу кода */
     val olcrtc: JSONObject? = null,
+    /** ответ на жалобу, отправленную с этого устройства; null — отвечать нечего */
+    val reply: ComplaintReply? = null,
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -39,6 +41,21 @@ data class SubscriptionInfo(
             return parts.joinToString(" · ")
         }
 }
+
+/**
+ * Ответ на жалобу.
+ *
+ * Жалоба уходила в пустоту: человек писал, и всё. Ответ едет обратно тем же путём,
+ * которым и так приходит сводка о подписке, и привязан к устройству, а не к коду —
+ * пожаловаться можно и до подключения.
+ */
+data class ComplaintReply(
+    /** номер жалобы: по нему помним, что этот ответ уже читали */
+    val id: Int,
+    val text: String,
+    /** первые строки самой жалобы — чтобы человек вспомнил, о чём речь */
+    val about: String,
+)
 
 private fun gigabytes(bytes: Long): String = String.format(Locale.US, "%.0f", bytes / 1024.0 / 1024.0 / 1024.0)
 
@@ -85,7 +102,8 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         val subCode = Kelevra.subscriptionCode(profile.typed.remoteURL) ?: return@runCatching null
         val remote = Kelevra.configUrl(subCode)
 
-        val conn = URL("$remote/info").openConnection() as HttpURLConnection
+        // Своё устройство называем: по нему сервер найдёт ответ на нашу же жалобу.
+        val conn = URL("$remote/info?device=${Kelevra.deviceId}").openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 10000
         conn.readTimeout = 10000
@@ -109,6 +127,14 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             },
             // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
             olcrtc = json.optJSONObject("olcrtc"),
+            reply = json.optJSONObject("reply")?.let { answer ->
+                val body = answer.optString("text")
+                if (body.isBlank()) null else ComplaintReply(
+                    id = answer.optInt("id"),
+                    text = body,
+                    about = answer.optString("about"),
+                )
+            },
             transports = buildMap {
                 val list = json.optJSONArray("channels") ?: return@buildMap
                 for (i in 0 until list.length()) {
