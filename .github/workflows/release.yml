@@ -109,7 +109,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
-          key: libbox-olcrtc-v3-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ steps.olcrtc-sha.outputs.sha }}-${{ hashFiles('sing-box-for-android/cores/go.mod', 'sing-box-for-android/core-xhttp/**', 'sing-box-for-android/core-olcrtc/**') }}
+          # core-olcrtc/** из хеша убран 14.08: с переходом на форк apply.py в сборке не
+          # запускается, содержимое этой папки на ядро больше не влияет — а её README тянул
+          # за собой 9 минут пересборки на каждую правку текста (поймано в тот же день).
+          # Правки самого olcrtc теперь меняют ключ через SHA ветки форка, что и правильно.
+          key: libbox-olcrtc-v3-${{ matrix.variant }}-${{ env.CORE_REF }}-${{ steps.olcrtc-sha.outputs.sha }}-${{ hashFiles('sing-box-for-android/cores/go.mod', 'sing-box-for-android/core-xhttp/**') }}
 
       - name: Checkout sing-box core
         if: steps.core-cache.outputs.cache-hit != 'true'
