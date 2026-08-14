@@ -73,6 +73,14 @@ object HonestProbe {
     /** К одному имени — не чаще раза в это время. */
     private const val QUIET_MILLIS = 2_000L
 
+    /**
+     * Сколько ждём адрес цели своим резолвером, прежде чем спросить систему.
+     *
+     * Срок короткий намеренно: это не проба, а подготовка к ней, и весь замер ограничен
+     * [DIRECT_TIMEOUT_MILLIS]. Домашний роутер отвечает за десятки миллисекунд.
+     */
+    private const val NAME_BUDGET_MILLIS = 1_500L
+
     /** Куда стучимся. Обычные проверки связи: маленький ответ, чистый HTTP, ничей интерес. */
     data class Target(val host: String, val port: Int, val path: String) {
         override fun toString() = "$host$path"
@@ -297,8 +305,20 @@ object HonestProbe {
     private fun directRequest(network: Network, goal: Target, timeoutMillis: Int): Measurement {
         val facts = "напрямую (${if (ProbeSocket.protecting) "мимо своего tun" else "без защиты от tun"}), цель $goal"
         val startedAt = SystemClock.elapsedRealtime()
-        val address = runCatching { network.getAllByName(goal.host).firstOrNull() }.getOrNull()
-            ?: return Measurement.dead("адрес цели не узнать: сеть не ответила на запрос имени", facts)
+        // Имя цели спрашиваем СВОИМ путём, мимо своего же tun ([NetDns]), и только потом,
+        // если он не сработал, — системой. Причина ровно та же, по которой защищён сокет:
+        // при поднятом туннеле системный резолвер отвечает за наше ядро, а не за сеть
+        // вокруг. Проверено в эмуляторе 14.08.2026 при поднятом туннеле: `getAllByName`
+        // не отдавал адрес вовсе, замер не состоялся ни разу, и дом не мог подтвердиться
+        // трафиком, пока туннель поднят, — то есть осечка вердикта запирала сама себя.
+        val address = when (val own = NetDns.resolve(network, goal.host, NAME_BUDGET_MILLIS)) {
+            is NetDns.Outcome.Answered -> own.addresses.firstOrNull()
+            is NetDns.Outcome.Silent -> null
+        } ?: runCatching { network.getAllByName(goal.host).firstOrNull() }.getOrNull()
+        // Имя не резолвится — это НЕ «путь мёртв». На свежем вайфае резолвер молчит первые
+        // секунды всегда, и прежнее «мёртв» отсюда стирало память о доме и уводило человека
+        // в туннель на пять минут (жалоба 14.08.2026). Замер просто не состоялся.
+            ?: return Measurement.unmeasurable("адрес цели не узнать: сеть не ответила на запрос имени ($facts)")
         return try {
             ProbeSocket.open { network.bindSocket(it) }.use { socket ->
                 socket.soTimeout = timeoutMillis
