@@ -187,8 +187,8 @@ class AutoModeLogicTest {
     @Test
     fun `совпадений набрано и контроль настоящий — признак есть, ждать нечего`() {
         assertEquals(
-            true,
-            HomeSign.verdict(hits = 2, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Real),
+            HomeSign.Sign.Yes,
+            HomeSign.verdict(hits = 2, misses = 0, silent = 0, domains = 3, needed = 2, control = HomeSign.Control.Real),
         )
     }
 
@@ -197,12 +197,12 @@ class AutoModeLogicTest {
         // Резолвер, который подменяет всё подряд, домом не делает. Ответ готов сразу,
         // даже когда совпадений ещё нет.
         assertEquals(
-            false,
-            HomeSign.verdict(hits = 0, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Fake),
+            HomeSign.Sign.No,
+            HomeSign.verdict(hits = 0, misses = 0, silent = 0, domains = 3, needed = 2, control = HomeSign.Control.Fake),
         )
         assertEquals(
-            false,
-            HomeSign.verdict(hits = 3, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Fake),
+            HomeSign.Sign.No,
+            HomeSign.verdict(hits = 3, misses = 0, silent = 0, domains = 3, needed = 2, control = HomeSign.Control.Fake),
         )
     }
 
@@ -211,8 +211,35 @@ class AutoModeLogicTest {
         // Ровно мобильная сеть: два домена вернули настоящие адреса, третий ещё думает,
         // но признака не будет при любом его ответе.
         assertEquals(
-            false,
-            HomeSign.verdict(hits = 0, misses = 2, domains = 3, needed = 2, control = HomeSign.Control.Waiting),
+            HomeSign.Sign.No,
+            HomeSign.verdict(hits = 0, misses = 2, silent = 0, domains = 3, needed = 2, control = HomeSign.Control.Waiting),
+        )
+    }
+
+    @Test
+    fun `молчание резолверов — это «не узнали», а не «не дома»`() {
+        // Главная правка 14.08.2026. Свежий вайфай: резолверы ещё не приехали, домены
+        // опознания молчат. Прежний код считал это «настоящими адресами», объявлял
+        // обычную сеть и поднимал туннель дома — а следующая проверка приходила через
+        // пять минут. Молчание не доказывает ничего.
+        assertEquals(
+            HomeSign.Sign.Unknown,
+            HomeSign.verdict(hits = 0, misses = 0, silent = 3, domains = 3, needed = 2, control = HomeSign.Control.Silent),
+        )
+        // Одно совпадение и два молчуна: добрать уже нечем, но и отказывать не за что.
+        assertEquals(
+            HomeSign.Sign.Unknown,
+            HomeSign.verdict(hits = 1, misses = 0, silent = 2, domains = 3, needed = 2, control = HomeSign.Control.Real),
+        )
+    }
+
+    @Test
+    fun `настоящих адресов хватает для отказа даже при молчунах`() {
+        // Два домена ответили настоящими адресами — признака не будет при любом ответе
+        // третьего. Это честное «не дома», а не неизвестность.
+        assertEquals(
+            HomeSign.Sign.No,
+            HomeSign.verdict(hits = 0, misses = 2, silent = 1, domains = 3, needed = 2, control = HomeSign.Control.Real),
         )
     }
 
@@ -222,7 +249,7 @@ class AutoModeLogicTest {
         // отменить. Ждать его весь бюджет незачем — на то и свой короткий срок.
         assertEquals(
             null,
-            HomeSign.verdict(hits = 2, misses = 0, domains = 3, needed = 2, control = HomeSign.Control.Waiting),
+            HomeSign.verdict(hits = 2, misses = 0, silent = 0, domains = 3, needed = 2, control = HomeSign.Control.Waiting),
         )
         assertTrue("срок контроля обязан быть короче общего бюджета", HomeSign.CONTROL_BUDGET_MILLIS < 2_500L)
     }
@@ -231,7 +258,7 @@ class AutoModeLogicTest {
     fun `совпадений пока мало, но добрать ещё можно — ждём`() {
         assertEquals(
             null,
-            HomeSign.verdict(hits = 1, misses = 1, domains = 3, needed = 2, control = HomeSign.Control.Real),
+            HomeSign.verdict(hits = 1, misses = 1, silent = 0, domains = 3, needed = 2, control = HomeSign.Control.Real),
         )
     }
 
@@ -239,9 +266,33 @@ class AutoModeLogicTest {
     fun `ждать больше нечего — молчащий контроль засчитывается настоящим`() {
         // Так было и до правки: неотвеченный контроль считался настоящим адресом,
         // только платили за это полным бюджетом. Вердикт не поменялся, поменялось время.
-        assertTrue(HomeSign.settle(hits = 2, needed = 2, control = HomeSign.Control.Waiting))
-        assertFalse(HomeSign.settle(hits = 1, needed = 2, control = HomeSign.Control.Waiting))
-        assertFalse(HomeSign.settle(hits = 3, needed = 2, control = HomeSign.Control.Fake))
+        assertEquals(
+            HomeSign.Sign.Yes,
+            HomeSign.settle(hits = 2, misses = 0, silent = 0, needed = 2, control = HomeSign.Control.Waiting),
+        )
+        assertEquals(
+            HomeSign.Sign.No,
+            HomeSign.settle(hits = 1, misses = 2, silent = 0, needed = 2, control = HomeSign.Control.Waiting),
+        )
+        assertEquals(
+            HomeSign.Sign.No,
+            HomeSign.settle(hits = 3, misses = 0, silent = 0, needed = 2, control = HomeSign.Control.Fake),
+        )
+    }
+
+    @Test
+    fun `бюджет вышел, а отвечать было некому — неизвестность, не отказ`() {
+        // Ни одного ответа за весь бюджет: сеть не готова. Раньше отсюда выходило «нет».
+        assertEquals(
+            HomeSign.Sign.Unknown,
+            HomeSign.settle(hits = 0, misses = 0, silent = 3, needed = 2, control = HomeSign.Control.Silent),
+        )
+        // А вот когда часть ответила настоящими адресами и совпадений не добрать даже
+        // молчунами — это отказ по существу.
+        assertEquals(
+            HomeSign.Sign.No,
+            HomeSign.settle(hits = 0, misses = 2, silent = 1, needed = 2, control = HomeSign.Control.Real),
+        )
     }
 
     // ------------------------------------------------------- сколько живёт признак дома
@@ -252,33 +303,48 @@ class AutoModeLogicTest {
         // 3 из 3 → 0 из 3 → 3 из 3 (замер 10.08.2026). На «0 из 3» автомат объявлял
         // обычную сеть и поднимал туннель у себя же дома.
         assertTrue(
-            HomeSign.stands(seenNow = false, ageMillis = 3_000L, refuted = false),
+            HomeSign.stands(seenNow = HomeSign.Sign.No, ageMillis = 3_000L, refuted = false),
+        )
+    }
+
+    @Test
+    fun `молчание резолверов признак тоже не отменяет`() {
+        assertTrue(
+            HomeSign.stands(seenNow = HomeSign.Sign.Unknown, ageMillis = 3_000L, refuted = false),
         )
     }
 
     @Test
     fun `признак видели только что — стоит без всякой памяти`() {
-        assertTrue(HomeSign.stands(seenNow = true, ageMillis = null, refuted = false))
+        assertTrue(HomeSign.stands(seenNow = HomeSign.Sign.Yes, ageMillis = null, refuted = false))
+    }
+
+    @Test
+    fun `неизвестность дома не объявляет`() {
+        // Обратная сторона той же правки: «не узнали» не должно давать признак на пустом
+        // месте. Без памяти о доме неизвестность остаётся неизвестностью, и вердикт
+        // складывается как раньше — в пользу туннеля.
+        assertFalse(HomeSign.stands(seenNow = HomeSign.Sign.Unknown, ageMillis = null, refuted = false))
     }
 
     @Test
     fun `опровержение делом бьёт память, но не свежее наблюдение`() {
         // Под белым списком дома резолвер честно отдаёт подменные адреса — врать про
         // признак незачем, дом всё равно не объявится: вердикт требует трафика.
-        assertFalse(HomeSign.stands(seenNow = false, ageMillis = 3_000L, refuted = true))
-        assertTrue(HomeSign.stands(seenNow = true, ageMillis = 3_000L, refuted = true))
+        assertFalse(HomeSign.stands(seenNow = HomeSign.Sign.No, ageMillis = 3_000L, refuted = true))
+        assertTrue(HomeSign.stands(seenNow = HomeSign.Sign.Yes, ageMillis = 3_000L, refuted = true))
     }
 
     @Test
     fun `признак постарел — держаться за него больше не на чем`() {
         assertFalse(
-            HomeSign.stands(seenNow = false, ageMillis = HomeSign.MEMORY_MILLIS + 1, refuted = false),
+            HomeSign.stands(seenNow = HomeSign.Sign.No, ageMillis = HomeSign.MEMORY_MILLIS + 1, refuted = false),
         )
     }
 
     @Test
     fun `на этой сети признака не видели — памяти нет`() {
-        assertFalse(HomeSign.stands(seenNow = false, ageMillis = null, refuted = false))
+        assertFalse(HomeSign.stands(seenNow = HomeSign.Sign.No, ageMillis = null, refuted = false))
     }
 
     @Test
@@ -680,5 +746,40 @@ class AutoModeLogicTest {
         // Наверх он возвращается сразу, а пересборка случится потом и разбудит заход
         // отдельно — иначе автомат стёр бы память о выборе раньше, чем выбор сбился.
         assertFalse(AutoMode.RoomAck.Raising.changed)
+    }
+
+    // ------------------------------------------- когда можно закрывать серию перепроверок
+
+    @Test
+    fun `неуверенный заход серию не закрывает`() {
+        // Главное про жалобу 14.08.2026. Заход ничего не поменял и подтверждений не ждёт,
+        // но и не узнал ничего: резолверы промолчали. Прежнее условие закрывало серию
+        // здесь же, и следующая проверка приходила через пять минут — всё это время
+        // человек сидел дома через туннель.
+        assertFalse(AutoMode.burstClosable(changed = false, pending = false, confident = false))
+    }
+
+    @Test
+    fun `уверенный и ничего не поменявший заход серию закрывает`() {
+        // Обычный случай: пришли домой, дом опознан, перепроверять больше нечего.
+        // Цена серии остаётся прежней — одна лишняя проба, а не двадцать секунд всегда.
+        assertTrue(AutoMode.burstClosable(changed = false, pending = false, confident = true))
+    }
+
+    @Test
+    fun `смена обстановки и набор подтверждений серию держат при любой уверенности`() {
+        assertFalse(AutoMode.burstClosable(changed = true, pending = false, confident = true))
+        assertFalse(AutoMode.burstClosable(changed = false, pending = true, confident = true))
+    }
+
+    @Test
+    fun `серия переживает недоделанную сеть целиком`() {
+        // Серия обязана быть длиннее, чем время, за которое вайфай доделывается: адрес,
+        // резолверы, проверка интернета. Иначе перепроверки кончатся раньше, чем сеть
+        // станет отвечать, и «не узнали» опять уедет в пятиминутный ритм.
+        assertTrue(
+            "самый длинный шаг серии обязан быть заметно больше бюджета одной сводки DNS",
+            AutoMode.BURST_STEPS.max() >= 20_000L,
+        )
     }
 }

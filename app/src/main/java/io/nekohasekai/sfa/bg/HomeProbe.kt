@@ -5,6 +5,7 @@ import android.net.Network
 import android.os.Build
 import android.os.CancellationSignal
 import androidx.annotation.RequiresApi
+import io.nekohasekai.sfa.bg.path.NetDns
 import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -14,34 +15,65 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * Один вопрос к сети: «какие адреса у этого домена **прямо сейчас**».
  *
- * Зачем отдельно от [Network.getAllByName]. Тот отвечает из кеша резолвера, и это
- * ровно та ошибка, из-за которой возвращение домой не замечалось минуту: на мобильной
- * сети проксируемые домены отрезолвились в настоящие адреса, ответ лёг в кеш, и первые
- * секунды после вайфая система отдавала его же. Проба видела «не дома», решение уходило
- * на пять минут вперёд — а на самом деле роутер уже подменял адреса.
+ * Спрашиваем сами, своим сокетом мимо своего же tun ([NetDns]), а не через систему.
+ * Причина не в скорости, а в том, что системный ответ на наш вопрос не отвечает:
  *
- * Поэтому спрашиваем именно сеть, а не кеш: [DnsResolver] с [DnsResolver.FLAG_NO_CACHE_LOOKUP]
- * (есть с API 29). Ответ при этом в кеш кладётся как обычно — нам мешает только чтение
- * из него, а не запись.
+ *  - при поднятом туннеле правило per-uid уводит запрос в собственное ядро, и «дома ли
+ *    мы» превращается в «что написано у нас в конфиге». В чужой сети это опаснее всего:
+ *    домены опознания лежат в наших же наборах подмены, и признак дома собирается там,
+ *    где дома нет;
+ *  - [Network.getAllByName] на сорвавшемся запросе молча отдаёт кеш, а на свежем вайфае
+ *    в кеше лежат адреса прошлой сети. Ровно так возвращение домой не замечалось минуту;
+ *  - молчание резолвера приходит тем же пустым списком, что и честный настоящий адрес,
+ *    то есть «не узнали» неотличимо от «не дома».
  *
- * На старых версиях остаётся прежний путь через [Network.getAllByName]. Туда же уходим,
- * если резолвер ответил ошибкой: выдумывать «не дома» из-за сбоя пробы хуже, чем
- * посмотреть в кеш.
+ * Поэтому ответ здесь трёхзначный по построению: адреса, либо честное [Answer.Silent].
+ * Системные пути остались запасными — на случай, когда своим сокетом спросить не вышло
+ * (резолверы сети не видны, порт 53 закрыт, версия Android старше [Build.VERSION_CODES.Q]).
  */
 internal object HomeProbe {
 
     /** Колбэк резолвера зовём на том потоке, который его отдал: работы там на одну строчку. */
     private val sameThread = Executor { it.run() }
 
+    /** Что ответила сеть. */
+    sealed interface Answer {
+
+        /**
+         * Резолвер ответил. Пустой список — законный ответ «нет такой A-записи», он тоже
+         * означает, что резолвер живой.
+         */
+        data class Addresses(val addresses: List<InetAddress>, val from: String) : Answer
+
+        /** Ответа нет. Это не «настоящий адрес» и не «не дома», это отсутствие ответа. */
+        data class Silent(val reason: String) : Answer
+    }
+
     /**
      * @param network сеть, у которой спрашиваем. Обязана быть физической: у VPN-сети
      *   свой резолвер, и он отвечает не про обстановку вокруг, а про наш же туннель.
      */
-    fun addresses(network: Network, host: String, timeoutMillis: Long): List<InetAddress> {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            fresh(network, host, timeoutMillis)?.let { return it }
+    fun ask(network: Network, host: String, timeoutMillis: Long): Answer {
+        when (val own = NetDns.resolve(network, host, timeoutMillis)) {
+            is NetDns.Outcome.Answered ->
+                return Answer.Addresses(own.addresses, "резолвер сети ${own.resolver}")
+
+            is NetDns.Outcome.Silent -> {
+                // Свой путь не сработал. Дальше идут системные — они хуже (могут ответить
+                // за наше ядро или из кеша), но лучше, чем ничего: без них сеть, где
+                // обычный UDP на 53-й порт закрыт, вообще перестала бы опознаваться.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    fresh(network, host, timeoutMillis)?.let {
+                        return Answer.Addresses(it, "системный резолвер (свой путь молчит: ${own.reason})")
+                    }
+                } else {
+                    runCatching { network.getAllByName(host).toList() }.getOrNull()?.let {
+                        return Answer.Addresses(it, "системный кеш (Android до 10)")
+                    }
+                }
+                return Answer.Silent(own.reason)
+            }
         }
-        return runCatching { network.getAllByName(host).toList() }.getOrElse { emptyList() }
     }
 
     /** @return ответ сети или null, если резолвер не ответил (ошибка, отказ, не уложился). */
