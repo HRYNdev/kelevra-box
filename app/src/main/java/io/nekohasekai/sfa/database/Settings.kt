@@ -181,6 +181,10 @@ object Settings {
     // комнату, включил — поднялись «Нидерланды» с подписью «выбран вручную».
     var manualExitName by dataStore.string(SettingsKey.AUTO_MODE_MANUAL_EXIT) { "" }
 
+    // Ответ на жалобу показывается, пока его не прочитали. Помним номер жалобы, а не
+    // «показывали/нет»: на следующий ответ карточка обязана появиться снова.
+    var complaintReplySeen by dataStore.string(SettingsKey.COMPLAINT_REPLY_SEEN) { "" }
+
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }
