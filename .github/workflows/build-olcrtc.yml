@@ -17,10 +17,14 @@ on:
         description: "Тег/ветка ядра sing-box"
         required: false
         default: "v1.14.0-beta.4"
-      olcrtc_ref:
-        description: "Ветка/тег olcrtc"
+      olcrtc_repo:
+        description: "Репозиторий olcrtc (наш форк или апстрим для пробы)"
         required: false
-        default: "master"
+        default: "HRYNdev/olcrtc"
+      olcrtc_ref:
+        description: "Ветка/тег/SHA olcrtc"
+        required: false
+        default: "kelevra"
       bind_target:
         description: "Цель gomobile: android (все ABI) или android/arm64 (быстро)"
         required: false
@@ -40,7 +44,11 @@ env:
   NDK_VERSION: "28.0.13004108"
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
   CORE_REPO: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
-  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'master' }}
+  # По умолчанию наш форк с правками datachannel коммитами (см. release.yml, тот же разбор).
+  # Пробу нового апстрима запускать руками: olcrtc_repo=openlibrecommunity/olcrtc, ref=master —
+  # тогда наложится apply.py и станет видно, легли правки или апстрим опять уехал.
+  OLCRTC_REPO: ${{ github.event.inputs.olcrtc_repo || 'HRYNdev/olcrtc' }}
+  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'kelevra' }}
   # push на ветку — быстрая итерация на одном ABI, ручной запуск — все ABI
   BIND_TARGET: ${{ github.event.inputs.bind_target || 'android/arm64' }}
 
@@ -88,18 +96,22 @@ jobs:
       - name: Checkout olcrtc
         uses: actions/checkout@v4
         with:
-          repository: openlibrecommunity/olcrtc
-          ref: ${{ github.event.inputs.olcrtc_ref || 'master' }}
+          repository: ${{ env.OLCRTC_REPO }}
+          ref: ${{ env.OLCRTC_REF }}
           path: olcrtc
 
-      # Без этого патча datachannel через WbStream не поднимается вообще: ответ сервера
+      # Без правок datachannel через WbStream не поднимается вообще: ответ сервера
       # на рукопожатие теряется, потому что участник LiveKit начинает получать данные
       # не сразу после входа в комнату. Разбор и замеры → core-olcrtc/README.md.
-      # Патч рассчитан на 513be68; если апстрим уедет и он перестанет ложиться — сборка
-      # падает намеренно, чтобы ядро без datachannel не уехало в релиз незамеченным.
+      # Из нашего форка они приезжают уже в коде, поэтому apply.py тут нужен только когда
+      # площадку натравливают на чужой репозиторий (проба нового апстрима). Проверка ниже
+      # общая для обоих случаев: ядро без datachannel не уедет ни в артефакт, ни на ногу.
       - name: Патч olcrtc (рабочий datachannel)
         run: |
-          python3 sing-box-for-android/core-olcrtc/apply.py olcrtc
+          case "$OLCRTC_REPO" in
+            HRYNdev/*) echo "правки уже в форке $OLCRTC_REPO@$OLCRTC_REF, apply.py не нужен" ;;
+            *) python3 sing-box-for-android/core-olcrtc/apply.py olcrtc ;;
+          esac
           grep -q 'isBroadcastOnlyTransport' olcrtc/internal/client/client.go || { echo "патч не применился"; exit 1; }
 
       # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc

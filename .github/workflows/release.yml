@@ -31,15 +31,19 @@ on:
         required: false
         default: "v1.14.0-beta.4"
       olcrtc_ref:
-        description: "Ветка/тег/SHA olcrtc"
+        description: "Ветка/тег/SHA olcrtc (в НАШЕМ форке)"
         required: false
-        default: "513be68c0056eb720a0151d36f662d75cbe8f437"
+        default: "kelevra"
 
 env:
   NDK_VERSION: "28.0.13004108"
   CORE_REPO: "SagerNet/sing-box"
   CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
-  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || '513be68c0056eb720a0151d36f662d75cbe8f437' }}
+  # Свой форк, а не апстрим: наши правки лежат в нём коммитами на ветке kelevra
+  # (база 513be68 = апстрим от 10.08). Чужой master уронил ночной прогрев 14.08,
+  # переписав протокол; из форка апстрим до сборки не дотягивается вообще.
+  OLCRTC_REPO: "HRYNdev/olcrtc"
+  OLCRTC_REF: ${{ github.event.inputs.olcrtc_ref || 'kelevra' }}
 
 jobs:
   # Ядро для обоих флейворов приложения: other -> libbox.aar, otherLegacy -> libbox-legacy.aar.
@@ -71,14 +75,15 @@ jobs:
           path: sing-box-for-android
           submodules: recursive
 
-      # olcrtc берётся по ПРИШПИЛЕННОМУ коммиту (см. OLCRTC_REF), а в ключе кеша стоит ref, а не
-      # содержимое: пока апстрим двигался, а кеш промахивался, это не было видно, но при
-      # попадании релиз молча собрался бы из ядра, снятого с прошлого состояния master.
-      # Поэтому в ключ идёт SHA апстрима; ls-remote стоит полсекунды и клона не требует.
-      - name: SHA апстрима olcrtc
+      # olcrtc берётся из НАШЕГО форка, но ветка kelevra тоже двигается (когда мы сами
+      # правим патч или подтягиваем апстрим), а в ключе кеша стояло бы её имя, а не
+      # содержимое: при попадании релиз молча собрался бы из ядра, снятого с прошлого
+      # состояния ветки. Поэтому в ключ идёт SHA; ls-remote стоит полсекунды и клона
+      # не требует.
+      - name: SHA olcrtc
         id: olcrtc-sha
         run: |
-          SHA=$(git ls-remote https://github.com/openlibrecommunity/olcrtc "$OLCRTC_REF" | cut -f1 | head -1)
+          SHA=$(git ls-remote "https://github.com/$OLCRTC_REPO" "$OLCRTC_REF" | cut -f1 | head -1)
           # ref может быть уже полным SHA коммита: ls-remote отдаёт только имена ссылок
           # и на такой ref молчит. Это не ошибка — берём его как есть.
           if [ -z "$SHA" ] && printf '%s' "$OLCRTC_REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -118,23 +123,28 @@ jobs:
         if: steps.core-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
-          repository: openlibrecommunity/olcrtc
+          repository: ${{ env.OLCRTC_REPO }}
           ref: ${{ env.OLCRTC_REF }}
           path: olcrtc
 
-      # Без этого патча datachannel через WbStream не поднимается вообще: ответ сервера
+      # Без правок datachannel через WbStream не поднимается вообще: ответ сервера
       # на рукопожатие теряется, потому что участник LiveKit начинает получать данные
       # не сразу после входа в комнату. Разбор и замеры → core-olcrtc/README.md.
-      # Патч рассчитан на 513be68, и OLCRTC_REF теперь пришпилен ровно к нему: апстрим
-      # 11.08 переписал рукопожатие (ProtoVersion 1->3, challenge/response) и клиента
-      # ("replace mobile singleton"), после чего заплатка перестала ложиться и прогрев
-      # упал 14.08 00:59. Поднимать ref — только вместе с переносом apply.py на новый
-      # протокол; сборка по-прежнему падает намеренно, если патч не лёг.
-      - name: Патч olcrtc (рабочий datachannel)
+      #
+      # Раньше правки накладывались здесь скриптом core-olcrtc/apply.py на чужой репозиторий.
+      # Так делать перестали 14.08: апстрим переписал протокол (ProtoVersion 1->3,
+      # challenge/response, PR #140), текстовые замены перестали находить свои места, и
+      # ночной прогрев упал в 00:59 без единой правки с нашей стороны. Теперь правки живут
+      # коммитами в HRYNdev/olcrtc (ветка kelevra), а apply.py остаётся только как источник
+      # этих правок и разбор причины.
+      #
+      # Проверка ниже сохранена: она ловит случай, когда в ветку форка приехало что-то, где
+      # наших правок нет (например неаккуратный мердж апстрима). Ядро без datachannel в
+      # релиз молча не уедет.
+      - name: Проверка правок olcrtc (рабочий datachannel)
         if: steps.core-cache.outputs.cache-hit != 'true'
         run: |
-          python3 sing-box-for-android/core-olcrtc/apply.py olcrtc
-          grep -q 'isBroadcastOnlyTransport' olcrtc/internal/client/client.go || { echo "патч не применился"; exit 1; }
+          grep -q 'isBroadcastOnlyTransport' olcrtc/internal/client/client.go || { echo "в ветке '$OLCRTC_REF' форка $OLCRTC_REPO нет наших правок datachannel"; exit 1; }
 
       # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc
       - name: Setup Go
