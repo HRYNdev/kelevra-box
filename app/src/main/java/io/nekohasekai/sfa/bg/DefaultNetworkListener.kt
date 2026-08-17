@@ -28,6 +28,7 @@ import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import io.nekohasekai.sfa.Application
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -38,6 +39,8 @@ import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.runBlocking
 
 object DefaultNetworkListener {
+    private const val TAG = "DefaultNetworkListener"
+
     private sealed class NetworkMessage {
         class Start(val key: Any, val listener: (Network?) -> Unit) : NetworkMessage()
 
@@ -54,6 +57,21 @@ object DefaultNetworkListener {
         class Lost(val network: Network) : NetworkMessage()
     }
 
+    /**
+     * Зовёт слушателя так, чтобы его поломка не унесла с собой всё остальное.
+     *
+     * Актор крутится на [Dispatchers.Unconfined], то есть исполняется прямо в системном
+     * ConnectivityThread, из которого пришло событие. Вылетевшее из слушателя исключение
+     * там ничем не перехватывается: оно убивает процесс — и, что хуже, сам актор. После
+     * этого приложение уже не узнаёт о сети НИЧЕГО, даже если переживёт падение.
+     * Поймано в бою 15.08.2026: `AutoMode.onNetworkChanged` синхронно ходил в Room.
+     */
+    private fun notifySafely(listener: (Network?) -> Unit, network: Network?) {
+        runCatching { listener(network) }.onFailure {
+            Log.w(TAG, "слушатель сети упал на событии — остальные не роняем", it)
+        }
+    }
+
     @OptIn(DelicateCoroutinesApi::class, ObsoleteCoroutinesApi::class)
     private val networkActor =
         GlobalScope.actor<NetworkMessage>(Dispatchers.Unconfined) {
@@ -65,7 +83,7 @@ object DefaultNetworkListener {
                     is NetworkMessage.Start -> {
                         if (listeners.isEmpty()) register()
                         listeners[message.key] = message.listener
-                        if (network != null) message.listener(network)
+                        if (network != null) notifySafely(message.listener, network)
                     }
 
                     is NetworkMessage.Get -> {
@@ -93,22 +111,18 @@ object DefaultNetworkListener {
                         network = message.network
                         pendingRequests.forEach { it.response.complete(message.network) }
                         pendingRequests.clear()
-                        listeners.values.forEach { it(network) }
+                        listeners.values.forEach { notifySafely(it, network) }
                     }
 
                     is NetworkMessage.Update ->
                         if (network == message.network) {
-                            listeners.values.forEach {
-                                it(
-                                    network,
-                                )
-                            }
+                            listeners.values.forEach { notifySafely(it, network) }
                         }
 
                     is NetworkMessage.Lost ->
                         if (network == message.network) {
                             network = null
-                            listeners.values.forEach { it(null) }
+                            listeners.values.forEach { notifySafely(it, null) }
                         }
                 }
             }
