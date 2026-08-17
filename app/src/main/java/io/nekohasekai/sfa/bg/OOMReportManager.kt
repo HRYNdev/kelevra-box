@@ -53,11 +53,33 @@ object OOMReportManager {
     private val _unreadCount = MutableStateFlow(0)
     val unreadCount: StateFlow<Int> = _unreadCount
 
+    @Volatile
+    private var installed = false
+
     fun install(workingDir: File) {
+        if (installed) return
         this.workingDir = workingDir
+        installed = true
+    }
+
+    /**
+     * То же, что [CrashReportManager.ensureInstalled], и по той же причине: процесс
+     * поднимается до первой разблокировки телефона, когда внешнего хранилища ещё нет,
+     * и без доустановки первый же поход за отчётами ронял процесс.
+     *
+     * @return удалось ли поставить (false — хранилища всё ещё нет).
+     */
+    fun ensureInstalled(): Boolean {
+        if (installed) return true
+        val workingDir = Application.application.getExternalFilesDir(null) ?: return false
+        if (!workingDir.exists() && !workingDir.mkdirs()) return false
+        install(workingDir)
+        return true
     }
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
+        // Хранилища может ещё не быть — тогда и отчётов нет, а не падение.
+        if (!ensureInstalled()) return@withContext
         val reports = scanReports()
         _reports.value = reports
         _unreadCount.value = reports.count { !it.isRead }
@@ -133,6 +155,7 @@ object OOMReportManager {
     }
 
     suspend fun deleteAll() = withContext(Dispatchers.IO) {
+        if (!ensureInstalled()) return@withContext
         File(workingDir, OOM_REPORTS_DIR_NAME).deleteRecursively()
         _reports.value = emptyList()
         _unreadCount.value = 0

@@ -59,15 +59,43 @@ object CrashReportManager {
     private val _unreadCount = MutableStateFlow(0)
     val unreadCount: StateFlow<Int> = _unreadCount
 
+    @Volatile
+    private var installed = false
+
     fun install(workingDir: File, baseDir: File) {
+        if (installed) return
         this.workingDir = workingDir
         this.baseDir = baseDir
+        installed = true
         archivePendingJvmCrashReport()
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             writePendingJvmCrashReport(thread, throwable)
             previous?.uncaughtException(thread, throwable)
         }
+    }
+
+    /**
+     * Ставит сборщик, если этого ещё не случилось при запуске процесса.
+     *
+     * Процесс поднимается ещё ДО первой разблокировки телефона (плитка быстрых настроек
+     * объявлена directBootAware), а до неё нет ни своих каталогов, ни внешнего хранилища:
+     * `getExternalFilesDir` отдаёт null, и ставить сборщик просто некуда. Раньше на этом
+     * заканчивалось: `workingDir` оставался неинициализированным, и первый же поход за
+     * отчётами после разблокировки ронял процесс с `UninitializedPropertyAccessException`
+     * (поймано в эмуляторе 17.08.2026 ровно тем сценарием, что и на телефоне 15.08).
+     *
+     * @return удалось ли поставить (false — хранилища всё ещё нет).
+     */
+    fun ensureInstalled(): Boolean {
+        if (installed) return true
+        val application = Application.application
+        val workingDir = application.getExternalFilesDir(null) ?: return false
+        if (!workingDir.exists() && !workingDir.mkdirs()) return false
+        val baseDir = application.filesDir ?: return false
+        baseDir.mkdirs()
+        install(workingDir, baseDir)
+        return true
     }
 
     private fun writePendingJvmCrashReport(thread: Thread, throwable: Throwable) {
@@ -94,6 +122,8 @@ object CrashReportManager {
     }
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
+        // Хранилища может ещё не быть — тогда и отчётов нет, а не падение.
+        if (!ensureInstalled()) return@withContext
         val reports = scanCrashReports()
         _reports.value = reports
         _unreadCount.value = reports.count { !it.isRead }
@@ -193,6 +223,7 @@ object CrashReportManager {
     }
 
     suspend fun deleteAll() = withContext(Dispatchers.IO) {
+        if (!ensureInstalled()) return@withContext
         File(workingDir, CRASH_REPORTS_DIR_NAME).deleteRecursively()
         _reports.value = emptyList()
         _unreadCount.value = 0
