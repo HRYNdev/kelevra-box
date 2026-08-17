@@ -772,6 +772,64 @@ class AutoModeLogicTest {
         assertFalse(AutoMode.burstClosable(changed = false, pending = true, confident = true))
     }
 
+    // ------------------------------------------------- возврат из комнаты на основной путь
+
+    @Test
+    fun `в комнате основной путь меряем даже вопреки подсказке про белый список`() {
+        // Ради этого правка и делалась: подсказка живёт пять минут, и всё это время
+        // основной путь не мерился ни полным заходом, ни приглядкой — человек досиживал
+        // комнату при канале, который мог ожить в первую же минуту.
+        assertTrue(AutoMode.measuresMainDespiteHint(inRoom = true, mainPinned = true))
+    }
+
+    @Test
+    fun `без закреплённого входа подсказку не оспариваем — мерить нечем, кроме селектора`() {
+        // Единственный способ померить основной путь без закреплённого входа — переставить
+        // селектор туда и обратно. У боевого селектора `interrupt_exist_connections: true`,
+        // то есть каждая такая проба рвала ВСЕ живые соединения, и дважды. Убрано 12.08.2026,
+        // возвращать нельзя — лучше остаться на подсказке.
+        assertFalse(AutoMode.measuresMainDespiteHint(inRoom = true, mainPinned = false))
+    }
+
+    @Test
+    fun `вне комнаты подсказка по-прежнему закрывает вопрос без пробы`() {
+        // Не в комнате слепоты нет: заход и так меряет канал каждым кругом, а под белым
+        // списком проба купила бы тот же ответ за полминуты.
+        assertFalse(AutoMode.measuresMainDespiteHint(inRoom = false, mainPinned = true))
+        assertFalse(AutoMode.measuresMainDespiteHint(inRoom = false, mainPinned = false))
+    }
+
+    @Test
+    fun `первая честная проба из комнаты идёт сразу, следующая — по своему ритму`() {
+        assertTrue("ни разу не мерили — надо мерить", AutoMode.honestPeekDue(null, everyMillis = 60_000L))
+        assertFalse("мерили полминуты назад — рано", AutoMode.honestPeekDue(30_000L, everyMillis = 60_000L))
+        assertTrue("минута прошла — пора", AutoMode.honestPeekDue(60_000L, everyMillis = 60_000L))
+        assertTrue(AutoMode.honestPeekDue(90_000L, everyMillis = 60_000L))
+    }
+
+    @Test
+    fun `честная проба из комнаты успевает опросить путь между полными заходами`() {
+        // Смысл пробы в том, чтобы узнать о возврате раньше полного захода. Ритм реже
+        // трёхминутного ритма заходов делает её бессмысленной.
+        assertTrue(AutoMode.honestPeekDue(sinceMillis = 3 * 60_000L))
+    }
+
+    @Test
+    fun `выбор руками не отпускается раньше срока`() {
+        assertFalse("выбора нет — отпускать нечего", AutoMode.manualHoldExpired(null, ttlMillis = 60 * 60_000L))
+        assertFalse(AutoMode.manualHoldExpired(60_000L, ttlMillis = 60 * 60_000L))
+        assertFalse(AutoMode.manualHoldExpired(59 * 60_000L, ttlMillis = 60 * 60_000L))
+    }
+
+    @Test
+    fun `выбор руками на соте отпускается по сроку, а не ждёт смены сети вечно`() {
+        // На соте отпечаток сети не меняется сутками (замер 12.08.2026), и «держим до
+        // смены сети» означало «держим навсегда»: выбранная на время аварии комната
+        // оставалась выбранной, пока человек сам о ней не вспомнит.
+        assertTrue(AutoMode.manualHoldExpired(60 * 60_000L, ttlMillis = 60 * 60_000L))
+        assertTrue(AutoMode.manualHoldExpired(5 * 60 * 60_000L, ttlMillis = 60 * 60_000L))
+    }
+
     @Test
     fun `серия переживает недоделанную сеть целиком`() {
         // Серия обязана быть длиннее, чем время, за которое вайфай доделывается: адрес,
