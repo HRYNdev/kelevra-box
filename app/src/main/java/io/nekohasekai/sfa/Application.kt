@@ -39,21 +39,11 @@ class Application : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        AppLifecycleObserver.register(this)
 
-//        Seq.setContext(this)
-        runCatching {
-            Libbox.setLocale(Locale.getDefault().toLanguageTag())
-        }.onFailure {
-            Log.d("Application", "set locale: ${it.message}")
-        }
-        HookStatusClient.register(this)
-        PrivilegeSettingsClient.register(this)
-
-        // фоновая проверка обновлений: планируем при каждом запуске, иначе она
-        // включалась только когда человек сам лез в настройки
-        runCatching { Vendor.scheduleAutoUpdate() }
-
+        // Сборщик крашей ставим ПЕРВЫМ делом, до всего, что умеет бросать.
+        // Раньше он поднимался на 13 строк ниже походов в Room, и падения самого
+        // старта — ровно те, что ловили в бою 15.08.2026, — своим сборщиком не
+        // записывались вообще: приходилось выковыривать их из системного logcat.
         val baseDir = filesDir
         baseDir.mkdirs()
         val workingDir = getExternalFilesDir(null)
@@ -65,8 +55,29 @@ class Application : Application() {
             OOMReportManager.install(workingDir)
         }
 
+        AppLifecycleObserver.register(this)
+
+//        Seq.setContext(this)
+        runCatching {
+            Libbox.setLocale(Locale.getDefault().toLanguageTag())
+        }.onFailure {
+            Log.d("Application", "set locale: ${it.message}")
+        }
+        HookStatusClient.register(this)
+
+        // фоновая проверка обновлений: планируем при каждом запуске, иначе она
+        // включалась только когда человек сам лез в настройки
+        runCatching { Vendor.scheduleAutoUpdate() }
+
         @Suppress("OPT_IN_USAGE")
         GlobalScope.launch(Dispatchers.IO) {
+            // PrivilegeSettingsClient.register синхронно читает настройки, то есть Room.
+            // В onCreate этого делать нельзя: плитка быстрых настроек объявлена
+            // directBootAware, поэтому процесс поднимается ещё ДО первой разблокировки
+            // телефона, когда шифрованное хранилище пользователя недоступно и Room
+            // отвечает исключением — приложение не стартовало вовсе (15.08.2026,
+            // дважды подряд). Здесь же поход отложен и не роняет старт.
+            runCatching { PrivilegeSettingsClient.register(this@Application) }
             initialize(baseDir, workingDir, tempDir)
             UpdateProfileWork.reconfigureUpdater()
             HookModuleUpdateNotifier.sync(this@Application)
