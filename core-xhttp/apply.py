@@ -114,6 +114,28 @@ def main():
         ],
     )
 
+    # 5. паника ядра при пересборке: Close() зануляет элементы ОБЩЕГО backing-массива
+    # (clear(r.setList)) под ногами у горутины, которая в этот момент читает тот же
+    # слайс внутри matchWithOuterGroups/Match (range снимает заголовок слайса один раз
+    # и после этого просто идёт по общему массиву). Та горутина получает nil-интерфейс
+    # и падает с "invalid memory address or nil pointer dereference" — боевой краш с
+    # телефона при BoxService.restartCore. r.setList = nil новых читателей не портит
+    # (получат пустой слайс), а старым читателям backing-массив остаётся валиден.
+    patch(
+        os.path.join(core, "route", "rule", "rule_item_rule_set.go"),
+        [(
+            "\tfor _, ruleSet := range r.setList {\n"
+            "\t\truleSet.DecRef()\n"
+            "\t}\n"
+            "\tclear(r.setList)\n"
+            "\tr.setList = nil\n",
+            "\tfor _, ruleSet := range r.setList {\n"
+            "\t\truleSet.DecRef()\n"
+            "\t}\n"
+            "\tr.setList = nil\n",
+        )],
+    )
+
     print("транспорт xhttp добавлен в ядро")
 
 
