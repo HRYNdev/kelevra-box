@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.compose.screen.dashboard.groups
 
 import androidx.lifecycle.viewModelScope
 import io.nekohasekai.libbox.OutboundGroup
+import io.nekohasekai.sfa.bg.AutoModeSticky
 import io.nekohasekai.sfa.compose.base.BaseViewModel
 import io.nekohasekai.sfa.compose.base.ScreenEvent
 import io.nekohasekai.sfa.compose.model.Group
@@ -176,6 +177,8 @@ class GroupsViewModel(private val sharedCommandClient: CommandClient? = null) :
             try {
                 // Select the new outbound immediately
                 CommandTarget.standaloneClient().selectOutbound(groupTag, itemTag)
+                // Выбор сделан руками — залипшего выбора автомата тут больше нет.
+                AutoModeSticky.forget()
 
                 // Update local state and show snackbar
                 withContext(Dispatchers.Main) {
