@@ -5,6 +5,7 @@ import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.OutboundGroup
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.sfa.bg.AutoModeExits
+import io.nekohasekai.sfa.bg.AutoModeSticky
 import io.nekohasekai.sfa.bg.BoxService
 import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.compose.base.BaseViewModel
@@ -760,6 +761,8 @@ class DashboardViewModel :
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 CommandTarget.standaloneClient().selectOutbound(groupTag, itemTag)
+                // Выбор сделан руками — залипшего выбора автомата тут больше нет.
+                AutoModeSticky.forget()
             } catch (e: Exception) {
                 Log.w("DashboardViewModel", "select outbound: ${e.message}")
             }
