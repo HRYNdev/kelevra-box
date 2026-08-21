@@ -28,6 +28,7 @@ import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import io.nekohasekai.sfa.Application
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -37,7 +38,25 @@ import kotlinx.coroutines.ObsoleteCoroutinesApi
 import kotlinx.coroutines.channels.actor
 import kotlinx.coroutines.runBlocking
 
+/**
+ * Беда (краш-репорты хозяина, 15-16.08.2026): рассылка слушателям шла голым `forEach`,
+ * а слушатели зовутся из [DefaultNetworkListener.networkActor] — падение любого из них
+ * убивало не только его, а весь процесс, а заодно и актор: события сети переставали
+ * приходить вовсе, до перезапуска приложения. Чистая функция без Android-зависимостей —
+ * чтобы её было видно из JVM-теста без стенда с реальным [Network].
+ */
+internal fun <T> notifyListeners(
+    listeners: Collection<(T?) -> Unit>,
+    value: T?,
+    onError: (Throwable) -> Unit = {},
+) {
+    for (listener in listeners) {
+        runCatching { listener(value) }.onFailure(onError)
+    }
+}
+
 object DefaultNetworkListener {
+    private const val TAG = "DefaultNetworkListener"
     private sealed class NetworkMessage {
         class Start(val key: Any, val listener: (Network?) -> Unit) : NetworkMessage()
 
@@ -93,22 +112,24 @@ object DefaultNetworkListener {
                         network = message.network
                         pendingRequests.forEach { it.response.complete(message.network) }
                         pendingRequests.clear()
-                        listeners.values.forEach { it(network) }
+                        notifyListeners(listeners.values, network) {
+                            Log.w(TAG, "слушатель сети упал на Put: ${it.message}")
+                        }
                     }
 
                     is NetworkMessage.Update ->
                         if (network == message.network) {
-                            listeners.values.forEach {
-                                it(
-                                    network,
-                                )
+                            notifyListeners(listeners.values, network) {
+                                Log.w(TAG, "слушатель сети упал на Update: ${it.message}")
                             }
                         }
 
                     is NetworkMessage.Lost ->
                         if (network == message.network) {
                             network = null
-                            listeners.values.forEach { it(null) }
+                            notifyListeners(listeners.values, null) {
+                                Log.w(TAG, "слушатель сети упал на Lost: ${it.message}")
+                            }
                         }
                 }
             }
