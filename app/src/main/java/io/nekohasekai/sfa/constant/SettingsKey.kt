@@ -91,6 +91,14 @@ object SettingsKey {
     /** Имя выхода, выбранного руками: выбор должен пережить выключенную сеть и перезапуск. */
     const val AUTO_MODE_MANUAL_EXIT = "auto_mode_manual_exit"
 
+    /**
+     * Селектор и тег, которые последним выставил АВТОМАТ (не человек). См. [AutoModeSticky]:
+     * ядро хранит выбор в своём кэше и переживает им перезапуск наравне с ручным выбором —
+     * эта пара нужна, чтобы отличить один от другого и погасить только автоматный.
+     */
+    const val AUTO_MODE_STICKY_GROUP = "auto_mode_sticky_group"
+    const val AUTO_MODE_STICKY_TAG = "auto_mode_sticky_tag"
+
     /** Номер жалобы, ответ на которую человек уже прочитал: показывать его снова незачем. */
     const val COMPLAINT_REPLY_SEEN = "complaint_reply_seen"
 
