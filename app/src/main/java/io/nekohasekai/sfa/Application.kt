@@ -47,13 +47,13 @@ class Application : Application() {
         }.onFailure {
             Log.d("Application", "set locale: ${it.message}")
         }
-        HookStatusClient.register(this)
-        PrivilegeSettingsClient.register(this)
-
-        // фоновая проверка обновлений: планируем при каждом запуске, иначе она
-        // включалась только когда человек сам лез в настройки
-        runCatching { Vendor.scheduleAutoUpdate() }
-
+        // Беда (краш-репорты Вовы, 15-16.08.2026, дважды в 14:06): TileService у нас
+        // directBootAware, а <application> — нет, поэтому процесс иногда поднимается
+        // ДО разблокировки телефона, шифрованное хранилище (CE) недоступно, а
+        // PrivilegeSettingsClient.register лезет в Room синхронно прямо тут, в onCreate.
+        // Раньше сборщик крашей ставился НИЖЕ этого вызова — собственное падение
+        // оставалось невидимым. Поднимаем его максимально рано, до всего, что может
+        // бросить.
         val baseDir = filesDir
         baseDir.mkdirs()
         val workingDir = getExternalFilesDir(null)
@@ -65,11 +65,23 @@ class Application : Application() {
             OOMReportManager.install(workingDir)
         }
 
+        // Не трогает Room — только IPC до системного биндера, до CE-хранилища
+        // не касается.
+        HookStatusClient.register(this)
+
+        // фоновая проверка обновлений: планируем при каждом запуске, иначе она
+        // включалась только когда человек сам лез в настройки
+        runCatching { Vendor.scheduleAutoUpdate() }
+
         @Suppress("OPT_IN_USAGE")
         GlobalScope.launch(Dispatchers.IO) {
             initialize(baseDir, workingDir, tempDir)
             UpdateProfileWork.reconfigureUpdater()
             HookModuleUpdateNotifier.sync(this@Application)
+            // Синхронное чтение Settings (Room): до первой разблокировки CE-хранилище
+            // недоступно и бросает исключение — раньше это роняло процесс ещё в
+            // onCreate, до того как сборщик крашей вообще успевал встать.
+            runCatching { PrivilegeSettingsClient.register(this@Application) }
         }
 
         if (Vendor.isPerAppProxyAvailable()) {
