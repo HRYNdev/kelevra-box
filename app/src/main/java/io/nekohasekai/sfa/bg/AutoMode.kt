@@ -745,7 +745,11 @@ object AutoMode {
         // Сравниваем именно физические сети: наш собственный туннель тоже приходит сюда
         // сменой сети по умолчанию, и по ней выбор отпускался бы через секунду после того,
         // как его сделали.
-        if (!Settings.autoModeEnabled) {
+        // Колбэк приходит на ConnectivityThread (см. комментарий выше), а
+        // Settings.autoModeEnabled — синхронное чтение Room; исключение оттуда роняло
+        // бы поток системы. _state.value.auto — тот же флаг в памяти, его пишут той же
+        // строкой, что и Settings.autoModeEnabled (см. setEnabled, releaseManualHold, choose).
+        if (!_state.value.auto) {
             val now = physicalNetwork()
             val nowKey = now?.let { networkKey(it) }
             // Сеть считаем сменившейся по отпечатку, а не по объекту: см. [holdKey].
