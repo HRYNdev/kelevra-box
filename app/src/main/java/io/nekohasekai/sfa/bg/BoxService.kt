@@ -163,6 +163,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Локальный клиент к своему же командному серверу: тот же путь, которым
             // выход переключает человек с главного экрана.
             Libbox.newStandaloneCommandClient().selectOutbound(group, tag)
+            // Ядру эта команда неотличима от ручной, а кэш sing-box переживает перезапуск —
+            // без пометки залипший выбор автомата держался бы навсегда (см. AutoModeSticky).
+            AutoModeSticky.remember(group, tag)
         }
 
         override fun setRoomWanted(wanted: Boolean, reason: String): AutoMode.RoomAck =
@@ -254,6 +257,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 stopAndAlert(Alert.CreateService, e.message)
                 return
             }
+            // Ядро уже поднялось с залипшим кэшем sing-box. Если залипший выбор — это
+            // выбор автомата, а не человека, возвращаем селектор на default из свежего
+            // конфига; дальше автомат заново решает по живой обстановке.
+            AutoModeSticky.release(runningConfig) { g, t -> Libbox.newStandaloneCommandClient().selectOutbound(g, t) }
             checkPathsHonestly("старт сервиса")
 
             if (commandServer.needWIFIState()) {
