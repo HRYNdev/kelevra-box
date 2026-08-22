@@ -291,6 +291,15 @@ class VPNService :
             }
         }
         service.fileDescriptor = pfd
+        // Без этого ОС не знает, какая физическая сеть лежит под tun, и при полном
+        // обрыве с возвратом сети не инвалидирует чужие сокеты, роутнутые через
+        // туннель — Карты и банк висят минутами до TCP-таймаута. `defaultNetwork`
+        // уже отфильтрован от нашей же петли (см. DefaultNetworkMonitor), null здесь
+        // означает «следуй за системным дефолтом», а не «сети нет». Метод есть с
+        // API 22, а otherLegacy собирается под minSdk 21.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            setUnderlyingNetworks(DefaultNetworkMonitor.defaultNetwork?.let { arrayOf(it) })
+        }
         return pfd.fd
     }
 
