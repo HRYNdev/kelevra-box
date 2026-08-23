@@ -184,6 +184,9 @@ fun HomeScreen(
     // из того же реестра, что и для автоматического выбора.
     val manualPath = if (manualHold) paths.byExit(manualExit) else null
     val manualDead = manualHold && manualPath?.refused == true
+    // Задушенный канал отвечает — просто им нельзя пользоваться. Писать про него
+    // «не отвечает» значит врать человеку в глаза: он видит, что связь есть.
+    val squeezed = running && !noNetwork && (manualPath?.squeezed == true || paths[PathId.MAIN].squeezed)
     // Ничего не поднимается, сети нет, или выбранный руками путь не отвечает —
     // круг не должен врать зелёным.
     val broken = running && (noNetwork || roomDead || linkDead || manualDead)
@@ -253,6 +256,7 @@ fun HomeScreen(
                 searching -> "Ищу путь"
                 roomRising -> "Поднимаю комнату"
                 roomDead -> "Комната не отвечает"
+                squeezed -> "Медленно"
                 linkDead -> "Связи нет"
                 manualDead -> "Не отвечает"
                 measuring -> "Проверяю связь"
@@ -279,6 +283,7 @@ fun HomeScreen(
                 searching -> "подбираю рабочий выход"
                 roomRising -> "поднимаю канал через комнату"
                 roomDead -> "канал через комнату не поднялся, выберите другой выход"
+                squeezed -> "связь есть, но очень медленная"
                 linkDead -> "выбранный путь не отвечает, ищу другой"
                 manualDead -> "выбран вами, не отвечает"
                 measuring -> "проверяю, идут ли данные"
