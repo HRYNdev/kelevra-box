@@ -10,6 +10,7 @@ import io.nekohasekai.sfa.bg.path.Evidence
 import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.bg.path.PathId
 import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.SpeedProbe
 import io.nekohasekai.sfa.bg.path.PathSnapshot
 import io.nekohasekai.sfa.bg.path.PathStatus
 import io.nekohasekai.sfa.bg.path.ProbeSocket
@@ -2097,7 +2098,13 @@ object AutoMode {
             !host.tunnelLive() -> null
             else -> probeThroughMain(host, proxy)
         }
-        return noteMain(mainVerdict(portOpen, trafficFlows), portOpen)
+        // Честная проба выше отвечает только на «идёт ли трафик». Троттлинг она не видит:
+        // её ответ весит двести байт и проскакивает сквозь задушенную полосу целым.
+        // Поэтому у живого канала отдельно спрашиваем, сколько он тянет ([SpeedProbe]).
+        val squeeze = if (trafficFlows == true) SpeedProbe.measure(proxy, "основной канал") else null
+        val squeezed = squeeze?.let(SpeedProbe::squeezed) ?: false
+        if (squeezed) Log.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
+        return noteMain(mainVerdict(portOpen, trafficFlows, squeezed), portOpen, squeeze.takeIf { squeezed })
     }
 
     /**
@@ -2108,9 +2115,15 @@ object AutoMode {
      * весь путь, а открытый порт — одно рукопожатие. Человеку показываем то, что есть,
      * не выдавая догадку за замер.
      */
-    private fun noteMain(works: Boolean, portOpen: Boolean?): Boolean {
+    private fun noteMain(works: Boolean, portOpen: Boolean?, squeeze: SpeedProbe.Speed? = null): Boolean {
         when (val probe = lastMainProbe) {
-            is ProxyProbe.Result.Live -> PathRegistry.alive(PathId.MAIN, probe.latencyMs)
+            // Задушенный канал в реестре не «живой»: соединение есть, а пользоваться им
+            // нельзя, и человеку на главном экране это должно быть видно так же, как отказ.
+            is ProxyProbe.Result.Live -> if (squeeze != null) {
+                PathRegistry.dead(PathId.MAIN, "канал задушен: $squeeze", squeezed = true)
+            } else {
+                PathRegistry.alive(PathId.MAIN, probe.latencyMs)
+            }
             is ProxyProbe.Result.Dead -> PathRegistry.dead(PathId.MAIN, probe.reason)
             null -> when (portOpen) {
                 false -> PathRegistry.dead(PathId.MAIN, "адрес узла не отвечает", Evidence.Hint)
@@ -2135,7 +2148,15 @@ object AutoMode {
      * @param trafficFlows через канал прошёл запрос и вернулся ответ; `null` — честной пробы
      *   не было (нет локального входа в конфиге или туннель сейчас погашен).
      */
-    internal fun mainVerdict(portOpen: Boolean?, trafficFlows: Boolean?): Boolean = when {
+    internal fun mainVerdict(
+        portOpen: Boolean?,
+        trafficFlows: Boolean?,
+        squeezed: Boolean = false,
+    ): Boolean = when {
+        // Трафик идёт, но полоса задушена: формально путь жив, а человеку он бесполезен.
+        // Ровно этот случай держал хозяина на входе 443 неделями — проба на двести байт
+        // проскакивала сквозь троттлинг и подтверждала «канал в порядке».
+        trafficFlows == true && squeezed -> false
         // Честная проба главнее всего: она видит весь путь, а не только рукопожатие.
         // Порядок тут важен. Раньше первым стояло «порт молчит — канал мёртв», и вердикт
         // не менялся, даже если через канал в этот же миг прошёл запрос и вернулся ответ.
