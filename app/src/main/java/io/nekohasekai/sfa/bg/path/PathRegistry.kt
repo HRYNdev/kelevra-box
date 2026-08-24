@@ -98,11 +98,25 @@ object PathRegistry {
                 coolingUntil = 0L,
                 raisingSince = 0L,
                 evidence = evidence,
+                // Успех гасит и метку задушенности: иначе ожившая полоса продолжала бы
+                // писать человеку «еле тянет» до следующего отказа.
+                squeezed = false,
             )
         }
 
-    /** Путь не отвечает. Счётчик отказов растёт: по нему видно «мигнул» это или «лёг». */
-    fun dead(id: PathId, reason: String, evidence: Evidence = Evidence.Probe) = update(id) {
+    /**
+     * Путь не отвечает. Счётчик отказов растёт: по нему видно «мигнул» это или «лёг».
+     *
+     * @param squeezed путь отвечает, но полоса задушена ([io.nekohasekai.sfa.bg.path.SpeedProbe]).
+     *   Для решения это тот же отказ (идти таким путём нельзя), но человеку сказать надо
+     *   другое: «не отвечает» про канал, который отвечает, читается как враньё.
+     */
+    fun dead(
+        id: PathId,
+        reason: String,
+        evidence: Evidence = Evidence.Probe,
+        squeezed: Boolean = false,
+    ) = update(id) {
         it.copy(
             status = PathStatus.Dead,
             latencyMs = null,
@@ -113,6 +127,7 @@ object PathRegistry {
             reason = reason,
             raisingSince = 0L,
             evidence = evidence,
+            squeezed = squeezed,
         )
     }
 

@@ -146,7 +146,9 @@ object RuleSetCache {
                 Log.w(TAG, "набор «${remote.tag}» скачался непохожим на набор (${tmp.length()} б) — не берём")
                 return false
             }
-            target.delete()
+            // БЕЗ target.delete() перед переименованием: rename на одной файловой
+            // системе атомарен и старый файл заменяет сам, а delete открывал окно, в
+            // котором набора нет вовсе — под работающим ядром, которое следит за папкой.
             if (!tmp.renameTo(target)) {
                 tmp.delete()
                 Log.w(TAG, "набор «${remote.tag}» не переименовался в кэше")

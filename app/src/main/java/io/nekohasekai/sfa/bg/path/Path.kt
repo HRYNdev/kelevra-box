@@ -132,6 +132,7 @@ data class PathState(
     val coolingUntil: Long = 0L,
     val raisingSince: Long = 0L,
     val evidence: Evidence = Evidence.Never,
+    val squeezed: Boolean = false,
 ) {
     /** Путь годится, чтобы им идти. */
     val usable: Boolean get() = status == PathStatus.Alive

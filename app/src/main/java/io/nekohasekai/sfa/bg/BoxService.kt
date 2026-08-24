@@ -455,6 +455,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         LifelinePatch.log(lifeline)
         result = lifeline.content
 
+        // Выбор выхода из прошлого запуска не должен перекрывать `default` с сервера:
+        // 15.08.2026 залипшая в кэше «Комната» пережила починку канала и вставала обратно
+        // при каждом старте ([CacheSelectPatch]).
+        val cacheSelect = CacheSelectPatch.dontStoreSelected(result)
+        CacheSelectPatch.log(cacheSelect)
+        result = cacheSelect.content
+
         // Стек туннеля правим всегда, а не только под комнатой: порты трансляции
         // кончаются на любом выходе, в комнате это было просто заметнее.
         val stack = OlcRtcConfigPatch.tunnelStack(result)
