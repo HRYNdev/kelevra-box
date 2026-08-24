@@ -84,7 +84,11 @@ object DefaultNetworkListener {
                     is NetworkMessage.Start -> {
                         if (listeners.isEmpty()) register()
                         listeners[message.key] = message.listener
-                        if (network != null) message.listener(network)
+                        // Свежий слушатель зовётся из того же ConnectivityThread, что и рассылка
+                        // ниже: голый вызов здесь ронял бы процесс ровно так же (fix/crashes-15-08).
+                        if (network != null) notifyListeners(listOf(message.listener), network) {
+                            Log.w(TAG, "слушатель сети упал на Start", it)
+                        }
                     }
 
                     is NetworkMessage.Get -> {
