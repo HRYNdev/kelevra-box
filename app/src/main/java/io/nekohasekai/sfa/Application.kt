@@ -39,21 +39,13 @@ class Application : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        AppLifecycleObserver.register(this)
-
-//        Seq.setContext(this)
-        runCatching {
-            Libbox.setLocale(Locale.getDefault().toLanguageTag())
-        }.onFailure {
-            Log.d("Application", "set locale: ${it.message}")
-        }
-        // Беда (краш-репорты Вовы, 15-16.08.2026, дважды в 14:06): TileService у нас
-        // directBootAware, а <application> — нет, поэтому процесс иногда поднимается
-        // ДО разблокировки телефона, шифрованное хранилище (CE) недоступно, а
-        // PrivilegeSettingsClient.register лезет в Room синхронно прямо тут, в onCreate.
-        // Раньше сборщик крашей ставился НИЖЕ этого вызова — собственное падение
-        // оставалось невидимым. Поднимаем его максимально рано, до всего, что может
-        // бросить.
+        // Сборщик крашей ставим ПЕРВЫМ делом, до всего, что умеет бросать.
+        // Раньше он поднимался на 13 строк ниже походов в Room, и падения самого
+        // старта — ровно те, что ловили в бою 15.08.2026, — своим сборщиком не
+        // записывались вообще: приходилось выковыривать их из системного logcat.
+        // Причина падений: TileService у нас directBootAware, а <application> — нет,
+        // поэтому процесс иногда поднимается ДО разблокировки телефона, когда
+        // шифрованное хранилище (CE) ещё недоступно.
         val baseDir = filesDir
         baseDir.mkdirs()
         val workingDir = getExternalFilesDir(null)
@@ -63,6 +55,15 @@ class Application : Application() {
             workingDir.mkdirs()
             CrashReportManager.install(workingDir, baseDir)
             OOMReportManager.install(workingDir)
+        }
+
+        AppLifecycleObserver.register(this)
+
+//        Seq.setContext(this)
+        runCatching {
+            Libbox.setLocale(Locale.getDefault().toLanguageTag())
+        }.onFailure {
+            Log.d("Application", "set locale: ${it.message}")
         }
 
         // Не трогает Room — только IPC до системного биндера, до CE-хранилища
@@ -75,13 +76,16 @@ class Application : Application() {
 
         @Suppress("OPT_IN_USAGE")
         GlobalScope.launch(Dispatchers.IO) {
+            // PrivilegeSettingsClient.register синхронно читает настройки, то есть Room.
+            // В onCreate этого делать нельзя: плитка быстрых настроек объявлена
+            // directBootAware, поэтому процесс поднимается ещё ДО первой разблокировки
+            // телефона, когда шифрованное хранилище пользователя недоступно и Room
+            // отвечает исключением — приложение не стартовало вовсе (15.08.2026,
+            // дважды подряд). Здесь же поход отложен и не роняет старт.
+            runCatching { PrivilegeSettingsClient.register(this@Application) }
             initialize(baseDir, workingDir, tempDir)
             UpdateProfileWork.reconfigureUpdater()
             HookModuleUpdateNotifier.sync(this@Application)
-            // Синхронное чтение Settings (Room): до первой разблокировки CE-хранилище
-            // недоступно и бросает исключение — раньше это роняло процесс ещё в
-            // onCreate, до того как сборщик крашей вообще успевал встать.
-            runCatching { PrivilegeSettingsClient.register(this@Application) }
         }
 
         if (Vendor.isPerAppProxyAvailable()) {

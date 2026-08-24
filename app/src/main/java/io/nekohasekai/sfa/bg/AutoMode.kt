@@ -10,6 +10,7 @@ import io.nekohasekai.sfa.bg.path.Evidence
 import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.bg.path.PathId
 import io.nekohasekai.sfa.bg.path.PathRegistry
+import io.nekohasekai.sfa.bg.path.SpeedProbe
 import io.nekohasekai.sfa.bg.path.PathSnapshot
 import io.nekohasekai.sfa.bg.path.PathStatus
 import io.nekohasekai.sfa.bg.path.ProbeSocket
@@ -415,6 +416,34 @@ object AutoMode {
     private const val ROOM_PEEK_TIMEOUT_MILLIS = 2_500
 
     /**
+     * Как часто из комнаты меряется основной путь ЧЕСТНО, когда узел уже отвечает.
+     *
+     * Рукопожатие до узла в этой обстановке не говорит ничего нового (оно и так проходит),
+     * а душат нас не на установке соединения, а на транспорте: узел отвечает, трафик не
+     * идёт. Единственное, что различает «всё ещё душат» и «отпустило», — запрос, прошедший
+     * весь путь целиком. Стоит он одну пробу ([PROBE_TIMEOUT_MILLIS]) и идёт через
+     * закреплённый вход основного канала, то есть мимо селектора: живые соединения не
+     * рвутся (перестановку селектора на пробе убрали 12.08.2026 — не возвращать).
+     *
+     * Минута — компромисс: полный заход в комнате идёт раз в три минуты, и без этой пробы
+     * снятие удушения замечалось бы только им.
+     */
+    private const val ROOM_HONEST_PEEK_MILLIS = 60_000L
+
+    /**
+     * Сколько живёт выбор, сделанный руками, если сеть под нами так и не сменилась.
+     *
+     * Отпускать выбор по смене сети правильно, но на соте этого события не бывает вовсе:
+     * отпечаток сети ([networkKey]) там один и тот же сутками (замер 12.08.2026), и
+     * «держим до смены сети» превращается в «держим навсегда». Человек, выбравший комнату
+     * на время аварии, оставался в ней до тех пор, пока сам не вспомнит про «Автоматически».
+     *
+     * Час — это заведомо дольше любого разбирательства с сетью и заведомо короче, чем
+     * «навсегда». Смена сети по-прежнему отпускает выбор сразу, не дожидаясь срока.
+     */
+    private const val MANUAL_HOLD_MILLIS = 60 * 60_000L
+
+    /**
      * Насколько раньше срока можно проснуться, чтобы это ещё считалось «дождались».
      * `Object.wait` возвращается не по секундомеру, и без зазора обычное пробуждение
      * по таймеру иногда выглядело бы событием.
@@ -563,17 +592,25 @@ object AutoMode {
     private var peekAt = 0
 
     /**
-     * Есть ли приглядке что искать.
+     * Какой приглядкой из комнаты спрашивать основной путь.
      *
-     * Она ищет ровно один момент: когда молчащий адрес узла начнёт отвечать. Если узел
-     * уже отвечает, а канал всё равно мёртвый (ТСПУ душит транспорт, а не установку
-     * соединения), приглядка не узнаёт ничего нового — зато каждым срабатыванием тянет
-     * за собой полный заход с честной пробой и перестановкой селектора. Поэтому включена
-     * она только там, где основной канал объявлен мёртвым по молчанию узла или по
-     * подсказке, и гаснет, как только узел отозвался.
+     * `true` — узел молчит (или похоронен подсказкой), и ищем ровно один момент: когда
+     * его адрес начнёт принимать соединения. Одно рукопожатие, дёшево.
+     *
+     * `false` — узел уже отвечает, а канала всё равно нет: душат транспорт, а не установку
+     * соединения. Рукопожатие тут не узнаёт ничего нового, поэтому вместо него идёт честная
+     * проба всего пути ([peekThroughMain]) — реже и через закреплённый вход, мимо селектора.
+     * Раньше на этом месте приглядка просто выключалась, и в комнате при живом узле между
+     * трёхминутными заходами не проверялось ничего.
      */
     @Volatile
     private var peekWanted = false
+
+    /**
+     * Когда честная проба из комнаты ходила в последний раз ([SystemClock.elapsedRealtime]);
+     * 0 — не ходила ни разу. Только для того, чтобы держать её ритм ([ROOM_HONEST_PEEK_MILLIS]).
+     */
+    private var honestPeekAt = 0L
 
     /** За сколько ответила прямая проба дома. Нужна только для записи в реестр. */
     @Volatile
@@ -613,6 +650,13 @@ object AutoMode {
      */
     @Volatile
     private var holdKey: String? = null
+
+    /**
+     * Когда выбор руками был сделан ([SystemClock.elapsedRealtime]); 0 — выбора нет.
+     * Нужен потому, что смены сети на соте можно ждать вечно: см. [MANUAL_HOLD_MILLIS].
+     */
+    @Volatile
+    private var holdAt = 0L
 
     /** Последняя пробная попытка поднять комнату — чтобы не долбить её каждым заходом. */
     private var roomTriedAt = 0L
@@ -656,6 +700,7 @@ object AutoMode {
             nodeAnsweredAt = 0L
             peekAt = 0
             peekWanted = false
+            honestPeekAt = 0L
             forgetHomeSign()
             // Прошлая сессия про эти пути больше ничего не знает: сеть под нами могла
             // смениться, пока сервиса не было.
@@ -668,6 +713,10 @@ object AutoMode {
             link = Link.Unknown
             holdNetwork = physicalNetwork()
             holdKey = holdNetwork?.let { networkKey(it) }
+            // Выбор руками переживает перезапуск сервиса (он в настройках), а значит и срок
+            // его жизни надо с чего-то начинать: иначе после каждого перезапуска выбор был
+            // бы «только что сделан» и не истекал бы никогда.
+            holdAt = if (manualExit != null) SystemClock.elapsedRealtime() else 0L
             publish(Settings.autoModeEnabled, initial)
             active = true
             thread = Thread(::loop, "automode").apply {
@@ -745,10 +794,15 @@ object AutoMode {
         // Сравниваем именно физические сети: наш собственный туннель тоже приходит сюда
         // сменой сети по умолчанию, и по ней выбор отпускался бы через секунду после того,
         // как его сделали.
-        // Колбэк приходит на ConnectivityThread (см. комментарий выше), а
-        // Settings.autoModeEnabled — синхронное чтение Room; исключение оттуда роняло
-        // бы поток системы. _state.value.auto — тот же флаг в памяти, его пишут той же
-        // строкой, что и Settings.autoModeEnabled (см. setEnabled, releaseManualHold, choose).
+        //
+        // Спрашиваем ПАМЯТЬ (`_state.value.auto`), а не `Settings` — и это не оптимизация.
+        // Сюда мы приходим прямо из системного колбэка, на ConnectivityThread
+        // ([DefaultNetworkListener] крутит актор на Unconfined и шлёт через runBlocking).
+        // `Settings` — это Room, то есть синхронный поход на диск: до первой разблокировки
+        // телефона CE-хранилища ещё нет, и вместо ответа прилетает исключение, которое
+        // убивает весь процесс вместе с актором сетевых событий. Поймано в бою 15.08.2026.
+        // `_state.value.auto` — тот же флаг, его держат в согласии [setEnabled],
+        // [chooseManually], [releaseManualHold] и старт автомата.
         if (!_state.value.auto) {
             val now = physicalNetwork()
             val nowKey = now?.let { networkKey(it) }
@@ -799,11 +853,12 @@ object AutoMode {
         )
     }
 
-    /** Сеть сменилась — ручной выбор больше ничего не значит, автомат снова сам. */
-    private fun releaseManualHold(network: Network?) {
-        Log.i(TAG, "сеть сменилась — ручной выбор «${manualExit ?: "нет"}» отпущен, автомат снова сам")
+    /** Ручной выбор больше ничего не значит, автомат снова сам. */
+    private fun releaseManualHold(network: Network?, why: String = "сеть сменилась") {
+        Log.i(TAG, "$why — ручной выбор «${manualExit ?: "нет"}» отпущен, автомат снова сам")
         holdNetwork = network
         holdKey = network?.let { networkKey(it) }
+        holdAt = 0L
         manualExit = null
         Settings.manualExitName = ""
         Settings.autoModeManualRoom = false
@@ -817,6 +872,21 @@ object AutoMode {
         publish(true, Situation.Unknown)
     }
 
+    /** Сколько живёт нынешний выбор руками; `null` — выбора нет. */
+    private fun manualHoldAge(): Long? =
+        holdAt.takeIf { it != 0L }?.let { SystemClock.elapsedRealtime() - it }
+
+    /**
+     * Пора ли отпускать выбор, сделанный руками.
+     *
+     * Вынесено отдельно и без обращений к Android: утверждение «выбор живёт не дольше
+     * часа, но и не отпускается раньше» должно проверяться, а не пересказываться.
+     *
+     * @param ageMillis сколько выбор держится; `null` — выбора нет.
+     */
+    internal fun manualHoldExpired(ageMillis: Long?, ttlMillis: Long = MANUAL_HOLD_MILLIS): Boolean =
+        ageMillis != null && ageMillis >= ttlMillis
+
     /** Человек включил или выключил автомат. */
     fun setEnabled(enabled: Boolean) {
         Settings.autoModeEnabled = enabled
@@ -825,6 +895,7 @@ object AutoMode {
             Settings.manualExitName = ""
             Settings.autoModeManualRoom = false
             holdNetwork = null
+            holdAt = 0L
             PathRegistry.reset()
             link = Link.Unknown
         }
@@ -880,6 +951,8 @@ object AutoMode {
         // Сеть, под которую сделан выбор. Сменится — автомат вернётся сам.
         holdNetwork = physicalNetwork()
         holdKey = holdNetwork?.let { networkKey(it) }
+        // И время выбора: на соте смены сети можно не дождаться никогда ([MANUAL_HOLD_MILLIS]).
+        holdAt = SystemClock.elapsedRealtime()
         // Прошлые замеры делались под выбор автомата: держать их и показывать как правду
         // про выход, который человек выбрал сам, значит врать.
         PathRegistry.reset()
@@ -972,6 +1045,18 @@ object AutoMode {
     /** @return обстановка, на которой стоим после этого захода. */
     private fun round(): Situation {
         val host = this.host ?: return Situation.Unknown
+
+        // Выбор руками отпускает [onNetworkChanged] по смене сети — но событие это на соте
+        // не приходит вовсе, и человек оставался в выбранном выходе (чаще всего в комнате,
+        // выбранной на время аварии) до тех пор, пока сам о нём не вспомнит. Срок жизни
+        // выбора закрывает ровно эту дыру и только её: смена сети по-прежнему отпускает
+        // выбор мгновенно, не дожидаясь часа.
+        if (!Settings.autoModeEnabled && manualHoldExpired(manualHoldAge())) {
+            // Обстановку после возврата смотрим как после смены сети: то, что мы про неё
+            // знали, снималось под ручной выбор и уже ничего не значит.
+            networkChanged = true
+            releaseManualHold(physicalNetwork(), "выбор руками держится больше ${MANUAL_HOLD_MILLIS / 60_000} мин")
+        }
 
         if (!Settings.autoModeEnabled) {
             // Человек выбирает выход сам. Обязанностей у нас тут две: вернуть туннель,
@@ -1191,6 +1276,7 @@ object AutoMode {
             PathRegistry.probing(PathId.MAIN)
         }
         refreshLink()
+        val inRoom = gate.current == Situation.Room
         val main = when {
             home -> {
                 peekWanted = false
@@ -1200,7 +1286,11 @@ object AutoMode {
             // уровне маршрутизации, и честная проба потратила бы полминуты, чтобы
             // узнать ровно это. Пишем в реестр подсказкой ([Evidence.Hint]) — видно,
             // что канал не мерили, а вывели.
-            hint == NetworkMode.Whitelist -> {
+            //
+            // Кроме одного случая — [measuresMainDespiteHint]: сидя в комнате, мы за
+            // подсказкой не видим ничего. Она живёт [HINT_TTL_MILLIS], и всё это время
+            // основной путь не меряется вовсе, хотя он мог ожить в первую же минуту.
+            hint == NetworkMode.Whitelist && !measuresMainDespiteHint(inRoom, layout.mainPinned) -> {
                 PathRegistry.dead(PathId.MAIN, WHITELIST_REASON, Evidence.Hint)
                 Log.i(TAG, "основной канал: $WHITELIST_REASON — пробу не тратим")
                 // Канал похоронен подсказкой, а не замером. Вот это и опровергает
@@ -1209,7 +1299,7 @@ object AutoMode {
                 false
             }
 
-            else -> mainWorks(network, host, inRoom = gate.current == Situation.Room)
+            else -> mainWorks(network, host, inRoom = inRoom)
         }
         if (home || main) {
             mainFailures = 0
@@ -2008,7 +2098,13 @@ object AutoMode {
             !host.tunnelLive() -> null
             else -> probeThroughMain(host, proxy)
         }
-        return noteMain(mainVerdict(portOpen, trafficFlows), portOpen)
+        // Честная проба выше отвечает только на «идёт ли трафик». Троттлинг она не видит:
+        // её ответ весит двести байт и проскакивает сквозь задушенную полосу целым.
+        // Поэтому у живого канала отдельно спрашиваем, сколько он тянет ([SpeedProbe]).
+        val squeeze = if (trafficFlows == true) SpeedProbe.measure(proxy, "основной канал") else null
+        val squeezed = squeeze?.let(SpeedProbe::squeezed) ?: false
+        if (squeezed) Log.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
+        return noteMain(mainVerdict(portOpen, trafficFlows, squeezed), portOpen, squeeze.takeIf { squeezed })
     }
 
     /**
@@ -2019,9 +2115,15 @@ object AutoMode {
      * весь путь, а открытый порт — одно рукопожатие. Человеку показываем то, что есть,
      * не выдавая догадку за замер.
      */
-    private fun noteMain(works: Boolean, portOpen: Boolean?): Boolean {
+    private fun noteMain(works: Boolean, portOpen: Boolean?, squeeze: SpeedProbe.Speed? = null): Boolean {
         when (val probe = lastMainProbe) {
-            is ProxyProbe.Result.Live -> PathRegistry.alive(PathId.MAIN, probe.latencyMs)
+            // Задушенный канал в реестре не «живой»: соединение есть, а пользоваться им
+            // нельзя, и человеку на главном экране это должно быть видно так же, как отказ.
+            is ProxyProbe.Result.Live -> if (squeeze != null) {
+                PathRegistry.dead(PathId.MAIN, "канал задушен: $squeeze", squeezed = true)
+            } else {
+                PathRegistry.alive(PathId.MAIN, probe.latencyMs)
+            }
             is ProxyProbe.Result.Dead -> PathRegistry.dead(PathId.MAIN, probe.reason)
             null -> when (portOpen) {
                 false -> PathRegistry.dead(PathId.MAIN, "адрес узла не отвечает", Evidence.Hint)
@@ -2046,7 +2148,15 @@ object AutoMode {
      * @param trafficFlows через канал прошёл запрос и вернулся ответ; `null` — честной пробы
      *   не было (нет локального входа в конфиге или туннель сейчас погашен).
      */
-    internal fun mainVerdict(portOpen: Boolean?, trafficFlows: Boolean?): Boolean = when {
+    internal fun mainVerdict(
+        portOpen: Boolean?,
+        trafficFlows: Boolean?,
+        squeezed: Boolean = false,
+    ): Boolean = when {
+        // Трафик идёт, но полоса задушена: формально путь жив, а человеку он бесполезен.
+        // Ровно этот случай держал Вову на входе 443 неделями — проба на двести байт
+        // проскакивала сквозь троттлинг и подтверждала «канал в порядке».
+        trafficFlows == true && squeezed -> false
         // Честная проба главнее всего: она видит весь путь, а не только рукопожатие.
         // Порядок тут важен. Раньше первым стояло «порт молчит — канал мёртв», и вердикт
         // не менялся, даже если через канал в этот же миг прошёл запрос и вернулся ответ.
@@ -2060,6 +2170,25 @@ object AutoMode {
         // Про канал не известно ничего. Отказ не выдумываем.
         else -> true
     }
+
+    /**
+     * Мерить ли основной путь, несмотря на подсказку «белый список».
+     *
+     * Обычно подсказке верим на слово: под белым списком адрес узла недостижим, и проба
+     * купила бы этот же ответ за полминуты. Но пока мы сидим в комнате, цена вопроса
+     * другая: подсказка живёт [HINT_TTL_MILLIS], и всё это окно основной путь не меряется
+     * ни полным заходом, ни приглядкой — то есть человек досиживает медленный путь при
+     * канале, который мог ожить в первую же минуту.
+     *
+     * Второе условие обязательно: мерить можно только тем, что не рвёт живые соединения.
+     * Есть закреплённый вход основного пути ([AutoModeExits.Layout.mainPinned]) — проба
+     * идёт мимо селектора и не стоит никому ничего. Нет — единственный способ померить
+     * это переставить селектор туда и обратно, а такую пробу убрали 12.08.2026 (у боевого
+     * селектора `interrupt_exist_connections: true`, и каждая проба рвала всё живое дважды).
+     * Возвращать её нельзя, поэтому без закреплённого входа остаёмся на подсказке.
+     */
+    internal fun measuresMainDespiteHint(inRoom: Boolean, mainPinned: Boolean): Boolean =
+        inRoom && mainPinned
 
     /**
      * Честная проба именно основного канала.
@@ -2178,8 +2307,7 @@ object AutoMode {
      * Приглядка из комнаты: одно рукопожатие до узла основного канала.
      *
      * Стоя в комнате, о снятии ограничения мы узнавали только по ритму полных заходов —
-     * то есть в лучшем случае через три минуты, а на деле дольше: подсказка «белый список»
-     * жила своей жизнью и полный заход всё равно не тратил на канал ни одной пробы.
+     * то есть в лучшем случае через три минуты.
      * Здесь спрашивается ровно то, что под белым списком отвечать не может: примет ли
      * адрес узла соединение. Ответил — обстановка сменилась, и дальше разбирается
      * полный заход, разбуженный сейчас же.
@@ -2190,7 +2318,9 @@ object AutoMode {
      * @return true — узел ответил, полный заход нужен немедленно.
      */
     private fun peekMain(): Boolean {
-        if (!Settings.autoModeEnabled || !peekWanted) return false
+        if (!Settings.autoModeEnabled) return false
+        // Узел уже отвечает — рукопожатие не узнает ничего нового. Спрашиваем путь целиком.
+        if (!peekWanted) return peekThroughMain()
         val endpoints = layout.mainEndpoints
         if (endpoints.isEmpty()) return false
         val network = physicalNetwork() ?: return false
@@ -2211,11 +2341,65 @@ object AutoMode {
     }
 
     /**
+     * Приглядка из комнаты для случая, когда узел отвечает: честная проба всего пути.
+     *
+     * Рукопожатие тут бесполезно — оно и так проходит. Душат не установку соединения,
+     * а транспорт: узел принимает SYN, а запрос через канал не возвращается. Различить
+     * «всё ещё душат» и «отпустило» может только запрос, прошедший путь целиком, — им
+     * и спрашиваем. Раньше на этом месте приглядка молча выключалась, и пока комната
+     * отвечала, основной путь между трёхминутными заходами не проверялся ничем.
+     *
+     * Три условия, и все три про то, чтобы проба ничего не сломала:
+     *  - **закреплённый вход** ([AutoModeExits.Layout.mainPinned]) — проба идёт мимо
+     *    селектора. Без него мерить пришлось бы перестановкой селектора, а она рвёт все
+     *    живые соединения (убрано 12.08.2026, см. [probeThroughMain]) — тогда лучше никак;
+     *  - **живой туннель** — иначе локального входа просто нет и стучаться некуда;
+     *  - **свой ритм** ([ROOM_HONEST_PEEK_MILLIS]) — проба дороже рукопожатия, и гонять
+     *    её на каждом куске паузы (20-40 с) незачем.
+     *
+     * @return true — путь ответил, полный заход нужен немедленно.
+     */
+    private fun peekThroughMain(): Boolean {
+        val host = this.host ?: return false
+        if (!layout.mainPinned) return false
+        val proxy = layout.localProxy ?: return false
+        if (!runCatching { host.tunnelLive() }.getOrDefault(false)) return false
+        val now = SystemClock.elapsedRealtime()
+        if (!honestPeekDue(honestPeekAt.takeIf { it != 0L }?.let { now - it })) return false
+        honestPeekAt = now
+
+        lastMainProbe = null
+        val alive = probeThroughMain(host, proxy)
+        // Замер настоящий и ровно про основной путь — в реестр он ложится так же, как из
+        // полного захода: иначе экран все три минуты держал бы запись прошлого захода.
+        noteMain(alive, portOpen = null)
+        refreshLink()
+        if (!alive) return false
+        Log.i(TAG, "приглядка из комнаты: основной путь ответил на честную пробу — проверяю обстановку целиком")
+        // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
+        // изменилась так же доказанно, а подтверждений задвижка всё равно требует —
+        // переключение остаётся защищённым от одиночного везения.
+        burst.restart()
+        return true
+    }
+
+    /**
+     * Пора ли честной пробе из комнаты. Вынесено без обращений к Android: ритм — это
+     * утверждение о поведении, и проверяться оно должно тестом.
+     *
+     * @param sinceMillis сколько прошло с прошлой пробы; `null` — её не было ни разу.
+     */
+    internal fun honestPeekDue(sinceMillis: Long?, everyMillis: Long = ROOM_HONEST_PEEK_MILLIS): Boolean =
+        sinceMillis == null || sinceMillis >= everyMillis
+
+    /**
      * Ожидание внутри комнаты: тот же ритм полных заходов, но с приглядкой между ними.
      *
      * Пауза режется на куски случайной длины ([ROOM_PEEK_MIN_MILLIS]..[ROOM_PEEK_MAX_MILLIS]),
-     * и на границе каждого идёт одна дешёвая проба. Ровного интервала не получается ни у
-     * проб, ни у заходов — метронома, который видно снаружи, тут нет.
+     * и на границе каждого идёт приглядка: рукопожатие до узла, пока он молчит, и честная
+     * проба всего пути ([peekThroughMain], своим ритмом), когда он уже отвечает. Ровного
+     * интервала не получается ни у проб, ни у заходов — метронома, который видно снаружи,
+     * тут нет.
      *
      * Разбудили раньше (сменилась сеть, пересобралось ядро) — выходим сразу: заход и так
      * вот-вот будет, и тратить на приглядку лишнее рукопожатие незачем.
