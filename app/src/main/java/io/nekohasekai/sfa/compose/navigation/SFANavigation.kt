@@ -48,8 +48,6 @@ import io.nekohasekai.sfa.compose.screen.settings.CoreSettingsScreen
 import io.nekohasekai.sfa.compose.screen.settings.DiagnosticsScreen
 import io.nekohasekai.sfa.compose.screen.settings.EditRemoteServerScreen
 import io.nekohasekai.sfa.compose.screen.settings.FDroidMirrorScreen
-// VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
-import io.nekohasekai.sfa.compose.screen.settings.PaletteTrialScreen
 import io.nekohasekai.sfa.compose.screen.settings.PrivilegeSettingsScreen
 import io.nekohasekai.sfa.compose.screen.settings.ProfileOverrideScreen
 import io.nekohasekai.sfa.compose.screen.settings.RemoteControlScreen
@@ -607,8 +605,6 @@ fun SFANavHost(
                 onAppsBypass = { navController.navigate("settings/profile_override/manage") },
                 onCheck = { navController.navigate("settings/diagnostics") },
                 onAdvanced = { navController.navigate("settings/all") },
-                // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
-                onPaletteTrial = { navController.navigate("settings/palette_trial") },
                 onComplaint = { navController.navigate("complaint") },
                 onCheckUpdate = {
                     обновлениеИдёт = true
@@ -733,16 +729,6 @@ fun SFANavHost(
             AppSettingsScreen(navController = navController, serviceStatus = serviceStatus)
         }
 
-        // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
-        composable(
-            route = "settings/palette_trial",
-            enterTransition = slideInFromRight,
-            exitTransition = slideOutToLeft,
-            popEnterTransition = slideInFromLeft,
-            popExitTransition = slideOutToRight,
-        ) {
-            PaletteTrialScreen(navController = navController)
-        }
 
         composable(
             route = "settings/diagnostics",
