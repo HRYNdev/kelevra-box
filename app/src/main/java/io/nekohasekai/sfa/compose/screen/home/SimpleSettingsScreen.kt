@@ -68,8 +68,6 @@ fun SimpleSettingsScreen(
     onAppsBypass: () -> Unit,
     onCheck: () -> Unit,
     onAdvanced: () -> Unit,
-    // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
-    onPaletteTrial: () -> Unit,
     onComplaint: () -> Unit,
     onCheckUpdate: () -> Unit,
     обновлениеПодпись: String,
@@ -171,17 +169,6 @@ fun SimpleSettingsScreen(
                 KRowItem(title = "Расширенные настройки", chevron = true)
             }
 
-            // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
-            // Вход здесь, а не в глубине: экран нужен хозяину под рукой, чтобы выбрать
-            // оттенок и вид круга на живом телефоне.
-            Spacer(Modifier.height(18.dp))
-            KCard(onClick = onPaletteTrial) {
-                KRowItem(
-                    title = "Пробные палитры",
-                    subtitle = "Временно: оттенок акцента и вид круга",
-                    chevron = true,
-                )
-            }
 
             Spacer(Modifier.height(20.dp))
             Text(

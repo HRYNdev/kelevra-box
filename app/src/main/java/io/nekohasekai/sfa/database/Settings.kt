@@ -114,9 +114,6 @@ object Settings {
     var oomKillerDisabled by dataStore.boolean(SettingsKey.OOM_KILLER_DISABLED) { true }
     var oomMemoryLimitMB by dataStore.int(SettingsKey.OOM_MEMORY_LIMIT_MB) { 50 }
 
-    // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
-    var paletteTrialAccent by dataStore.int(SettingsKey.PALETTE_TRIAL_ACCENT) { 0 }
-    var paletteTrialDial by dataStore.int(SettingsKey.PALETTE_TRIAL_DIAL) { 0 }
 
     var dashboardItemOrder by dataStore.string(SettingsKey.DASHBOARD_ITEM_ORDER) { "" }
     // По умолчанию на главной только профиль и состояние. Трафик, соединения, отладка
