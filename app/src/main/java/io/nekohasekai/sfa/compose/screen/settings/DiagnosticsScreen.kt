@@ -193,7 +193,7 @@ fun DiagnosticsScreen(onBack: () -> Unit = {}) {
                                 )
                                 is CheckState.Done -> Text(
                                     text = if (state.ok) "✓" else "✕",
-                                    color = if (state.ok) K.Accent else K.Bad,
+                                    color = if (state.ok) K.Ok else K.Err,
                                 )
                                 CheckState.Idle -> Text(text = "—", color = K.Dim2)
                             }

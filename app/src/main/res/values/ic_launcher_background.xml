@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- фон иконки: тот же глубокий тёмный, что и фон приложения -->
-    <color name="ic_launcher_background">#0B0E13</color>
+    <!-- фон иконки: фон тёмной темы из KTokens (Bg #111310) -->
+    <color name="ic_launcher_background">#111310</color>
 </resources>

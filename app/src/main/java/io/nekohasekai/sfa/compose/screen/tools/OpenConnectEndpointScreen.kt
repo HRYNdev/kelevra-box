@@ -58,6 +58,7 @@ import androidx.navigation.NavController
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compat.menuAnchorCompat
 import io.nekohasekai.sfa.compose.base.UiEvent
+import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
 import kotlinx.coroutines.launch
 
@@ -458,10 +459,13 @@ private fun TunnelInfoRow(value: String, label: String) {
     }
 }
 
+// Цвет состояния — семантика темы, а не отдельные краски: подключено, внимание,
+// ошибка, выключено. Рядом с точкой всегда стоит слово, цвет не единственный признак.
+@Composable
 private fun stateColor(state: String): Color = when (state) {
-    "connected" -> Color(0xFF4CAF50)
-    "auth-pending" -> Color(0xFFFF9800)
-    "connecting" -> Color(0xFFFFEB3B)
-    "error" -> Color(0xFFF44336)
-    else -> Color.Gray
+    "connected" -> K.Ok
+    "auth-pending" -> K.Warn
+    "connecting" -> K.Warn
+    "error" -> K.Err
+    else -> K.Dim2
 }

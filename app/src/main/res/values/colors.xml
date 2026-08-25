@@ -1,9 +1,33 @@
 <resources>
-    <color name="seed">#d81b60</color>
-    <color name="surface_80">#CC1C1B1F</color>
+    <!--
+      Токены фирменного стиля для XML-части (экраны на View, диалоги, системные полосы).
+      Значения ровно те же, что в design-tokens/src/main/kotlin/dev/hryn/kelevra/KTokens.kt:
+      здесь светлая тема, тёмная лежит в values-night/colors.xml.
+      Правится в двух местах одновременно — XML нельзя прочитать из Kotlin-исходника.
+    -->
+    <color name="k_bg">#fbfbfa</color>
+    <color name="k_surface">#ffffff</color>
+    <color name="k_sunken">#f1f2ee</color>
+    <color name="k_line">#e3e5df</color>
+    <color name="k_ink">#16181a</color>
+    <color name="k_ink_2">#5b615d</color>
+    <color name="k_ink_3">#8d938e</color>
+    <color name="k_accent">#5f7a33</color>
+    <color name="k_accent_ink">#ffffff</color>
+    <color name="k_ok">#1f7a68</color>
+    <color name="k_warn">#b06f16</color>
+    <color name="k_err">#b03a2e</color>
 
-    <color name="blue_grey_600">#546e7a</color>
+    <!-- затравка Material You: не используется, держим на акценте, а не на розовом апстрима -->
+    <color name="seed">#5f7a33</color>
+    <color name="surface_80">#CCFBFBFA</color>
 
+    <color name="blue_grey_600">#5b615d</color>
+
+    <!--
+      Палитра терминала ANSI: расшифровка кодов 31-37 в журнале ядра (ColorUtils).
+      Это не оформление продукта, смысл цвета задаёт сама строка лога.
+    -->
     <color name="log_red">#ff2158</color>
     <color name="log_green">#2ecc71</color>
     <color name="log_yellow">#e5e500</color>

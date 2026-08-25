@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.component.qr.QRCodeDialog
+import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
 import io.nekohasekai.sfa.compose.util.QRCodeGenerator
 
@@ -428,7 +429,7 @@ private fun PeerItem(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(if (peer.online) Color(0xFF4CAF50) else Color.Gray),
+                    .background(if (peer.online) K.Ok else K.Dim2),
             )
         }
         Column(
@@ -478,14 +479,14 @@ private fun peerBadges(peer: TailscalePeerData): List<PeerBadge> {
     if (!peer.online) return emptyList()
     val badges = mutableListOf<PeerBadge>()
     if (peer.shareeNode) {
-        badges += PeerBadge(stringResource(R.string.tailscale_shared_in), Color(0xFFF44336))
+        badges += PeerBadge(stringResource(R.string.tailscale_shared_in), K.Warn)
     }
     if (peer.exitNodeOption) {
-        badges += PeerBadge(stringResource(R.string.tailscale_exit_node), Color(0xFF2196F3))
+        badges += PeerBadge(stringResource(R.string.tailscale_exit_node), K.Accent)
     }
     when {
         peer.expired -> {
-            badges += PeerBadge(stringResource(R.string.tailscale_expired), Color(0xFFF44336))
+            badges += PeerBadge(stringResource(R.string.tailscale_expired), K.Err)
         }
         peer.keyExpiry > 0 -> {
             val expiryMs = peer.keyExpiry * 1000
@@ -498,15 +499,15 @@ private fun peerBadges(peer: TailscalePeerData): List<PeerBadge> {
                     DateUtils.MINUTE_IN_MILLIS,
                     DateUtils.FORMAT_ABBREV_RELATIVE,
                 ).toString()
-                badges += PeerBadge(stringResource(R.string.tailscale_expires_relative, rel), Color.Gray)
+                badges += PeerBadge(stringResource(R.string.tailscale_expires_relative, rel), K.Dim2)
             }
         }
         else -> {
-            badges += PeerBadge(stringResource(R.string.tailscale_key_expiry_disabled), Color.Gray)
+            badges += PeerBadge(stringResource(R.string.tailscale_key_expiry_disabled), K.Dim2)
         }
     }
     if (peer.sshHostKeys.isNotEmpty()) {
-        badges += PeerBadge(stringResource(R.string.tailscale_ssh), Color(0xFF4CAF50))
+        badges += PeerBadge(stringResource(R.string.tailscale_ssh), K.Ok)
     }
     return badges
 }
@@ -516,7 +517,7 @@ private fun PeerBadgeView(badge: PeerBadge) {
     Text(
         text = badge.text,
         style = MaterialTheme.typography.labelSmall,
-        color = Color.White,
+        color = K.AccentInk,
         maxLines = 1,
         modifier = Modifier
             .clip(RoundedCornerShape(50))
@@ -525,9 +526,11 @@ private fun PeerBadgeView(badge: PeerBadge) {
     )
 }
 
+// Цвет состояния — семантика темы. Рядом всегда стоит слово: цвет не единственный признак.
+@Composable
 private fun stateColor(state: String): Color = when (state) {
-    "Running" -> Color(0xFF4CAF50)
-    "NeedsLogin", "NeedsMachineAuth" -> Color(0xFFFF9800)
-    "Starting" -> Color(0xFFFFEB3B)
-    else -> Color.Gray
+    "Running" -> K.Ok
+    "NeedsLogin", "NeedsMachineAuth" -> K.Warn
+    "Starting" -> K.Warn
+    else -> K.Dim2
 }

@@ -3,8 +3,43 @@
 
     <style name="AppTheme" parent="AppTheme.Base" />
 
+    <!--
+      Каркас Material оставлен, но краски у него свои: акцент — олива, нейтраль —
+      тёплый графит. Значения приходят из @color/k_*, светлые и тёмные наборы разные
+      (values/colors.xml и values-night/colors.xml). Подстройку под обои телефона не
+      включаем: свой узнаваемый вид важнее.
+    -->
     <style name="AppTheme.Base" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="bottomSheetDialogTheme">@style/BottomSheetDialogTheme</item>
+
+        <item name="colorPrimary">@color/k_accent</item>
+        <item name="colorOnPrimary">@color/k_accent_ink</item>
+        <item name="colorPrimaryContainer">@color/k_sunken</item>
+        <item name="colorOnPrimaryContainer">@color/k_ink</item>
+        <!-- второго акцента в системе нет: secondary и tertiary — тот же цвет -->
+        <item name="colorSecondary">@color/k_accent</item>
+        <item name="colorOnSecondary">@color/k_accent_ink</item>
+        <item name="colorSecondaryContainer">@color/k_sunken</item>
+        <item name="colorOnSecondaryContainer">@color/k_ink</item>
+        <item name="colorTertiary">@color/k_accent</item>
+        <item name="colorOnTertiary">@color/k_accent_ink</item>
+
+        <item name="colorError">@color/k_err</item>
+        <item name="colorOnError">@color/k_surface</item>
+
+        <item name="android:colorBackground">@color/k_bg</item>
+        <item name="colorOnBackground">@color/k_ink</item>
+        <item name="colorSurface">@color/k_surface</item>
+        <item name="colorOnSurface">@color/k_ink</item>
+        <item name="colorSurfaceVariant">@color/k_sunken</item>
+        <item name="colorOnSurfaceVariant">@color/k_ink_2</item>
+        <item name="colorSurfaceContainerLowest">@color/k_sunken</item>
+        <item name="colorSurfaceContainerLow">@color/k_sunken</item>
+        <item name="colorSurfaceContainer">@color/k_surface</item>
+        <item name="colorSurfaceContainerHigh">@color/k_surface</item>
+        <item name="colorSurfaceContainerHighest">@color/k_surface</item>
+        <item name="colorOutline">@color/k_line</item>
+        <item name="colorOutlineVariant">@color/k_line</item>
     </style>
 
     <style name="AppTheme.Translucent" parent="Theme.Material3.DayNight.Dialog.Alert">

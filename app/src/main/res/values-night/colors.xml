@@ -1,0 +1,21 @@
+<resources>
+    <!--
+      Тёмная тема. Отдельный набор, а не инверсия светлой: поверхность светлее фона,
+      утопленное темнее. Значения совпадают с KDark в KTokens.kt.
+    -->
+    <color name="k_bg">#111310</color>
+    <color name="k_surface">#191c18</color>
+    <color name="k_sunken">#0c0e0b</color>
+    <color name="k_line">#2b2f29</color>
+    <color name="k_ink">#f0f1ec</color>
+    <color name="k_ink_2">#a5aba3</color>
+    <color name="k_ink_3">#71766f</color>
+    <color name="k_accent">#a8cc6b</color>
+    <color name="k_accent_ink">#111310</color>
+    <color name="k_ok">#4fbfa4</color>
+    <color name="k_warn">#e0a34a</color>
+    <color name="k_err">#f08379</color>
+
+    <color name="surface_80">#CC111310</color>
+    <color name="blue_grey_600">#a5aba3</color>
+</resources>

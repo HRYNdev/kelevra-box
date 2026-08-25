@@ -51,7 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /** Состояние круга: от него зависит цвет кольца и свечение. */
-enum class DialState { On, Off, Busy, Broken }
+enum class DialState { On, Off, Busy, Degraded, Broken }
 
 /**
  * Круг-состояние. Тонкое кольцо с бегущим по нему градиентом и живое свечение
@@ -69,11 +69,15 @@ fun KDial(
     size: androidx.compose.ui.unit.Dp = KDim.DialSize,
 ) {
     val colors = K
-    val live = state == DialState.On || state == DialState.Busy || state == DialState.Broken
+    val live = state != DialState.Off
+    // Цвет кольца — семантика состояния, а не акцент. домашнихва сама по себе не значит
+    // «подключено»: раньше этот смысл нёс мятный акцент, и с переходом на фирменный
+    // цвет разница между «работает» и просто кнопкой пропала бы.
     val target = when (state) {
-        DialState.On -> colors.Accent
-        DialState.Busy -> colors.Accent2
-        DialState.Broken -> colors.Warn
+        DialState.On -> colors.Ok
+        DialState.Busy -> colors.Accent
+        DialState.Degraded -> colors.Warn
+        DialState.Broken -> colors.Err
         DialState.Off -> colors.Dim2.copy(alpha = 0.55f)
     }
     val ring by animateColorAsState(target, tween(400), label = "ring")
@@ -132,8 +136,11 @@ fun KDial(
             if (live) {
                 rotate(angle) {
                     drawCircle(
+                        // Бегущий блик делаем ступенью нейтральных токенов, а не
+                        // вторым акцентом: он каноном запрещён, а на одном цвете
+                        // кольцо слилось бы в ровное пятно.
                         brush = Brush.sweepGradient(
-                            listOf(colors.Accent2, ring, colors.Accent2),
+                            listOf(colors.Border, ring, colors.Border),
                             center = center,
                         ),
                         radius = r - stroke,
@@ -192,7 +199,7 @@ fun KBadge(text: String, small: Boolean = false, accent: Boolean = false) {
         modifier = Modifier
             .size(width = if (small) 26.dp else 34.dp, height = if (small) 19.dp else 24.dp)
             .clip(RoundedCornerShape(if (small) 5.dp else 7.dp))
-            .background(colors.Surface2)
+            .background(colors.Sunken)
             .border(
                 1.dp,
                 if (accent) colors.Accent.copy(alpha = 0.45f) else colors.Border,
@@ -316,7 +323,7 @@ fun KGroupTitle(text: String) {
 fun KSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
     val colors = K
     val track by animateColorAsState(
-        if (checked) colors.Accent.copy(alpha = 0.28f) else colors.Surface2,
+        if (checked) colors.Accent.copy(alpha = 0.28f) else colors.Sunken,
         tween(200),
         label = "track",
     )
@@ -359,7 +366,7 @@ fun KButton(
                 when {
                     ghost -> Color.Transparent
                     enabled -> colors.Accent
-                    else -> colors.Surface2
+                    else -> colors.Sunken
                 },
             )
             .then(if (ghost) Modifier.border(1.dp, colors.Border, shape) else Modifier)
@@ -375,8 +382,7 @@ fun KButton(
             color = when {
                 ghost -> colors.Dim
                 !enabled -> colors.Dim2
-                colors.isDark -> Color(0xFF04140F)
-                else -> Color.White
+                else -> colors.AccentInk
             },
         )
     }
@@ -393,7 +399,7 @@ fun KTabBar(tabs: List<KTab>, selected: Int, onSelect: (Int) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(colors.Bg2)
+            .background(colors.Surface)
             .navigationBarsPadding(),
     ) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.Border))

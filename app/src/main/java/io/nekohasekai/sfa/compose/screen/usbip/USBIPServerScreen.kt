@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
 import io.nekohasekai.sfa.usbip.ProvidedDevice
 import io.nekohasekai.sfa.usbip.ProvidedDeviceState
@@ -303,10 +304,10 @@ private fun stateInfo(row: UsbDeviceRow): Pair<String, Tone> {
 
 @Composable
 private fun toneColor(tone: Tone): Color = when (tone) {
-    Tone.GOOD -> Color(0xFF4CAF50)
-    Tone.MEDIUM -> MaterialTheme.colorScheme.primary
-    Tone.BAD -> MaterialTheme.colorScheme.error
-    Tone.NEUTRAL -> Color.Gray
+    Tone.GOOD -> K.Ok
+    Tone.MEDIUM -> K.Warn
+    Tone.BAD -> K.Err
+    Tone.NEUTRAL -> K.Dim2
 }
 
 private fun mergeRows(server: UsbipServerData, provided: List<ProvidedDevice>): List<UsbDeviceRow> {

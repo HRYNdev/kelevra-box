@@ -132,8 +132,8 @@ fun AdvancedScreen(
                     enabled = refresh !is SubscriptionRefresh.State.Running,
                 )
                 val message = when (val current = refresh) {
-                    is SubscriptionRefresh.State.Ok -> current.note to colors.Accent
-                    is SubscriptionRefresh.State.Failed -> current.reason to colors.Bad
+                    is SubscriptionRefresh.State.Ok -> current.note to colors.Ok
+                    is SubscriptionRefresh.State.Failed -> current.reason to colors.Err
                     else -> null
                 }
                 if (message != null) {

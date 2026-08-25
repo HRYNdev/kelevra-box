@@ -258,7 +258,7 @@ private fun OlcRtcField(
             modifier = Modifier
                 .fillMaxWidth()
                 .border(1.dp, colors.Border, RoundedCornerShape(KDim.RadiusM))
-                .background(colors.Surface2, RoundedCornerShape(KDim.RadiusM))
+                .background(colors.Sunken, RoundedCornerShape(KDim.RadiusM))
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         ) {
             if (value.isEmpty()) {

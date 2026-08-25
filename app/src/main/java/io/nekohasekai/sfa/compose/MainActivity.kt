@@ -1153,10 +1153,10 @@ class MainActivity :
                     // на внутренних экранах панели нет — как и на телефоне
                     if (!isSubScreen) {
                         val colors = K
-                        Surface(color = colors.Bg2, tonalElevation = 0.dp) {
+                        Surface(color = colors.Surface, tonalElevation = 0.dp) {
                             NavigationRail(
                                 modifier = Modifier.fillMaxHeight(),
-                                containerColor = colors.Bg2,
+                                containerColor = colors.Surface,
                             ) {
                                 val hasUpdate by UpdateState.hasUpdate
                                 mainTabs.forEachIndexed { index, tab ->
@@ -1178,7 +1178,7 @@ class MainActivity :
                                             selectedTextColor = colors.Accent,
                                             unselectedIconColor = colors.Dim,
                                             unselectedTextColor = colors.Dim,
-                                            indicatorColor = colors.Surface2,
+                                            indicatorColor = colors.Sunken,
                                         ),
                                     )
                                 }
