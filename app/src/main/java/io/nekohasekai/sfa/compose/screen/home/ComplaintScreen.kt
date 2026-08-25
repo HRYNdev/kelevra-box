@@ -172,7 +172,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
                     text = error!!,
                     fontFamily = Montserrat,
                     fontSize = 13.sp,
-                    color = colors.Bad,
+                    color = colors.Err,
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
             }

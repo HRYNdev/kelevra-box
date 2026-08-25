@@ -149,7 +149,7 @@ private fun StepDots(step: Int) {
                     .padding(horizontal = 3.dp)
                     .size(width = 26.dp, height = 3.dp)
                     .background(
-                        if (index < step) colors.Accent else colors.Surface2,
+                        if (index < step) colors.Accent else colors.Sunken,
                         RoundedCornerShape(2.dp),
                     ),
             )
@@ -211,7 +211,7 @@ private fun ColumnScope.StepCode(
             .fillMaxWidth()
             .border(
                 1.dp,
-                if (error != null) colors.Bad else colors.Border,
+                if (error != null) colors.Err else colors.Border,
                 RoundedCornerShape(KDim.RadiusM),
             )
             .background(colors.Surface, RoundedCornerShape(KDim.RadiusM))
@@ -251,7 +251,7 @@ private fun ColumnScope.StepCode(
             text = error,
             fontFamily = Montserrat,
             fontSize = 13.sp,
-            color = colors.Bad,
+            color = colors.Err,
             textAlign = TextAlign.Center,
         )
     }
@@ -315,7 +315,7 @@ private fun SystemAsk(title: String, yes: String, no: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(colors.Surface2, RoundedCornerShape(KDim.RadiusS))
+            .background(colors.Sunken, RoundedCornerShape(KDim.RadiusS))
             .padding(14.dp),
     ) {
         Text(

@@ -50,9 +50,21 @@ fun main() = application {
         CompositionLocalProvider(LocalKColors provides colors) {
             MaterialTheme(
                 colorScheme = if (dark) {
-                    darkColorScheme(primary = colors.Accent, background = colors.Bg, surface = colors.Surface)
+                    darkColorScheme(
+                        primary = colors.Accent,
+                        onPrimary = colors.AccentInk,
+                        background = colors.Bg,
+                        surface = colors.Surface,
+                        error = colors.Err,
+                    )
                 } else {
-                    lightColorScheme(primary = colors.Accent, background = colors.Bg, surface = colors.Surface)
+                    lightColorScheme(
+                        primary = colors.Accent,
+                        onPrimary = colors.AccentInk,
+                        background = colors.Bg,
+                        surface = colors.Surface,
+                        error = colors.Err,
+                    )
                 },
             ) {
                 App(onToggleTheme = { dark = !dark })
@@ -74,7 +86,7 @@ private fun App(onToggleTheme: () -> Unit) {
             modifier = Modifier
                 .width(186.dp)
                 .fillMaxHeight()
-                .background(colors.Bg2)
+                .background(colors.Surface)
                 .padding(horizontal = 10.dp, vertical = 14.dp),
         ) {
             Row(
@@ -118,7 +130,7 @@ private fun SideItem(title: String, active: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(10.dp))
-            .background(if (active) colors.Surface else colors.Bg2)
+            .background(if (active) colors.Sunken else colors.Surface)
             .clickable { onClick() }
             .padding(horizontal = 11.dp, vertical = 10.dp),
     ) {

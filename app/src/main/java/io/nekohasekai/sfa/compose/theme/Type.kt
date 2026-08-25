@@ -6,7 +6,16 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// Material 3 Typography
+/*
+ * УСТАРЕВШАЯ ШКАЛА. Приложение живёт на `KelevraTypography` из Kelevra.kt: там свои
+ * гарнитуры (Montserrat и Roboto Mono) и свои размеры. Ниже — дефолтная шкала
+ * Material 3 из апстрима, она никем не используется.
+ *
+ * Приводить её к канону (`DESIGN.md`, раздел 2: шесть ступеней) сейчас нельзя:
+ * это перевёрстка всех экранов, отдельный заход. Файл оставлен на месте и не удалён,
+ * чтобы не потерять историю и не сломать сборку апстримных экранов.
+ */
+@Deprecated("Шкала продукта — KelevraTypography в Kelevra.kt", ReplaceWith("KelevraTypography"))
 val Typography =
     Typography(
         // Display styles

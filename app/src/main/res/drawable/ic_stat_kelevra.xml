@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Значок в шторке уведомлений. То же кольцо, что на иконке приложения и на главном экране:
+  человек видит один знак везде.
+
+  Android рисует значок статус-бара силуэтом по альфа-каналу и красит его сам
+  (через setColor у построителя уведомления), поэтому здесь только белый —
+  цвет задаётся в коде, а не тут.
+
+  До 25.08.2026 здесь стоял ic_menu — три полоски меню, из-за чего в шторке
+  приложение было неотличимо от любого другого.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:pathData="M12,12m-8,0a8,8 0,1 1,16 0a8,8 0,1 1,-16 0"
+        android:strokeWidth="2"
+        android:strokeColor="#FFFFFF"
+        android:fillColor="#00000000" />
+    <path
+        android:pathData="M12,12m-2.6,0a2.6,2.6 0,1 1,5.2 0a2.6,2.6 0,1 1,-5.2 0"
+        android:fillColor="#FFFFFF" />
+</vector>

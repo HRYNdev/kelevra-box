@@ -187,7 +187,7 @@ fun SimpleSettingsScreen(
         ModalBottomSheet(
             onDismissRequest = { showModes = false },
             sheetState = sheetState,
-            containerColor = colors.Bg2,
+            containerColor = colors.Surface,
             contentColor = colors.Text,
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {

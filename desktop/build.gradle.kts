@@ -18,6 +18,8 @@ dependencies {
 
 kotlin {
     jvmToolchain(21)
+    // Тот же файл токенов, что и у :app. Правится в одном месте, иначе клиенты разъедутся.
+    sourceSets["main"].kotlin.srcDir("../design-tokens/src/main/kotlin")
 }
 
 compose.desktop {
