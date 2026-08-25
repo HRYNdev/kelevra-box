@@ -73,12 +73,21 @@ fun KDial(
     // Цвет кольца — семантика состояния, а не акцент. домашнихва сама по себе не значит
     // «подключено»: раньше этот смысл нёс мятный акцент, и с переходом на фирменный
     // цвет разница между «работает» и просто кнопкой пропала бы.
-    val target = when (state) {
-        DialState.On -> colors.Ok
-        DialState.Busy -> colors.Accent
-        DialState.Degraded -> colors.Warn
-        DialState.Broken -> colors.Err
-        DialState.Off -> colors.Dim2.copy(alpha = 0.55f)
+    // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
+    // Вариант круга выбирается на экране «Пробные палитры». Убрать вместе с ним:
+    // остаётся ветка A (colors.Ok) и KDim.DialStroke, как было.
+    val trial = PaletteTrial.dial
+    val target = if (trial == TrialDial.C) {
+        // Нейтральный: кольцо не несёт цвета состояния, читается только текст внутри.
+        if (state == DialState.Off) colors.Border else colors.Dim
+    } else {
+        when (state) {
+            DialState.On -> if (trial == TrialDial.A) colors.Ok else colors.Accent
+            DialState.Busy -> colors.Accent
+            DialState.Degraded -> colors.Warn
+            DialState.Broken -> colors.Err
+            DialState.Off -> colors.Dim2.copy(alpha = 0.55f)
+        }
     }
     val ring by animateColorAsState(target, tween(400), label = "ring")
 
@@ -132,7 +141,8 @@ fun KDial(
                     radius = r,
                 )
             }
-            val stroke = KDim.DialStroke.toPx()
+            // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
+            val stroke = (if (trial == TrialDial.D) 4.dp else KDim.DialStroke).toPx()
             if (live) {
                 rotate(angle) {
                     drawCircle(

@@ -66,7 +66,10 @@ private fun schemeOf(c: KColors) =
  */
 @Composable
 fun SFATheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colors = if (darkTheme) KDark else KLight
+    // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
+    // Подмена одного токена Accent: схема Material собирается ниже уже из неё,
+    // поэтому выбранный оттенок протягивается по всему интерфейсу сам.
+    val colors = PaletteTrial.apply(if (darkTheme) KDark else KLight)
     val colorScheme = schemeOf(colors)
 
     val view = LocalView.current
