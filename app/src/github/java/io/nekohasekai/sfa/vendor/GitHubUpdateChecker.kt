@@ -15,6 +15,11 @@ import java.io.Closeable
 class GitHubUpdateChecker : Closeable {
     companion object {
         private const val RELEASES_URL = "https://api.github.com/repos/HRYNdev/kelevra-box/releases"
+        private const val RELEASES_PER_PAGE = 100
+        // Предохранитель от бесконечного цикла, а не рабочий предел: 1000 релизов —
+        // это годы при нынешнем темпе (62 релиза за месяц), а страница берётся только
+        // если предыдущая пришла полной.
+        private const val RELEASES_MAX_PAGES = 10
         private const val METADATA_FILENAME = "kelevra-version.json"
         private val APK_VERSION = Regex("""^Kelevra-(\d+\.\d+\.\d+)-.*\.apk$""")
     }
@@ -93,9 +98,40 @@ class GitHubUpdateChecker : Closeable {
         )
     }
 
+    // Запрос без per_page отдаёт 30 релизов — окно, а не список. Замер 25.08.2026 на живом
+    // репозитории: релизов 62, то есть половина не видна вообще. Обновление выбирается
+    // максимумом по версии среди ВИДИМЫХ релизов, поэтому выпадение за окно не ошибка,
+    // а тишина: обновления просто нет.
+    //
+    // Порядок страницы почти всегда по убыванию created_at, но «почти»: в тех же 62 релизах
+    // одно нарушение — kelevra15 (03.08 19:48) лежит 53-м, ниже kelevra6/5/4 (03.08 12:29-13:29).
+    // Черновик стоит нулевым независимо от даты. Значит на порядок опираться нельзя,
+    // и единственная защита от тихого пропуска — читать список целиком.
+    // В соседнем kelevra-desktop то же окно (там 20) уже привело к тому, что новая установка
+    // осталась без ядра: оно лежало 31-м из 32.
+    //
+    // Читаем страницами по 100, пока страница приходит полной: на сегодняшних 62 релизах
+    // это по-прежнему ОДИН запрос. Обрыв на второй и дальше странице не роняет проверку —
+    // лучше решить по неполному списку, чем не решить вообще; первая страница обязательна.
     private fun getReleases(githubToken: String): List<GitHubRelease> {
+        val releases = mutableListOf<GitHubRelease>()
+        for (page in 1..RELEASES_MAX_PAGES) {
+            val batch = if (page == 1) {
+                getReleasesPage(githubToken, page)
+            } else {
+                runCatching { getReleasesPage(githubToken, page) }.getOrNull() ?: break
+            }
+            releases.addAll(batch)
+            if (batch.size < RELEASES_PER_PAGE) {
+                break
+            }
+        }
+        return releases
+    }
+
+    private fun getReleasesPage(githubToken: String, page: Int): List<GitHubRelease> {
         val request = client.newRequest()
-        request.setURL(RELEASES_URL)
+        request.setURL("$RELEASES_URL?per_page=$RELEASES_PER_PAGE&page=$page")
         request.setHeader("Accept", "application/vnd.github.v3+json")
         val token = githubToken.trim()
         if (token.isNotEmpty()) {
