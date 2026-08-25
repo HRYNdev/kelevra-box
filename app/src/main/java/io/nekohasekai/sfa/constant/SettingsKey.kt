@@ -102,6 +102,10 @@ object SettingsKey {
     /** Номер жалобы, ответ на которую человек уже прочитал: показывать его снова незачем. */
     const val COMPLAINT_REPLY_SEEN = "complaint_reply_seen"
 
+    // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
+    const val PALETTE_TRIAL_ACCENT = "palette_trial_accent"
+    const val PALETTE_TRIAL_DIAL = "palette_trial_dial"
+
     // cache
     const val STARTED_BY_USER = "started_by_user"
     const val CACHED_UPDATE_INFO = "cached_update_info"

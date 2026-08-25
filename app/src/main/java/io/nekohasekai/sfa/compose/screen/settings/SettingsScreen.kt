@@ -21,6 +21,8 @@ import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MonitorHeart
+// VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.SettingsRemote
 import androidx.compose.material.icons.outlined.Terminal
@@ -309,6 +311,50 @@ fun SettingsScreen(navController: NavController) {
                     ),
                 )
             }
+        }
+
+        // VREMENNO: vybor palitry, ubrat posle resheniya Vovy (25.08.2026)
+        // Отдельной карточкой, чтобы вырезать одним куском и не трогать соседей.
+        Card(
+            modifier =
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            colors =
+            CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            ),
+        ) {
+            ListItem(
+                headlineContent = {
+                    Text(
+                        "Пробные палитры",
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        "Временно: выбрать оттенок акцента и вид круга",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = K.Dim,
+                    )
+                },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Outlined.Palette,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                },
+                modifier =
+                Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { navController.navigate("settings/palette_trial") },
+                colors =
+                ListItemDefaults.colors(
+                    containerColor = Color.Transparent,
+                ),
+            )
         }
 
         // блок «О программе» с ссылками на чужой проект (документация sing-box,
