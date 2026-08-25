@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import androidx.annotation.StringRes
+import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.lifecycle.MutableLiveData
@@ -94,7 +95,9 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
     private val notificationBuilder by lazy {
         NotificationCompat.Builder(service, notificationChannel).setShowWhen(false).setOngoing(true)
             .setContentTitle(service.getString(R.string.app_name)).setOnlyAlertOnce(true)
-            .setSmallIcon(R.drawable.ic_menu)
+            .setSmallIcon(R.drawable.ic_stat_kelevra)
+            // svoy znak i firmennyy cvet: v shtorke prilozhenie uznayotsya srazu
+            .setColor(ContextCompat.getColor(service, R.color.k_accent)).setColorized(false)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(
                 PendingIntent.getActivity(

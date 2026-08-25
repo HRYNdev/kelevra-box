@@ -63,6 +63,7 @@ import androidx.navigation.NavController
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.LineChart
+import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
 import io.nekohasekai.sfa.ktx.clipboardText
 import kotlinx.coroutines.delay
@@ -107,7 +108,7 @@ fun TailscalePeerScreen(
                                 .size(6.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (peer?.online == true) Color(0xFF4CAF50) else Color.Gray,
+                                    if (peer?.online == true) K.Ok else K.Dim2,
                                 ),
                         )
                         Text(
@@ -315,20 +316,20 @@ fun TailscalePeerScreen(
                             if (pingState.isDirect) {
                                 Text(
                                     text = "\u2192 ",
-                                    color = Color(0xFF4CAF50),
+                                    color = K.Ok,
                                 )
                                 Text(
                                     text = stringResource(R.string.tailscale_ping_direct),
-                                    color = Color(0xFF4CAF50),
+                                    color = K.Ok,
                                 )
                             } else {
                                 Text(
                                     text = "\u21BB ",
-                                    color = Color(0xFFFF9800),
+                                    color = K.Warn,
                                 )
                                 Text(
                                     text = stringResource(R.string.tailscale_ping_derp),
-                                    color = Color(0xFFFF9800),
+                                    color = K.Warn,
                                 )
                             }
                             Spacer(modifier = Modifier.weight(1f))
@@ -360,9 +361,9 @@ fun TailscalePeerScreen(
                                 LineChart(
                                     data = pingState.latencyHistory,
                                     lineColor = if (pingState.isDirect) {
-                                        Color(0xFF4CAF50)
+                                        K.Ok
                                     } else {
-                                        Color(0xFF2196F3)
+                                        K.Accent
                                     },
                                     animate = false,
                                     modifier = Modifier.weight(1f),

@@ -199,6 +199,9 @@ fun HomeScreen(
     val state = when {
         busy -> DialState.Busy
         broken -> DialState.Broken
+        // Задушенный канал работает, но плохо. Это «внимание», не «ошибка» и не
+        // «норма»: зелёным кругом на нём врать нельзя, красным — тоже.
+        squeezed -> DialState.Degraded
         running -> DialState.On
         else -> DialState.Off
     }
@@ -381,7 +384,7 @@ fun HomeScreen(
         ModalBottomSheet(
             onDismissRequest = { showExits = false },
             sheetState = sheetState,
-            containerColor = colors.Bg2,
+            containerColor = colors.Surface,
             contentColor = colors.Text,
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {

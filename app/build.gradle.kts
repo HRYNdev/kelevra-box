@@ -116,6 +116,11 @@ android {
     }
 
     sourceSets {
+        // Токены фирменного стиля лежат вне модуля и подключаются исходником сюда и
+        // в :desktop. Один источник правды: копий палитры больше нет.
+        getByName("main") {
+            java.directories.add("../design-tokens/src/main/kotlin")
+        }
         getByName("play") {
             java.directories.add("src/minApi24/java")
             aidl.directories.add("src/minApi24/aidl")

@@ -16,38 +16,47 @@ private fun schemeOf(c: KColors) =
     if (c.isDark) {
         darkColorScheme(
             primary = c.Accent,
-            onPrimary = c.Bg,
-            secondary = c.Accent2,
+            onPrimary = c.AccentInk,
+            // Второго акцента в системе нет: secondary и tertiary — тот же акцент.
+            secondary = c.Accent,
             tertiary = c.Accent,
             background = c.Bg,
             onBackground = c.Text,
             surface = c.Surface,
             onSurface = c.Text,
-            surfaceVariant = c.Surface2,
+            surfaceVariant = c.Sunken,
             onSurfaceVariant = c.Dim,
             surfaceContainer = c.Surface,
-            surfaceContainerHigh = c.Surface2,
-            primaryContainer = c.Surface2,
+            surfaceContainerHigh = c.Surface,
+            surfaceContainerLow = c.Sunken,
+            primaryContainer = c.Sunken,
+            onPrimaryContainer = c.Text,
             outline = c.Border,
-            error = c.Bad,
+            outlineVariant = c.Border,
+            error = c.Err,
+            onError = c.Bg,
         )
     } else {
         lightColorScheme(
             primary = c.Accent,
-            onPrimary = androidx.compose.ui.graphics.Color.White,
-            secondary = c.Accent2,
+            onPrimary = c.AccentInk,
+            secondary = c.Accent,
             tertiary = c.Accent,
             background = c.Bg,
             onBackground = c.Text,
             surface = c.Surface,
             onSurface = c.Text,
-            surfaceVariant = c.Surface2,
+            surfaceVariant = c.Sunken,
             onSurfaceVariant = c.Dim,
             surfaceContainer = c.Surface,
-            surfaceContainerHigh = c.Surface2,
-            primaryContainer = c.Surface2,
+            surfaceContainerHigh = c.Surface,
+            surfaceContainerLow = c.Sunken,
+            primaryContainer = c.Sunken,
+            onPrimaryContainer = c.Text,
             outline = c.Border,
-            error = c.Bad,
+            outlineVariant = c.Border,
+            error = c.Err,
+            onError = c.Surface,
         )
     }
 
@@ -65,7 +74,7 @@ fun SFATheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable ()
         SideEffect {
             val window = (view.context as? Activity)?.window ?: return@SideEffect
             window.statusBarColor = colors.Bg.toArgb()
-            window.navigationBarColor = colors.Bg2.toArgb()
+            window.navigationBarColor = colors.Surface.toArgb()
             WindowCompat.getInsetsController(window, view).apply {
                 isAppearanceLightStatusBars = !darkTheme
                 isAppearanceLightNavigationBars = !darkTheme

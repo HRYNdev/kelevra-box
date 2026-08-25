@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-enum class DialState { On, Off, Busy, Broken }
+enum class DialState { On, Off, Busy, Degraded, Broken }
 
 /** Круг-состояние: тот же, что на телефоне. */
 @Composable
@@ -55,10 +55,12 @@ fun KDial(
 ) {
     val colors = K
     val live = state != DialState.Off
+    // Цвет кольца — семантика состояния, а не акцент: олива не означает «подключено».
     val target = when (state) {
-        DialState.On -> colors.Accent
-        DialState.Busy -> colors.Accent2
-        DialState.Broken -> colors.Warn
+        DialState.On -> colors.Ok
+        DialState.Busy -> colors.Accent
+        DialState.Degraded -> colors.Warn
+        DialState.Broken -> colors.Err
         DialState.Off -> colors.Dim2.copy(alpha = 0.55f)
     }
     val ring by animateColorAsState(target, tween(400))
@@ -95,7 +97,7 @@ fun KDial(
                 )
                 rotate(angle) {
                     drawCircle(
-                        brush = Brush.sweepGradient(listOf(colors.Accent2, ring, colors.Accent2), center),
+                        brush = Brush.sweepGradient(listOf(colors.Border, ring, colors.Border), center),
                         radius = r - stroke,
                         style = Stroke(width = stroke),
                     )
@@ -140,7 +142,7 @@ fun KBadge(text: String, small: Boolean = false, accent: Boolean = false) {
         modifier = Modifier
             .size(width = if (small) 26.dp else 34.dp, height = if (small) 19.dp else 24.dp)
             .clip(shape)
-            .background(colors.Surface2)
+            .background(colors.Sunken)
             .border(1.dp, if (accent) colors.Accent.copy(alpha = 0.45f) else colors.Border, shape),
         contentAlignment = Alignment.Center,
     ) {

@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.topbar.OverrideTopBar
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -170,7 +171,7 @@ private fun PeerRow(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(if (peer.online) Color(0xFF4CAF50) else Color.Gray),
+                .background(if (peer.online) K.Ok else K.Dim2),
         )
         Column(modifier = Modifier.weight(1f)) {
             Text(
