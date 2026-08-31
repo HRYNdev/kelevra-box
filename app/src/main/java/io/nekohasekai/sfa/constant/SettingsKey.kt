@@ -102,6 +102,15 @@ object SettingsKey {
     /** Номер жалобы, ответ на которую человек уже прочитал: показывать его снова незачем. */
     const val COMPLAINT_REPLY_SEEN = "complaint_reply_seen"
 
+    /** Когда логи ушли в последний раз успешно (миллисекунды). 0 — ни разу. */
+    const val LOG_UPLOAD_LAST_OK = "log_upload_last_ok"
+
+    /** Что уже отправлено: размеры, отметки времени и смещения по каждому файлу (JSON). */
+    const val LOG_UPLOAD_MARKS = "log_upload_marks"
+
+    /** Когда началась череда неудачных попыток: через сутки перестаём долбиться. */
+    const val LOG_UPLOAD_RETRY_SINCE = "log_upload_retry_since"
+
 
     // cache
     const val STARTED_BY_USER = "started_by_user"

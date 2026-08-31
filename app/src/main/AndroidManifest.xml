@@ -29,6 +29,21 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!--
+      Свой журнал приложение пишет в собственный каталог — разрешений это не требует
+      ни на одной версии Android, и суточная отправка логов работает на всех телефонах
+      семьи без единого похода в системные настройки.
+
+      MANAGE_EXTERNAL_STORAGE («Доступ ко всем файлам») здесь стоял ради второго,
+      необязательного источника — папки /sdcard/Download/kelevra-logs, куда пишет
+      внешний adb-шелл. Убран: обязательным он быть перестал, а держать в манифесте
+      опасное разрешение, которое семье всё равно никто не выдаст, незачем. Папка
+      остаётся дополнительным источником и читается ровно там, где система это и так
+      разрешает — вот для этого случая и остаётся обычное чтение на Android 12 и ниже.
+    -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />

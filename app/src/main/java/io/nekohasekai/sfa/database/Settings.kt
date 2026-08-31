@@ -191,6 +191,12 @@ object Settings {
     // «показывали/нет»: на следующий ответ карточка обязана появиться снова.
     var complaintReplySeen by dataStore.string(SettingsKey.COMPLAINT_REPLY_SEEN) { "" }
 
+    // Суточная отправка журнала разработчику. Выключателя нет: сеть своя, семейная,
+    // и журнал с телефона — единственное, чем разбираются жалобы вроде «само включается».
+    var logUploadLastOk by dataStore.long(SettingsKey.LOG_UPLOAD_LAST_OK) { 0L }
+    var logUploadMarks by dataStore.string(SettingsKey.LOG_UPLOAD_MARKS) { "" }
+    var logUploadRetrySince by dataStore.long(SettingsKey.LOG_UPLOAD_RETRY_SINCE) { 0L }
+
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }
