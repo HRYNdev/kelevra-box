@@ -25,6 +25,41 @@ object Kelevra {
     }
 
     /**
+     * Как устройство называет себя серверу.
+     *
+     * Ровно то же, что уходит с жалобой ([io.nekohasekai.sfa.compose.screen.home.ComplaintScreen]):
+     * модель железа и версия приложения. Раньше это собиралось только там, теперь
+     * одно место на всех — жалобу, запрос конфига, сводку и отправку логов.
+     */
+    const val PLATFORM = "android"
+
+    /** «Xiaomi 23021RAAEG» — производитель и модель, как их отдаёт само железо. */
+    val deviceModel: String
+        get() = header("${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+
+    val appVersion: String
+        get() = header(BuildConfig.VERSION_NAME)
+
+    /**
+     * Значение заголовка обязано быть однострочным ASCII: имена моделей у части
+     * прошивок содержат кириллицу и переводы строк, а такой заголовок HTTP-клиент
+     * либо режет, либо роняет весь запрос.
+     */
+    private fun header(value: String): String =
+        value.map { if (it.code in 32..126) it else '?' }.joinToString("").trim().take(128)
+
+    /**
+     * Четыре заголовка, по которым сервер сам заводит устройство и потом отдаёт
+     * в сводке человеческие имена (`person.name`, `device.name`).
+     */
+    fun deviceHeaders(): List<Pair<String, String>> = listOf(
+        "X-Device-Id" to deviceId,
+        "X-Device-Model" to deviceModel,
+        "X-Device-Platform" to PLATFORM,
+        "X-App-Version" to appVersion,
+    )
+
+    /**
      * Код подписки из любого нашего адреса: и нового (/k/<код>), и старого, который
      * отдавала панель (/<код>/singbox). Для чужих ссылок — null.
      *

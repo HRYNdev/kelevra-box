@@ -34,7 +34,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KButton
@@ -210,10 +209,12 @@ private fun sendComplaint(
 ): Result<String> = runCatching {
     val body = JSONObject().apply {
         put("text", text)
+        // Кто это и с чего — одним местом на всё приложение: те же значения уходят
+        // заголовками с запросом конфига, сводки и логов.
         put("device_id", Kelevra.deviceId)
-        put("app_version", BuildConfig.VERSION_NAME)
+        put("app_version", Kelevra.appVersion)
         put("android", Build.VERSION.RELEASE)
-        put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
+        put("model", Kelevra.deviceModel)
         put("running", serviceRunning)
         put("outbound", activeOutbound ?: "")
     }.toString()
@@ -224,6 +225,7 @@ private fun sendComplaint(
     conn.readTimeout = 15000
     conn.doOutput = true
     conn.setRequestProperty("Content-Type", "application/json")
+    Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
     conn.outputStream.use { it.write(body.toByteArray()) }
     val code = conn.responseCode
     val response = (if (code in 200..299) conn.inputStream else conn.errorStream)

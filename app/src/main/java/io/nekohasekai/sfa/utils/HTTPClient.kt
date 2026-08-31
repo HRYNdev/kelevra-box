@@ -41,6 +41,10 @@ class HTTPClient : Closeable {
             request.setHeader("x-device-os", "Android")
             request.setHeader("x-ver-os", Build.VERSION.RELEASE ?: "")
             request.setHeader("x-device-model", Build.MODEL ?: "")
+            // Своё имя устройства. По этим четырём заголовкам сервер сам заводит
+            // устройство при первом же запросе конфига и потом возвращает в /info
+            // человеческие имена — чьё это устройство и как оно называется.
+            Kelevra.deviceHeaders().forEach { (name, value) -> request.setHeader(name, value) }
         }
         val response = request.execute()
         return response.content.unwrap
