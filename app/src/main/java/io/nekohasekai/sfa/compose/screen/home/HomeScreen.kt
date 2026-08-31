@@ -41,6 +41,7 @@ import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDial
 import io.nekohasekai.sfa.compose.theme.KDim
+import io.nekohasekai.sfa.compose.theme.KDivider
 import io.nekohasekai.sfa.compose.theme.KHint
 import io.nekohasekai.sfa.compose.theme.KRowItem
 import io.nekohasekai.sfa.compose.theme.Montserrat
@@ -114,6 +115,7 @@ fun HomeScreen(
     val running = serviceStatus == Status.Started
     val busy = serviceStatus == Status.Starting || serviceStatus == Status.Stopping
     var showExits by remember { mutableStateOf(false) }
+    var showSubscription by remember { mutableStateOf(false) }
     // «40 секунд назад» обязано стареть на глазах: замер, который вечно выглядит свежим,
     // хуже отсутствия замера. Тикаем только пока открыт список выходов — больше эту
     // фразу нигде не показываем, а считать секунды на закрытом экране незачем.
@@ -365,12 +367,17 @@ fun HomeScreen(
                 Spacer(Modifier.height(KDim.Gap))
             }
             if (sub != null) {
-                KCard {
+                // Карточка говорит ровно одно: подписка жива и до каких пор. Кто ею
+                // пользуется и с какого телефона — подробность, и живёт она за нажатием:
+                // «имя допустим и какие то подробнсоти ток при заходе во вкладку»
+                // (хозяин, 31.08.2026). На главном экране имя человека не торчит.
+                KCard(onClick = { showSubscription = true }) {
                     // имя аккаунта из панели человеку ничего не говорит: показываем состояние
                     KRowItem(
                         label = "Подписка",
                         title = if (sub.active) "Активна" else "Приостановлена",
                         subtitle = sub.note,
+                        chevron = true,
                     )
                 }
             }
@@ -444,6 +451,62 @@ fun HomeScreen(
                         },
                     )
                     Spacer(Modifier.height(8.dp))
+                }
+                Spacer(Modifier.height(20.dp))
+            }
+        }
+    }
+
+    // Подробности подписки. Сделаны шторкой, как выбор выхода: на главном экране
+    // остаётся только состояние, а имя человека и название телефона человек видит,
+    // когда сам зашёл посмотреть. Пустых строк здесь не бывает — чего сервер не
+    // прислал, того и нет на экране.
+    if (showSubscription) {
+        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val sub = subscription
+        ModalBottomSheet(
+            onDismissRequest = { showSubscription = false },
+            sheetState = sheetState,
+            containerColor = colors.Surface,
+            contentColor = colors.Text,
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {
+                Text(
+                    text = "Подписка",
+                    fontFamily = Montserrat,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 16.sp,
+                    color = colors.Text,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
+                KCard {
+                    KRowItem(
+                        label = "Состояние",
+                        title = if (sub?.active == true) "Активна" else "Приостановлена",
+                        subtitle = sub?.note,
+                    )
+                }
+                val person = sub?.personName
+                val device = sub?.deviceName
+                if (person != null || device != null) {
+                    Spacer(Modifier.height(KDim.Gap))
+                    KCard {
+                        if (person != null) {
+                            KRowItem(label = "Кто пользуется", title = person)
+                        }
+                        if (person != null && device != null) KDivider()
+                        if (device != null) {
+                            KRowItem(label = "Устройство", title = device)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "так это устройство подписано на сервере",
+                        fontFamily = Montserrat,
+                        fontSize = 12.sp,
+                        color = colors.Dim,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
                 }
                 Spacer(Modifier.height(20.dp))
             }

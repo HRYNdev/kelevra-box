@@ -27,6 +27,16 @@ data class SubscriptionInfo(
     val olcrtc: JSONObject? = null,
     /** ответ на жалобу, отправленную с этого устройства; null — отвечать нечего */
     val reply: ComplaintReply? = null,
+    /**
+     * Чьё это устройство и как оно называется — сервер узнаёт по X-Device-Id.
+     *
+     * Показываются они только внутри вкладки подписки, на главный экран не выносятся:
+     * «имя допустим и какие то подробнсоти ток при заходе во вкладку» (хозяин, 31.08.2026).
+     * Обоих полей может не быть вовсе — старый сервер их не присылает; тогда строк на
+     * экране просто нет, пустые там хуже отсутствия.
+     */
+    val personName: String? = null,
+    val deviceName: String? = null,
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -63,6 +73,32 @@ private val MONTHS = listOf(
     "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 )
+
+/**
+ * Момент словами: «сегодня в 23:30», «вчера в 23:31», «12 августа в 23:30».
+ * Нужен там, где важно не «как давно», а «когда именно» — последняя отправка логов.
+ */
+fun humanWhen(millis: Long): String {
+    if (millis <= 0L) return "ещё не было"
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = millis }
+    val time = SimpleDateFormat("HH:mm", Locale.US).format(java.util.Date(millis))
+    val sameYear = now.get(java.util.Calendar.YEAR) == then.get(java.util.Calendar.YEAR)
+    val dayDiff = if (sameYear) {
+        now.get(java.util.Calendar.DAY_OF_YEAR) - then.get(java.util.Calendar.DAY_OF_YEAR)
+    } else {
+        Int.MAX_VALUE
+    }
+    return when (dayDiff) {
+        0 -> "сегодня в $time"
+        1 -> "вчера в $time"
+        else -> {
+            val day = then.get(java.util.Calendar.DAY_OF_MONTH)
+            val month = MONTHS.getOrElse(then.get(java.util.Calendar.MONTH)) { "" }
+            "$day $month в $time"
+        }
+    }
+}
 
 /** «2026-09-12» -> «12 сентября»: дату человек читает словами, не цифрами. */
 private fun humanDate(iso: String): String = runCatching {
@@ -108,6 +144,9 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         conn.connectTimeout = 10000
         conn.readTimeout = 10000
         conn.setRequestProperty("User-Agent", "kelevra")
+        // Те же четыре заголовка, что и у запроса конфига: сервер по ним заводит
+        // устройство и возвращает в этой же сводке person.name и device.name.
+        Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
         val code = conn.responseCode
         val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
             ?.bufferedReader()?.readText().orEmpty()
@@ -125,6 +164,12 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
                 val arr = json.optJSONArray("bypass_packages") ?: return@buildList
                 for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
             },
+            // Имена приходят от сервера, который узнал устройство по заголовкам.
+            // Старый сервер этих блоков не присылает вовсе — тогда остаётся null.
+            personName = json.optJSONObject("person")?.optString("name")
+                ?.takeIf { it.isNotBlank() && it != "null" },
+            deviceName = json.optJSONObject("device")?.optString("name")
+                ?.takeIf { it.isNotBlank() && it != "null" },
             // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
             olcrtc = json.optJSONObject("olcrtc"),
             reply = json.optJSONObject("reply")?.let { answer ->
