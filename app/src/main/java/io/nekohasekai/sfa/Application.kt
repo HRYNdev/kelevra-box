@@ -14,7 +14,9 @@ import androidx.core.content.getSystemService
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.sfa.bg.AppChangeReceiver
+import io.nekohasekai.sfa.bg.AppLog
 import io.nekohasekai.sfa.bg.CrashReportManager
+import io.nekohasekai.sfa.bg.LogUploadWork
 import io.nekohasekai.sfa.bg.OOMReportManager
 import io.nekohasekai.sfa.bg.UpdateProfileWork
 import io.nekohasekai.sfa.constant.Bugs
@@ -57,6 +59,11 @@ class Application : Application() {
             OOMReportManager.install(workingDir)
         }
 
+        // Своя запись журнала — сразу за сборщиком крашей и до всего остального:
+        // ровно старт процесса и интересен, когда разбираешь «оно само включилось».
+        // Ни разрешений, ни Room это не трогает — можно и до разблокировки телефона.
+        runCatching { AppLog.start(this) }
+
         AppLifecycleObserver.register(this)
 
 //        Seq.setContext(this)
@@ -85,6 +92,9 @@ class Application : Application() {
             runCatching { PrivilegeSettingsClient.register(this@Application) }
             initialize(baseDir, workingDir, tempDir)
             UpdateProfileWork.reconfigureUpdater()
+            // Суточная отправка логов: ставится здесь же, в фоне и после Room —
+            // тумблер лежит в настройках, а их до разблокировки читать нельзя.
+            LogUploadWork.schedule()
             HookModuleUpdateNotifier.sync(this@Application)
         }
 

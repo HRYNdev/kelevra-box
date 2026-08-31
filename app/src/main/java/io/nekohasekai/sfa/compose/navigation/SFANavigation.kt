@@ -584,6 +584,10 @@ fun SFANavHost(
             var notifications by remember { mutableStateOf(Settings.dynamicNotification) }
             var обновлениеИдёт by remember { mutableStateOf(false) }
             var обновлениеИтог by remember { mutableStateOf("") }
+            val логиОтправлены = remember { Settings.logUploadLastOk }
+            // Ответ стоит похода в файловую систему — спрашиваем один раз на открытие
+            // экрана, а не на каждую перерисовку.
+            val логиПишутся = remember { io.nekohasekai.sfa.bg.LogUploadWork.logsAvailable() }
             val scope = rememberCoroutineScope()
             val context = LocalContext.current
             SimpleSettingsScreen(
@@ -636,6 +640,13 @@ fun SFANavHost(
                     обновлениеИдёт -> "Проверяю…"
                     обновлениеИтог.isNotBlank() -> обновлениеИтог
                     else -> "Сейчас ${io.nekohasekai.sfa.BuildConfig.VERSION_NAME}"
+                },
+                // Ни разрешений, ни выбора: журнал приложение пишет себе само и раз
+                // в сутки отправляет. Человеку остаётся строка-справка.
+                отправкаЛоговПодпись = when {
+                    !логиПишутся && логиОтправлены <= 0L -> "Журнал ещё не начат"
+                    логиОтправлены <= 0L -> "Отправляется раз в сутки · ещё не отправлялся"
+                    else -> "Отправлен ${io.nekohasekai.sfa.compose.screen.home.humanWhen(логиОтправлены)}"
                 },
             )
         }
