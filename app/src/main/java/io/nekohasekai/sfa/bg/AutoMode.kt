@@ -80,6 +80,17 @@ import kotlin.random.Random
  * Исключение одно и оно осознанное: **смена сети** (вайфай↔мобильный, другая точка) —
  * это доказанное изменение обстановки, после неё первое же наблюдение принимается сразу.
  *
+ * Почему молчание резолверов ничего не переключает. У вердикта три исхода, а не два:
+ * «дома», «не дома» и **«не знаю»**. Третий наступает ровно тогда, когда резолверы не
+ * ответили ни на один контрольный домен ([HomeSign.Sign.Unknown]) — и он не утверждает
+ * ничего, поэтому и менять на нём нечего. Пока сеть та же и мы стоим на рабочем выходе,
+ * молчание вердикт не трогает вовсе: задвижке такое наблюдение даже не показывается
+ * ([holdsVerdict]). Повод приборный: 28.08.2026 телефон роумит между репитером и
+ * роутером, старая точка держит его запись в мосту до 480 секунд, L2-путь протухает —
+ * DNS немой 4-7 минут при живом интернете. За сутки 14 циклов, провал DNS в 11 из 14.
+ * Автомат при этом был исправен: он честно не мог подтвердить дом и уходил в туннель.
+ * Молчание при этом не запирает автомат навсегда — см. [SILENCE_HOLD_MILLIS].
+ *
  * Почему смена сети не заканчивается одним наблюдением. Система объявляет новую сеть
  * раньше, чем на ней заработает всё остальное, поэтому за первым наблюдением идёт
  * серия перепроверок ([AutoModeBurst]: 1, 3, 8, 20 секунд), которая обрывается, как
@@ -347,6 +358,25 @@ object AutoMode {
     const val CONFIRMATIONS = 3
 
     /**
+     * Сколько держим вердикт, пока резолверы молчат, а сеть та же.
+     *
+     * Молчание резолвера — это «не знаю», а не «не дома» ([HomeSign.Sign.Unknown]), и
+     * пока мы стоим на рабочем выходе, «не знаю» не повод его менять. Приборный повод:
+     * 28.08.2026 телефон роумит между репитером и роутером, старая точка держит его
+     * запись в мосту до 480 секунд, L2-путь протухает — **DNS немой 4-7 минут при живом
+     * интернете**. За сутки 14 циклов ухода/возврата, провал DNS в 11 из 14. Автомат при
+     * этом исправен: он честно не может подтвердить дом и уходит в туннель. Чинится не
+     * вердикт, а устойчивость к молчанию.
+     *
+     * Срок — предохранитель, а не настройка. Он с запасом больше самого долгого
+     * замеренного провала (13 минут), чтобы в этой беде не срабатывать вовсе; он нужен
+     * ради другой беды — резолвер, замолчавший навсегда, не имеет права заморозить
+     * автомат навсегда. По истечении срока заход решает как раньше, со всеми
+     * подтверждениями.
+     */
+    const val SILENCE_HOLD_MILLIS = 15 * 60_000L
+
+    /**
      * После стольких провалов основного канала подряд поднимаем комнату пробно.
      *
      * Ровно на один заход раньше, чем задвижка успевает подтвердить смену обстановки.
@@ -357,6 +387,13 @@ object AutoMode {
     const val ROOM_TRIAL_AFTER = CONFIRMATIONS - 1
 
     /** Ритм проверок для каждой обстановки. */
+    /**
+     * Как часто повторять в журнале сводку захода, если она слово в слово та же.
+     * Не дедупликация ради красоты: в покое заход идёт раз в пять минут, а в поиске —
+     * раз в двенадцать секунд, и без этой заслонки поиск давал бы 300 одинаковых строк в час.
+     */
+    private const val ROUND_NOTE_REPEAT_MILLIS = 10 * 60_000L
+
     private const val ROUND_SEARCHING_MILLIS = 12_000L
     private const val ROUND_SEARCHING_CAP_MILLIS = 120_000L
 
@@ -524,6 +561,55 @@ object AutoMode {
     @Volatile
     private var observationConfident = true
 
+    /**
+     * Резолверы этого захода промолчали: ни одного ответа, ни подменного, ни настоящего.
+     *
+     * Отдельно от [observationConfident], хотя молчание — частный случай неуверенности.
+     * Разница в том, что можно сделать: неуверенность всего лишь не закрывает серию
+     * перепроверок, а молчание — единственная причина, по которой мы **вовсе не трогаем**
+     * вердикт ([holdsVerdict]). Смешать их значило бы держаться и там, где резолвер
+     * честно ответил, а не состоялся только замер трафика.
+     */
+    @Volatile
+    private var observationSilent = false
+
+    /** Отпечаток сети ([networkKey]), на которой сделан последний заход. */
+    @Volatile
+    private var observedNetworkKey: String? = null
+
+    /** Отпечаток сети, на которой нынешняя обстановка была объявлена. */
+    @Volatile
+    private var situationNetwork: String? = null
+
+    /** Когда начали держать вердикт на молчании; 0 — не держим. */
+    @Volatile
+    private var silentHoldAt = 0L
+
+    /**
+     * Снимок связи, записанный последним: интерфейс, адрес, резолверы, шлюз, сигнал.
+     *
+     * Нужен ровно для одной аварии, и она уже случалась. 28.08.2026 телефон роумил между
+     * репитером и роутером, Android при этом сети не менял вовсе (один и тот же
+     * NetworkAgent пережил четыре роутерных цикла), а DNS умирал на 4-7 минут. В журнале
+     * от всего этого не оставалось ничего: «сеть сменилась» не писалось, потому что она
+     * и не менялась. Снимок пишется, когда он ИЗМЕНИЛСЯ, — и молчаливый роуминг виден по
+     * смене шлюза, резолверов или уровня сигнала.
+     */
+    @Volatile
+    private var lastLinkNote: String? = null
+
+    /** Когда резолверы сети замолчали подряд; 0 — отвечают. */
+    @Volatile
+    private var dnsSilentSince = 0L
+
+    /** Что заход увидел, одной строкой. Складывается в [observe], пишется в [round]. */
+    @Volatile
+    private var observationNote: String = "ещё не смотрели"
+
+    /** Последняя записанная сводка захода и когда её записали: одинаковое не повторяем. */
+    private var lastRoundNote: String? = null
+    private var lastRoundNoteAt = 0L
+
     /** Автомат выключен человеком: ничего не проверяем и таймер не заводим. */
     @Volatile
     private var idle = false
@@ -683,6 +769,11 @@ object AutoMode {
             layout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
                 ?: AutoModeExits.Layout.EMPTY
             gate.reset(initial)
+            // На чьей сети стоит начальная обстановка, мы ещё не знаем — узнаем первым
+            // же заходом. До того держать вердикт на молчании не на чем ([holdsVerdict]).
+            situationNetwork = null
+            silentHoldAt = 0L
+            observationSilent = false
             searchingRounds = 0
             selected = null
             // Сервис только что поднялся — обстановка по определению «только что изменилась»,
@@ -768,7 +859,15 @@ object AutoMode {
         if (!active) return
         val nowValidated = network?.let(::validated) ?: false
         val nowKey = network?.let(::networkKey)
-        if (network == lastNetwork && nowValidated == lastValidated && nowKey == lastNetworkKey) return
+        if (network == lastNetwork && nowValidated == lastValidated && nowKey == lastNetworkKey) {
+            // Сеть та же и отпечаток тот же — с точки зрения Android не произошло ничего.
+            // Ровно так выглядит роуминг между репитером и роутером: один NetworkAgent
+            // переживает несколько циклов ухода/возврата, и «сеть сменилась» не пишется
+            // никогда. Но шлюз, резолверы и уровень сигнала при этом меняются — снимок
+            // связи это покажет, а он пишется, только когда изменился.
+            noteLink(network, "система сообщила о сети")
+            return
+        }
         // Тот же вайфай, но у него появились (или сменились) резолверы — это не «чих»,
         // а именно тот момент, когда сеть стало можно спрашивать про дом.
         val onlyResolvers = network != null && network == lastNetwork && nowValidated == lastValidated
@@ -781,6 +880,7 @@ object AutoMode {
         } else {
             Log.i(TAG, "сеть сменилась: ${describe(network)}")
         }
+        noteLink(network, "смена сети")
         // Подсказка про режим сети привязана к объекту сети, и другую сеть она уже не
         // касается сама. Но сюда мы приходим и когда сеть та же, а система только что
         // подтвердила на ней интернет, — а это ровно то, что происходит, когда с соты
@@ -866,6 +966,8 @@ object AutoMode {
         idle = false
         selected = null
         gate.reset(Situation.Unknown)
+        situationNetwork = null
+        silentHoldAt = 0L
         mainFailures = 0
         PathRegistry.reset()
         link = Link.Unknown
@@ -889,6 +991,9 @@ object AutoMode {
 
     /** Человек включил или выключил автомат. */
     fun setEnabled(enabled: Boolean) {
+        // «Авто режим сам включает VPN на вайфае» разбирается только тогда, когда в
+        // журнале видно, был ли автомат вообще включён и кто его переключил.
+        Log.i(TAG, "автомат ${if (enabled) "включён" else "выключен"} человеком")
         Settings.autoModeEnabled = enabled
         if (enabled) {
             manualExit = null
@@ -901,6 +1006,8 @@ object AutoMode {
         }
         _state.value = _state.value.copy(auto = enabled, link = link)
         gate.reset(Situation.Unknown)
+        situationNetwork = null
+        silentHoldAt = 0L
         mainFailures = 0
         networkChanged = true
         synchronized(lock) { lock.notifyAll() }
@@ -959,6 +1066,8 @@ object AutoMode {
         link = Link.Unknown
         _state.value = _state.value.copy(auto = false, situation = Situation.Unknown, link = link)
         gate.reset(Situation.Unknown)
+        situationNetwork = null
+        silentHoldAt = 0L
         mainFailures = 0
         idle = false
         Log.i(
@@ -994,7 +1103,14 @@ object AutoMode {
      * никуда не делся, если стоим у себя за роутером), а наружу не проходит ничего, —
      * и сервис стартовал бы вообще без туннеля, показывая «Дома».
      */
-    fun homeRightNow(): Boolean {
+    fun homeRightNow(): Boolean = homeRightNow0().also {
+        // От этого ответа зависит, поднимется ли туннель при старте вообще. Раньше он
+        // нигде не писался, и «сервис стартовал с туннелем» приходилось выводить из
+        // того, чего в журнале НЕТ.
+        Log.i(TAG, "старт: ${if (it) "дома — ядро не поднимаю" else "не дома — поднимаю ядро"}")
+    }
+
+    private fun homeRightNow0(): Boolean {
         if (!Settings.autoModeEnabled) return false
         val network = physicalNetwork() ?: return false
         // В соте дома не бывает, а этот вопрос задаётся до подъёма ядра — то есть человек
@@ -1131,32 +1247,81 @@ object AutoMode {
 
         val was = gate.current
         val observed = observe(host)
-        val changed = gate.offer(observed, trust = trustOnce, hurried = burst.active && !trustOnce)
+
+        // Резолверы промолчали, сеть та же, и стоим мы на рабочем выходе — вердикт «не
+        // знаю». Задвижке такое наблюдение даже не показываем: набор подтверждений
+        // означал бы, что молчание всё-таки считается доводом, просто медленнее.
+        if (holdsVerdict(
+                silent = observationSilent,
+                observed = observed,
+                current = gate.current,
+                sameNetwork = observedNetworkKey != null && observedNetworkKey == situationNetwork,
+                networkChanged = trustOnce,
+                holdAgeMillis = silentHoldAge(),
+            )
+        ) {
+            if (silentHoldAt == 0L) silentHoldAt = SystemClock.elapsedRealtime()
+            pendingSwitch = false
+            settled = false
+            Log.i(
+                TAG,
+                "резолверы молчат ${silentHoldAge() / 1000} с — вижу ${name(observed)}, " +
+                    "но это «не знаю», а не «${name(observed)}»: остаюсь на ${name(gate.current)}",
+            )
+            // Действие повторяем ровно то же, на котором стоим: выбор мог сбиться, а
+            // трогать туннель тут нечем и незачем.
+            apply(host, gate.current, repeat = true)
+            noteRound(observed)
+            return gate.current
+        }
+        silentHoldAt = 0L
+
+        val changed = gate.offer(
+            observed,
+            trust = trustOnce,
+            hurried = burst.active && !trustOnce,
+            blind = observationSilent,
+        )
         pendingSwitch = gate.pending
         settled = burstClosable(changed = changed, pending = gate.pending, confident = observationConfident)
 
         when {
             changed -> {
                 Log.i(TAG, "обстановка сменилась: ${name(was)} → ${name(observed)}")
+                situationNetwork = observedNetworkKey
                 publish(auto = true, situation = observed)
                 apply(host, observed, repeat = false)
             }
 
             // Обстановка та же, но выбор мог сбиться (ядро перезапустилось,
             // человек ткнул руками до выключения автомата) — повторяем действие.
-            observed == gate.current -> apply(host, observed, repeat = true)
+            observed == gate.current -> {
+                // Заход подтвердил то, на чём стоим, — значит стоим мы на ЭТОЙ сети.
+                // Без этой записи «сеть та же» было бы известно только сразу после
+                // переключения, то есть ровно тогда, когда броня и не нужна.
+                situationNetwork = observedNetworkKey
+                apply(host, observed, repeat = true)
+            }
 
             else -> Log.i(TAG, "вижу ${name(observed)}, подтверждения не набраны — пока не трогаю")
         }
+        noteRound(observed)
         return gate.current
     }
 
     private fun observe(host: Host): Situation {
+        // Каждый заход начинается зрячим, пока сводка DNS не скажет обратного: иначе
+        // молчание одного захода тянулось бы в следующие.
+        observationSilent = false
         val network = physicalNetwork() ?: run {
+            observedNetworkKey = null
+            observationNote = "сети нет вовсе"
+            noteLink(null, "заход")
             PathRegistry.allUnavailable("сети нет")
             refreshLink()
             return decide(false, false, false, false)
         }
+        observedNetworkKey = networkKey(network)
         // Пока меряем — так и говорим. Иначе экран весь этот десяток секунд утверждает,
         // что всё подключено, хотя ещё ничего не проверено.
         //
@@ -1186,6 +1351,15 @@ object AutoMode {
         }
 
         val dnsNow = if (canBeHome) homeBypass(network) else HomeSign.Sign.No
+        // Молчание резолверов доводим до решения отдельным признаком, а не сворачиваем
+        // в «не дома» здесь. Ниже оно всё равно схлопнется в булев [dnsHome] — так и
+        // должно быть, дом объявляется только доказанным, — но заход, построенный на
+        // молчании, обязан оставаться отличимым от захода, который что-то узнал.
+        observationSilent = dnsNow == HomeSign.Sign.Unknown
+        // Молчание резолверов — самостоятельное событие, а не подробность вердикта:
+        // именно оно (4-7 минут при живом интернете) и было причиной «авто режим сам
+        // включает VPN на вайфае» 28.08.2026.
+        if (canBeHome) noteDnsSilence(network, observationSilent)
         if (dnsNow == HomeSign.Sign.Yes) rememberHomeSign(network)
         // Одна слепая сводка признак не отменяет — отменяет его только опровержение делом.
         val dnsHome = HomeSign.stands(
@@ -1266,8 +1440,13 @@ object AutoMode {
             // отказавший путь на экране означает «Связи нет», а в соте дома нет и быть
             // не может. Раньше мобильная сеть каждым заходом получала отказ дома, и все
             // те секунды, что мерился основной канал, человек читал «Связи нет».
-            if (canBeHome) {
+            if (canBeHome && !observationSilent) {
                 PathRegistry.dead(PathId.HOME, homeReason(dnsHome, carried, hint))
+            } else if (canBeHome) {
+                // Резолверы промолчали — про дом мы не узнали ничего. Записать сюда отказ
+                // значило бы написать человеку «Связи нет» ровно там, где связь живая:
+                // именно так выглядел роуминг 28.08.2026 со стороны экрана.
+                PathRegistry.unchecked(PathId.HOME, "резолверы молчат — про дом ничего не узнали")
             } else {
                 PathRegistry.unchecked(PathId.HOME, "дома можно быть только за своим роутером")
             }
@@ -1318,6 +1497,28 @@ object AutoMode {
         }
         noteRoom()
         refreshLink()
+        // Снимок связи — раз за заход и только когда он изменился. Роуминг, при котором
+        // Android молчит, виден именно здесь.
+        noteLink(network, "заход")
+        observationNote = "сеть [${observedNetworkKey ?: "?"}]; " +
+            "дом: признак DNS ${
+                when (dnsNow) {
+                    HomeSign.Sign.Yes -> "есть"
+                    HomeSign.Sign.No -> "нет"
+                    HomeSign.Sign.Unknown -> "не узнали (молчат)"
+                }
+            }" +
+            (if (dnsHome != (dnsNow == HomeSign.Sign.Yes)) " (в силе: $dnsHome)" else "") +
+            ", трафик ${
+                when (carried) {
+                    true -> "проходит"
+                    false -> "не проходит"
+                    null -> "не проверяли"
+                }
+            }, подсказка $hint → ${if (home) "дома" else "не дома"}; " +
+            "основной ${if (main) "жив" else "нет"} (провалов подряд $mainFailures); " +
+            "комната ${if (room) "стоит" else "нет"}" +
+            (if (!observationConfident) "; заход неуверенный" else "")
         return decide(hasNetwork = true, home = home, main = main, room = room)
     }
 
@@ -1418,7 +1619,64 @@ object AutoMode {
         else -> Situation.Searching
     }
 
+    /**
+     * Обстановка, на которой можно стоять: у неё есть выход и он работает.
+     *
+     * «Ничего не поднимается» и «неизвестно» сюда не входят намеренно: беречь там
+     * нечего, и молчание резолвера не должно запирать нас в состоянии, из которого
+     * человек и так не выйдет.
+     */
+    internal fun working(situation: Situation): Boolean =
+        situation == Situation.Home || situation == Situation.Main || situation == Situation.Room
+
+    /**
+     * Держим ли вердикт вместо того, чтобы его менять.
+     *
+     * Единственный ответ на «резолверы молчат» — **«не знаю»**, а «не знаю» ничего не
+     * переключает. Приборный повод описан у [SILENCE_HOLD_MILLIS]: DNS немой минутами
+     * при живом интернете, и автомат, честно не подтвердив дом, поднимал туннель.
+     *
+     * Вынесено отдельно и без единого обращения к Android: утверждение «молчание не
+     * трогает рабочее состояние, а ответ резолвера трогает всё как раньше» должно
+     * проверяться тестом, а не пересказом.
+     *
+     * @param silent резолверы этого захода промолчали ([observationSilent]).
+     * @param observed что заход увидел.
+     * @param current обстановка, на которой стоим.
+     * @param sameNetwork отпечаток сети тот же, на котором обстановка была подтверждена.
+     * @param networkChanged сеть доказанно сменилась — тут держаться не за что вовсе.
+     * @param holdAgeMillis сколько уже держим на молчании; 0 — держать только начинаем.
+     */
+    internal fun holdsVerdict(
+        silent: Boolean,
+        observed: Situation,
+        current: Situation,
+        sameNetwork: Boolean,
+        networkChanged: Boolean,
+        holdAgeMillis: Long,
+        capMillis: Long = SILENCE_HOLD_MILLIS,
+    ): Boolean = when {
+        // Резолвер ответил — всё ровно как раньше, до последней ветки.
+        !silent -> false
+        // Сеть другая: старый вердикт про неё не говорит ничего, и держать его вредно.
+        networkChanged || !sameNetwork -> false
+        // И так ничего не меняется — держать нечего.
+        observed == current -> false
+        // Стоим не на рабочем выходе: беречь нечего, пусть решает как обычно.
+        !working(current) -> false
+        // Предохранитель: молчание навсегда не должно замораживать автомат навсегда.
+        holdAgeMillis >= capMillis -> false
+        else -> true
+    }
+
+    /** Сколько уже держим вердикт на молчании резолверов; 0 — не держим. */
+    private fun silentHoldAge(): Long =
+        if (silentHoldAt == 0L) 0L else SystemClock.elapsedRealtime() - silentHoldAt
+
     private fun apply(host: Host, situation: Situation, repeat: Boolean) {
+        // Повтор не пишем: он идёт каждым заходом и говорит ровно то, что уже сказала
+        // сводка захода. Пишем настоящий переход — это и есть момент «включил туннель».
+        if (!repeat) Log.i(TAG, "действую по обстановке «${name(situation)}»")
         when (situation) {
             Situation.Home -> {
                 // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
@@ -1439,14 +1697,14 @@ object AutoMode {
                 // «на всякий случай» нельзя: круглосуточная сессия и есть то, чего
                 // вся схема избегает.
                 if (setRoom(host, false, "идём основным каналом").changed) selected = null
-                choose(host, layout.main)
+                choose(host, layout.main, "обстановка «основной канал»")
             }
 
             Situation.Room -> {
                 if (host.resumeTunnel("основной канал не поднимается")) selected = null
                 // Обычно комната уже поднята пробно — вызов идемпотентный и ничего не делает.
                 if (setRoom(host, true, "уходим в комнату").changed) selected = null
-                choose(host, layout.room)
+                choose(host, layout.room, "обстановка «комната»")
             }
 
             Situation.Searching -> {
@@ -1482,7 +1740,7 @@ object AutoMode {
                     layout.room?.let { room ->
                         if (selected != room) {
                             Log.i(TAG, "ищу путь, но комната уже стоит — иду ей, не дожидаясь подтверждений")
-                            choose(host, room)
+                            choose(host, room, "канала нет, комната уже стоит")
                         }
                     }
                 }
@@ -1523,14 +1781,22 @@ object AutoMode {
         else -> null
     }
 
-    private fun choose(host: Host, tag: String?) {
+    private fun choose(host: Host, tag: String?, why: String = "") {
         val group = layout.chooser ?: return
         val target = tag ?: return
+        val was = selected
         if (selected == target) return
         runCatching { host.selectExit(group, target) }
             .onSuccess {
                 selected = target
-                Log.i(TAG, "выход переключён на «$target»")
+                // Старое значение и причина стоят в той же строке: «переключён на X»
+                // не отвечало ни на «откуда», ни на «зачем», а обрыв канала разбирается
+                // именно по этой паре.
+                Log.i(
+                    TAG,
+                    "выход переключён: «${was ?: "не выбран"}» → «$target»" +
+                        if (why.isBlank()) "" else " ($why)",
+                )
             }
             .onFailure { Log.w(TAG, "не удалось переключить выход на «$target»: ${it.message}") }
     }
@@ -1642,6 +1908,100 @@ object AutoMode {
     }
 
     /**
+     * Снимок связи словами: интерфейс, свой адрес, резолверы, шлюз и уровень сигнала.
+     *
+     * Всё это берётся без единого нового разрешения: [LinkProperties] отдаёт система
+     * любому, `ACCESS_WIFI_STATE` в манифесте стоит с самого начала. Имени сети (SSID) и
+     * точки (BSSID) здесь нет намеренно: с Android 10 их отдают только с разрешением на
+     * геолокацию, а его семья не выдаст. Роуминг ловится не по имени точки, а по тому,
+     * что при переходе меняются шлюз, резолверы и уровень сигнала.
+     */
+    @Suppress("DEPRECATION")
+    private fun linkNote(network: Network?): String {
+        if (network == null) return "сети нет"
+        val link = runCatching { Application.connectivity.getLinkProperties(network) }.getOrNull()
+        val caps = runCatching { Application.connectivity.getNetworkCapabilities(network) }.getOrNull()
+        val parts = mutableListOf<String>()
+        parts += "интерфейс ${link?.interfaceName ?: "?"}"
+        val own = link?.linkAddresses?.mapNotNull { it.address?.hostAddress }?.filter { !it.contains(':') }
+        parts += "адрес ${own?.joinToString(",").orEmpty().ifBlank { "?" }}"
+        parts += "резолверы ${
+            link?.dnsServers?.mapNotNull { it.hostAddress }?.joinToString(",").orEmpty().ifBlank { "нет" }
+        }"
+        val gateway = runCatching {
+            link?.routes?.filter { it.isDefaultRoute }?.mapNotNull { it.gateway?.hostAddress }
+        }.getOrNull().orEmpty()
+        if (gateway.isNotEmpty()) parts += "шлюз ${gateway.joinToString(",")}"
+        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+            runCatching {
+                val info = Application.wifiManager.connectionInfo
+                if (info != null && info.rssi > -127) {
+                    // Огру***ем до пяти децибел нарочно: сырой уровень дрожит на единицу
+                    // каждую секунду, и снимок «изменился» превращался бы в поток. Уход
+                    // на другую точку — это скачок на 10-20 дБм, он сквозь огрубление виден.
+                    parts += "сигнал ${info.rssi / 5 * 5} дБм"
+                    // Частота — самый дешёвый признак смены точки: репитер держит 5 ГГц,
+                    // роутер отдаёт 2.4, и переход между ними виден без разрешений.
+                    if (info.frequency > 0) parts += "частота ${info.frequency} МГц"
+                }
+            }
+        }
+        return parts.joinToString(", ")
+    }
+
+    /** Пишет снимок связи, только когда он изменился: одинаковых строк в журнале не копим. */
+    private fun noteLink(network: Network?, why: String) {
+        val note = linkNote(network)
+        if (note == lastLinkNote) return
+        lastLinkNote = note
+        Log.i(TAG, "связь ($why): $note")
+    }
+
+    /**
+     * Начало и конец молчания резолверов — отдельными строками, с длительностью.
+     *
+     * Без них разбор 28.08.2026 состоял в том, чтобы вручную складывать время между
+     * строками из четырёх источников сразу. «Резолверы молчали 407 с» — это ровно тот
+     * факт, ради которого разбор и затевался, и добыть его больше неоткуда: интернет
+     * при этом живой, сеть та же, Android ничего не сообщает.
+     */
+    private fun noteDnsSilence(network: Network, silentNow: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (silentNow) {
+            if (dnsSilentSince != 0L) return
+            dnsSilentSince = now
+            Log.w(TAG, "резолверы сети замолчали (интернет при этом может быть живым): ${linkNote(network)}")
+        } else if (dnsSilentSince != 0L) {
+            Log.i(TAG, "резолверы сети отвечают снова — молчали ${(now - dnsSilentSince) / 1000} с")
+            dnsSilentSince = 0L
+        }
+    }
+
+    /**
+     * Сводка захода: что видели, что решили и на чём стоим.
+     *
+     * Одна строка на заход, и та не повторяется, пока не изменилась (или пока не прошло
+     * [ROUND_NOTE_REPEAT_MILLIS]). Ритм захода — от 12 секунд в поиске до пяти минут в
+     * покое, так что журнал этим не захлебнётся, а разбор перестаёт быть догадкой: до
+     * этого вердикт «не дома» на сети без признака DNS не писался вообще никогда, и
+     * «почему включился туннель» приходилось выводить из соседних строк.
+     */
+    private fun noteRound(observed: Situation) {
+        val confirmations = if (gate.pending) ", подтверждений ${gate.hits} из ${gate.needed}" else ""
+        // Наборы правил решают, что вообще уходит в туннель. Недокачанные наборы и есть
+        // самая частая изнанка жалобы «подключено, а сайты не грузятся»: путь живой,
+        // трафик идёт, а нужные домены в него не заворачиваются.
+        val rules = RuleSetCache.state.value
+        val note = "заход: $observationNote; наборы правил ${rules.ready} из ${rules.total} → " +
+            "вижу «${name(observed)}», стою на «${name(gate.current)}»$confirmations"
+        val now = SystemClock.elapsedRealtime()
+        if (note == lastRoundNote && now - lastRoundNoteAt < ROUND_NOTE_REPEAT_MILLIS) return
+        lastRoundNote = note
+        lastRoundNoteAt = now
+        Log.i(TAG, note)
+    }
+
+    /**
      * Дома ли мы: спрашиваем системный резолвер физической сети про домены, которые
      * роутер точно заворачивает, и смотрим, попал ли ответ в подменный диапазон.
      */
@@ -1664,6 +2024,10 @@ object AutoMode {
             var control = HomeSign.Control.Waiting
             var sign: HomeSign.Sign? = null
             var answered = 0
+            // Что ответил каждый домен по отдельности. Без этого «промолчали 3 из 3»
+            // не отличить от «промолчал один и тот же резолвер на всех трёх»: первое
+            // бывает при белом списке, второе — при протухшем пути до резолвера.
+            val details = mutableListOf<String>()
             // Разбираем ответы по мере прихода и закрываем сводку, как только итог ясен.
             // Раньше заход дожидался всех четырёх до конца бюджета, и один задумавшийся
             // домен стоил 2.5 секунды всему решению.
@@ -1681,6 +2045,13 @@ object AutoMode {
                 val done = runCatching { answers.poll(left, TimeUnit.MILLISECONDS) }.getOrNull() ?: break
                 answered++
                 val (host, answer) = runCatching { done.get() }.getOrNull() ?: continue
+                details += "$host=${
+                    when (answer) {
+                        HostAnswer.Fake -> "подменный"
+                        HostAnswer.Real -> "настоящий"
+                        HostAnswer.Silent -> "молчит"
+                    }
+                }"
                 when {
                     host == HOME_CONTROL -> control = when (answer) {
                         HostAnswer.Fake -> HomeSign.Control.Fake
@@ -1711,10 +2082,15 @@ object AutoMode {
             // складывается выше, из признака и прошедшего наружу трафика, — и лог,
             // который писал здесь «→ дома», врал ровно в той обстановке, ради которой
             // всё и затевалось.
+            val resolvers = runCatching {
+                Application.connectivity.getLinkProperties(network)?.dnsServers?.mapNotNull { it.hostAddress }
+            }.getOrNull().orEmpty()
             Log.i(
                 TAG,
                 "признак дома по DNS в сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
                     "настоящих $misses, промолчали $silent, контрольный $HOME_CONTROL $control, " +
+                    "спрашивали ${resolvers.joinToString(",").ifBlank { "резолверов нет" }}, " +
+                    "по доменам [${details.joinToString(", ")}], " +
                     "за ${SystemClock.elapsedRealtime() - startedAt} мс → " +
                     when (result) {
                         HomeSign.Sign.Yes -> "признак есть"
@@ -2455,7 +2831,13 @@ object AutoMode {
         // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
         // изменилась так же доказанно, а подтверждений задвижка при этом всё равно
         // требует — переключение остаётся защищённым от одиночного невезения.
-        burst.restart()
+        //
+        // Но только если замер СОСТОЯЛСЯ. Не состоялся он ровно по одной причине — имя
+        // цели не резолвится, то есть те же молчащие резолверы. Доказанного изменения
+        // обстановки тут нет, а серия выдаёт задвижке поблажку в подтверждениях: заход
+        // дома был бы принят со второго раза вместо третьего. Полный заход всё равно
+        // зовём (он разберётся сам), но ускорять решение молчанием не станем.
+        if (measurement.measured) burst.restart()
         return true
     }
 
