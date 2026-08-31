@@ -70,7 +70,10 @@ internal object NetDns {
      */
     fun resolve(network: Network, host: String, budgetMillis: Long): Outcome {
         val resolvers = resolversOf(network)
-        if (resolvers.isEmpty()) return Outcome.Silent("у сети нет своих резолверов")
+        if (resolvers.isEmpty()) {
+            Log.d(TAG, "$host: у сети нет своих резолверов")
+            return Outcome.Silent("у сети нет своих резолверов")
+        }
         val startedAt = SystemClock.elapsedRealtime()
         var lastReason = "резолверы молчат"
         for (resolver in resolvers) {
@@ -82,6 +85,11 @@ internal object NetDns {
                 is Outcome.Silent -> lastReason = reply.reason
             }
         }
+        // Причина молчания до сих пор возвращалась наверх и там терялась: в журнале
+        // оставалось «промолчали 3 из 3» без единого слова о том, почему. Разница между
+        // «резолвер не ответил за 2500 мс» и «сеть недостижима» — это разница между
+        // протухшим путём до резолвера и оборванной связью.
+        Log.d(TAG, "$host: $lastReason (за ${SystemClock.elapsedRealtime() - startedAt} мс)")
         return Outcome.Silent(lastReason)
     }
 

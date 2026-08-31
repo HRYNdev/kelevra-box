@@ -57,6 +57,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         private const val PROFILE_UPDATE_INTERVAL = 15L * 60 * 1000 // 15 minutes in milliseconds
         private const val TAG = "BoxService"
 
+        /**
+         * По этим словам собственный лог ядра повторяется предупреждением: паника,
+         * ошибка, отказ. Список короткий нарочно — иначе повтором станет весь поток.
+         */
+        private val LOUD_CORE_WORDS = listOf("panic", "FATAL", "ERROR", "goroutine stack")
+
         fun start() {
             val intent =
                 runBlocking {
@@ -174,6 +180,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
     private suspend fun startService() {
         try {
+            // Старт сервиса не писался вообще: в журнале не было ни «стартую», ни имени
+            // профиля, ни того, чем старт кончился. Разобрать «перезапустилось само»
+            // без этой строки нельзя — не с чем сверять время.
+            Log.i(TAG, "сервис стартует")
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_starting)
             }
@@ -210,6 +220,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Смотрим ДО старта ядра: поднять туннель и через секунду погасить — хуже,
             // чем не поднимать вовсе.
             if (AutoMode.homeRightNow()) {
+                Log.i(TAG, "сервис запущен дома: профиль «$lastProfileName», ядро не поднимаем")
                 tunnelSuspended = true
                 status.postValue(Status.Started)
                 withContext(Dispatchers.Main) {
@@ -276,6 +287,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 }
             }
 
+            Log.i(TAG, "сервис запущен: профиль «$lastProfileName», ядро поднято")
             status.postValue(Status.Started)
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_started)
@@ -863,6 +875,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     override fun serviceStop() {
+        // Это ядро само попросило остановиться — то есть внутри у него что-то кончилось.
+        // Отличать это от выключения человеком обязательно, иначе «сеть отвалилась» и
+        // «человек нажал» в журнале одно и то же.
+        Log.w(TAG, "ядро попросило остановить сервис")
         notification.close()
         status.postValue(Status.Starting)
         val pfd = fileDescriptor
@@ -962,6 +978,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @OptIn(DelicateCoroutinesApi::class)
     private fun stopService() {
         if (status.value != Status.Started) return
+        Log.i(TAG, "сервис останавливается")
         status.value = Status.Stopping
         if (receiverRegistered) {
             service.unregisterReceiver(receiver)
@@ -990,6 +1007,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             stopOlcRtc()
             Settings.startedByUser = false
             withContext(Dispatchers.Main) {
+                Log.i(TAG, "сервис остановлен")
                 status.value = Status.Stopped
                 service.stopSelf()
             }
@@ -1005,6 +1023,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     private suspend fun stopAndAlert(type: Alert, message: String? = null) {
+        // Аварийный останов уходил только всплывашкой в приложение. В журнале от него
+        // не оставалось ни строки — то есть падение старта и падение ядра выглядели
+        // одинаково: «сервис просто выключился».
+        Log.w(TAG, "аварийный останов: $type${message?.let { " — $it" }.orEmpty()}")
         Settings.startedByUser = false
         AutoMode.stop()
         ProbeSocket.useProtector(null)
@@ -1037,7 +1059,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @OptIn(DelicateCoroutinesApi::class)
     @Suppress("SameReturnValue")
     internal fun onStartCommand(): Int {
+        // Журнал мог не открыться на старте процесса (телефон ещё не разблокирован после
+        // перезагрузки) — здесь хранилище уже наверняка доступно. Живую запись повторный
+        // вызов не трогает.
+        runCatching { AppLog.start(Application.application) }
         if (status.value != Status.Stopped) return Service.START_NOT_STICKY
+        Log.i(TAG, "команда на запуск сервиса")
         status.value = Status.Starting
         // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
         // идёт с первого же захода — и защита ей нужна ровно тогда же.
@@ -1074,10 +1101,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     internal fun onBind(): IBinder = binder
 
     internal fun onDestroy() {
+        Log.i(TAG, "сервис уничтожен системой")
         binder.close()
     }
 
     internal fun onRevoke() {
+        // Разрешение на VPN отобрали снаружи (другое VPN-приложение, политика, человек в
+        // системных настройках). Со стороны это «оно само выключилось».
+        Log.w(TAG, "система отозвала разрешение на VPN — останавливаюсь")
         stopService()
     }
 
@@ -1129,8 +1160,20 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }.start()
     }
 
+    /**
+     * Собственный лог ядра sing-box.
+     *
+     * Целиком он идёт на уровне debug — это поток, и держать его выше значит утопить
+     * журнал. Но паника и ошибки ядра — это ровно та авария, ради которой журнал и
+     * заведён, и терять их в общем потоке нельзя. Поэтому строки, в которых ядро
+     * ругается, повторяются предупреждением: их видно даже беглым взглядом.
+     */
     override fun writeDebugMessage(message: String?) {
-        Log.d("sing-box", message!!)
+        val text = message ?: return
+        Log.d("sing-box", text)
+        if (LOUD_CORE_WORDS.any { text.contains(it, ignoreCase = true) }) {
+            Log.w(TAG, "ядро: ${text.take(500)}")
+        }
     }
 
     override fun connectSSHAgent(): Int = -1

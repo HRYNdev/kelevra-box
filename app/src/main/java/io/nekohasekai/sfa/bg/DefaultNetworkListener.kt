@@ -162,6 +162,10 @@ object DefaultNetworkListener {
     // NB: this runs in ConnectivityThread, and this behavior cannot be changed until API 26
     private object Callback : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = runBlocking {
+            // Появление и пропажа сети — самые дешёвые и самые надёжные отметки времени
+            // в разборе «связь пропала». До сих пор они не писались вовсе, и обрыв
+            // приходилось выводить из того, что автомат вдруг заговорил про «сети нет».
+            Log.i(TAG, "система: сеть $network появилась")
             networkActor.send(
                 NetworkMessage.Put(
                     network,
@@ -185,6 +189,7 @@ object DefaultNetworkListener {
         }
 
         override fun onLost(network: Network) = runBlocking {
+            Log.i(TAG, "система: сеть $network пропала")
             networkActor.send(
                 NetworkMessage.Lost(
                     network,
