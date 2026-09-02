@@ -40,6 +40,10 @@ object Kelevra {
     val appVersion: String
         get() = header(BuildConfig.VERSION_NAME)
 
+    /** Версия самой системы — «12». Тем же значением зовётся заголовок `x-ver-os`. */
+    val osVersion: String
+        get() = header(android.os.Build.VERSION.RELEASE ?: "")
+
     /**
      * Значение заголовка обязано быть однострочным ASCII: имена моделей у части
      * прошивок содержат кириллицу и переводы строк, а такой заголовок HTTP-клиент
@@ -49,15 +53,47 @@ object Kelevra {
         value.map { if (it.code in 32..126) it else '?' }.joinToString("").trim().take(128)
 
     /**
-     * Четыре заголовка, по которым сервер сам заводит устройство и потом отдаёт
-     * в сводке человеческие имена (`person.name`, `device.name`).
+     * Заголовки, по которым сервер сам заводит устройство и потом отдаёт в сводке
+     * человеческие имена (`person.name`, `device.name`).
+     *
+     * Пятым идёт свой расход трафика ([io.nekohasekai.sfa.bg.DeviceTraffic]) — его
+     * может и не быть: пока ничего не насчитали, заголовок не шлём вовсе.
      */
-    fun deviceHeaders(): List<Pair<String, String>> = listOf(
+    fun deviceHeaders(): List<Pair<String, String>> = listOfNotNull(
         "X-Device-Id" to deviceId,
         "X-Device-Model" to deviceModel,
         "X-Device-Platform" to PLATFORM,
         "X-App-Version" to appVersion,
+        io.nekohasekai.sfa.bg.DeviceTraffic.header(io.nekohasekai.sfa.bg.DeviceTraffic.total()),
     )
+
+    /**
+     * Чем устройство подписывается в первой строке своего журнала.
+     *
+     * Повод. В андроидном журнале не было ни модели, ни версии приложения, ни версии
+     * системы: кто прислал файл — узнавалось только из реестра на сервере, а по самому
+     * журналу никак. У десктопа такая шапка есть с самого начала («запуск Kelevra 0.6.44
+     * (windows/amd64)»), и разбор там начинается с неё.
+     *
+     * Источник ровно тот же, что у заголовков `X-Device-*` ([deviceHeaders]) — второго
+     * не заводим: шапка журнала и то, чем устройство назвалось серверу, обязаны
+     * совпадать, иначе при разборе жалобы они начинают спорить друг с другом.
+     */
+    fun deviceSummary(): String = describeDevice(deviceModel, osVersion, appVersion)
+
+    /**
+     * Та же шапка из готовых значений — отдельно, чтобы её можно было проверить без телефона.
+     *
+     * Пустое поле не выкидываем, а называем словами: «модель неизвестна» в шапке — это
+     * факт об устройстве, а молча съеденное поле не отличить от того, что его забыли
+     * записать вовсе.
+     */
+    internal fun describeDevice(model: String, osVersion: String, appVersion: String): String {
+        val железо = model.ifBlank { "модель неизвестна" }
+        val система = if (osVersion.isBlank()) PLATFORM else "$PLATFORM $osVersion"
+        val версия = appVersion.ifBlank { "версия неизвестна" }
+        return "Kelevra $версия, $железо, $система"
+    }
 
     /**
      * Код подписки из любого нашего адреса: и нового (/k/<код>), и старого, который
