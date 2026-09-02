@@ -12,7 +12,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.DevicesOther
+import androidx.compose.material.icons.outlined.Laptop
+import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -42,6 +50,7 @@ import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDial
 import io.nekohasekai.sfa.compose.theme.KDim
 import io.nekohasekai.sfa.compose.theme.KDivider
+import io.nekohasekai.sfa.compose.theme.KGroupTitle
 import io.nekohasekai.sfa.compose.theme.KHint
 import io.nekohasekai.sfa.compose.theme.KRowItem
 import io.nekohasekai.sfa.compose.theme.Montserrat
@@ -54,6 +63,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 
 /** Канал в списке: имя, задержка, выбран ли сейчас. */
 data class ChannelRow(val name: String, val delayMs: Int, val selected: Boolean)
@@ -117,11 +128,11 @@ fun HomeScreen(
     var showExits by remember { mutableStateOf(false) }
     var showSubscription by remember { mutableStateOf(false) }
     // «40 секунд назад» обязано стареть на глазах: замер, который вечно выглядит свежим,
-    // хуже отсутствия замера. Тикаем только пока открыт список выходов — больше эту
-    // фразу нигде не показываем, а считать секунды на закрытом экране незачем.
+    // хуже отсутствия замера. Тикаем, пока открыт список выходов или шторка подписки —
+    // в обеих время показано словами; на закрытом экране считать секунды незачем.
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(showExits) {
-        while (showExits) {
+    LaunchedEffect(showExits, showSubscription) {
+        while (showExits || showSubscription) {
             now = System.currentTimeMillis()
             delay(1_000)
         }
@@ -488,25 +499,54 @@ fun HomeScreen(
                 }
                 val person = sub?.personName
                 val device = sub?.deviceName
-                if (person != null || device != null) {
+                val devices = sub?.devices.orEmpty()
+                // Пришёл список устройств — отдельная строка «Устройство» уходит: она
+                // про это же устройство, только вслепую, а в списке оно стоит первым и
+                // с подробностями. Списка нет (старый сервер) — всё остаётся как было.
+                val showDeviceRow = device != null && devices.isEmpty()
+                if (person != null || showDeviceRow) {
                     Spacer(Modifier.height(KDim.Gap))
                     KCard {
                         if (person != null) {
                             KRowItem(label = "Кто пользуется", title = person)
                         }
-                        if (person != null && device != null) KDivider()
-                        if (device != null) {
+                        if (person != null && showDeviceRow) KDivider()
+                        if (showDeviceRow) {
                             KRowItem(label = "Устройство", title = device)
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "так это устройство подписано на сервере",
-                        fontFamily = Montserrat,
-                        fontSize = 12.sp,
-                        color = colors.Dim,
-                        modifier = Modifier.padding(start = 4.dp),
-                    )
+                    if (showDeviceRow) {
+                        // Подсказка объясняет ровно эту строку, поэтому и живёт с ней.
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "так это устройство подписано на сервере",
+                            fontFamily = Montserrat,
+                            fontSize = 12.sp,
+                            color = colors.Dim,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
+                if (devices.isNotEmpty()) {
+                    KGroupTitle("Устройства")
+                    KCard {
+                        devices.forEachIndexed { index, item ->
+                            if (index > 0) KDivider()
+                            DeviceRow(item, now)
+                        }
+                    }
+                    // Прочерк объясняем только когда он у всех: рядом с честными цифрами
+                    // одинокий прочерк читается сам, а лишняя строка под списком — шум.
+                    if (devices.all { it.trafficBytes <= 0L }) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = "прочерк — расход по устройствам сервер не считал",
+                            fontFamily = Montserrat,
+                            fontSize = 12.sp,
+                            color = colors.Dim,
+                            modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
                 }
                 Spacer(Modifier.height(20.dp))
             }
@@ -608,6 +648,95 @@ private fun ExitRow(
             }
         }
     }
+}
+
+/**
+ * Одно устройство подписки в списке.
+ *
+ * Собрана вручную, а не из KRowItem: там нет ни значка слева, ни третьей, мелкой
+ * строки. Размеры и цвета взяты у KRowItem один в один, чтобы список не выпадал
+ * из карточек остального экрана.
+ */
+@Composable
+private fun DeviceRow(device: SubscriptionDevice, now: Long) {
+    val colors = K
+    val seen = deviceSeenWords(device.lastSeenMillis, now)
+    // Версия и «с 31 августа» — одна мелкая строка: порознь они занимают полкарточки,
+    // а вместе читаются как одна справка о том, что это за устройство.
+    val details = listOfNotNull(device.appVersion, deviceSinceWords(device.firstSeenMillis))
+        .joinToString(" · ")
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = deviceIcon(device.kind),
+            contentDescription = null,
+            tint = if (device.self) colors.Accent else colors.Dim,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = device.name,
+                    fontFamily = Montserrat,
+                    fontWeight = FontWeight.Medium,
+                    fontSize = 15.sp,
+                    color = colors.Text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (device.self) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = "это устройство",
+                        fontFamily = Montserrat,
+                        fontSize = 11.sp,
+                        color = colors.Accent,
+                    )
+                }
+            }
+            if (seen != null) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = seen,
+                    fontFamily = Montserrat,
+                    fontSize = 13.sp,
+                    // «В сети» — единственное состояние, которое стоит подсветить:
+                    // остальные это просто когда, а не хорошо или плохо.
+                    color = if (seen == "в сети") colors.Ok else colors.Dim,
+                )
+            }
+            if (details.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = details,
+                    fontFamily = Montserrat,
+                    fontSize = 11.sp,
+                    color = colors.Dim2,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            // Прочерк ровно тот же, что у выхода без замера: и там, и тут он значит
+            // «не мерили», а не «ноль».
+            text = deviceTrafficWords(device.trafficBytes) ?: "—",
+            fontFamily = RobotoMono,
+            fontSize = 13.sp,
+            color = colors.Dim,
+        )
+    }
+}
+
+/** Значок по виду устройства. Незнакомый вид — общий значок, а не пустое место. */
+private fun deviceIcon(kind: String): ImageVector = when (kind) {
+    "phone" -> Icons.Outlined.Smartphone
+    "laptop" -> Icons.Outlined.Laptop
+    "desktop" -> Icons.Outlined.DesktopWindows
+    else -> Icons.Outlined.DevicesOther
 }
 
 /** Пустое место под будущую карточку подписки, чтобы экран не прыгал. */
