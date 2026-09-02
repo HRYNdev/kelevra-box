@@ -43,7 +43,7 @@
 Прогрев включается **только** для транспортов без эпох (`isBroadcastOnlyTransport`), поэтому
 vp8channel идёт как в апстриме, без лишних задержек. `DefaultTimeout` оставлен апстримный (15 с).
 
-## Замеры (стенд: нога LXC 211 + клиент LXC 204, файл с нашего VPS)
+## Замеры (стенд: серверная нога + клиент в соседнем контейнере, файл со своего VPS)
 
 | | vp8channel | datachannel с патчем |
 |---|---|---|
@@ -75,7 +75,7 @@ vp8channel идёт как в апстриме, без лишних задерж
 
 ## Как собрать
 
-Go на узлах нет, собиралось в контейнере на LXC 204 (там docker), дерево — `/opt/olcbuild/src`:
+Go на узлах нет, собиралось в отдельном контейнере с docker, дерево — `/opt/olcbuild/src`:
 
 ```bash
 git clone --depth 1 https://github.com/openlibrecommunity/olcrtc.git src
@@ -101,7 +101,7 @@ docker run --rm -v /opt/olcbuild:/out -w /out/src golang:1.26.3 bash -c \
 
 **Причина.** `transport.ControlPlane` реализует **только vp8channel**. У datachannel её нет,
 поэтому пинг едет одним потоком smux вместе с данными и стоит в очереди за мегабайтами.
-Отсюда же и то, что у хозяина на olcbox (vp8channel) держалось часами.
+Отсюда же и то, что на боевом стенде с olcbox (vp8channel) держалось часами.
 
 **Как сделано.** У LiveKit в пакете данных есть `topic`: control уходит своим topic'ом
 (`olcrtc-ctl`) мимо очереди отправки движка, на приёме разводится по topic до расшифровки.

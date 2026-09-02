@@ -200,7 +200,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
 
 /**
  * Отправка жалобы на свой сервер. Телеграм не дёргаем: обращения копятся на
- * сервере, разбирать их будет Jarvis.
+ * сервере, там их и разбирают.
  */
 private fun sendComplaint(
     text: String,

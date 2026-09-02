@@ -50,7 +50,7 @@ class AutoModeSilenceTest {
 
     @Test
     fun `резолвер ответил — всё как раньше, броня не вмешивается`() {
-        // Главное условие хозяина: меняется ровно один случай — когда резолверы молчат.
+        // Главное условие правки: меняется ровно один случай — когда резолверы молчат.
         assertFalse(
             AutoMode.holdsVerdict(
                 silent = false,
@@ -283,7 +283,7 @@ class AutoModeSilenceTest {
 
     private companion object {
         /** Отпечаток домашней сети: транспорт и резолверы, как в [AutoMode] `networkKey`. */
-        const val HOME_NET = "wifi|192.168.1.192"
+        const val HOME_NET = "wifi|192.168.0.1"
     }
 
     /**

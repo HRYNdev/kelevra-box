@@ -225,7 +225,7 @@ class DashboardViewModel :
                             // Список выходов из ядра приходит только когда оно работает,
                             // поэтому пока оно молчит показываем то, что прочитали из конфига.
                             // Проверять на пустоту нельзя: после смены подписки в списке лежит
-                            // прежний набор от старого конфига (у хозяина так и осталось «2 выхода»
+                            // прежний набор от старого конфига (на живом телефоне так и оставалось «2 выхода»
                             // без комнаты), и новый выход не появился бы никогда.
                             channelRows = if (!hasGroups && fallback.rows.isNotEmpty()) fallback.rows else channelRows,
                             channelGroupTag = if (!hasGroups) fallback.chooser ?: channelGroupTag else channelGroupTag,

@@ -39,7 +39,7 @@ class SubscriptionDevicesTest {
             json(
                 """
                 {"devices": [
-                  {"self": true, "name": "OnePlus CPH2747", "kind": "phone",
+                  {"self": true, "name": "Acme AP-1000", "kind": "phone",
                    "platform": "android", "app_version": "1.14.104",
                    "first_seen": "2026-08-31T08:44:12+00:00",
                    "last_seen": "2026-09-02T14:15:44+00:00",
@@ -51,7 +51,7 @@ class SubscriptionDevicesTest {
         assertEquals(1, devices.size)
         val one = devices.first()
         assertTrue("своё устройство помечено", one.self)
-        assertEquals("OnePlus CPH2747", one.name)
+        assertEquals("Acme AP-1000", one.name)
         assertEquals("phone", one.kind)
         assertEquals("android", one.platform)
         assertEquals("1.14.104", one.appVersion)
@@ -69,7 +69,7 @@ class SubscriptionDevicesTest {
      */
     @Test
     fun `поля devices нет — список пуст, а не падение`() {
-        assertTrue(parseDevices(json("""{"name": "хозяин", "active": true}""")).isEmpty())
+        assertTrue(parseDevices(json("""{"name": "Пользователь", "active": true}""")).isEmpty())
         assertTrue(parseDevices(json("""{"devices": []}""")).isEmpty())
     }
 
