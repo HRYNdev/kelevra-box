@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import io.nekohasekai.sfa.Kelevra
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
@@ -101,11 +102,20 @@ object AppLog {
             target
         }.onFailure { Log.w(TAG, "не удалось открыть свой журнал, попробую позже", it) }.getOrNull() ?: return
 
+        // Первая строка журнала называет устройство: модель, система с версией, версия
+        // приложения ([Kelevra.deviceSummary]). До этого в андроидном журнале не было ни
+        // того, ни другого, ни третьего — присланный на сервер файл опознавался только
+        // по реестру, а сам по себе не говорил ничего. У десктопа такая шапка есть
+        // изначально, и разбор там начинается с неё.
+        //
+        // Шапку добываем осторожно: журнал поднимается на самом старте процесса, и
+        // остаться без записи из-за строки о железе было бы обменом наоборот.
+        val устройство = runCatching { Kelevra.deviceSummary() }.getOrDefault("устройство не опознано")
         // Сколько телефон на ногах: по этой цифре перезагрузка телефона отличается от
         // перезапуска одного лишь приложения, а без такой отметки два разных случая
         // выглядят в журнале одинаково.
         note(
-            "=== запись журнала начата, pid ${Process.myPid()}, " +
+            "=== запись журнала начата, $устройство, pid ${Process.myPid()}, " +
                 "телефон включён ${SystemClock.elapsedRealtime() / 60_000} мин назад ===",
         )
         pump = Thread({ pumpLoop(started) }, "kelevra-app-log").apply {

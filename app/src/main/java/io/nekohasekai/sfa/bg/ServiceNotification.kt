@@ -271,6 +271,10 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
     override fun updateStatus(status: StatusMessage) {
         uplink = status.uplink
         downlink = status.downlink
+        // Свой расход копим отсюда: это единственная подписка на статус, которая живёт
+        // столько же, сколько сервис — экран статуса открыт не всегда. Показания
+        // накопительные за жизнь ядра, поэтому пропущенные тики байтов не теряют.
+        DeviceTraffic.observe { status.uplinkTotal + status.downlinkTotal }
         render()
     }
 

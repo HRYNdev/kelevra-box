@@ -144,7 +144,7 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         conn.connectTimeout = 10000
         conn.readTimeout = 10000
         conn.setRequestProperty("User-Agent", "kelevra")
-        // Те же четыре заголовка, что и у запроса конфига: сервер по ним заводит
+        // Те же заголовки, что и у запроса конфига: сервер по ним заводит
         // устройство и возвращает в этой же сводке person.name и device.name.
         Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
         val code = conn.responseCode

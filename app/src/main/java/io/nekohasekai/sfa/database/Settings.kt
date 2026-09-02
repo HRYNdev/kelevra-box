@@ -197,6 +197,11 @@ object Settings {
     var logUploadMarks by dataStore.string(SettingsKey.LOG_UPLOAD_MARKS) { "" }
     var logUploadRetrySince by dataStore.long(SettingsKey.LOG_UPLOAD_RETRY_SINCE) { 0L }
 
+    // Свой расход трафика. Панель считает по ключу доступа целиком и телефон от ПК
+    // не отличает, поэтому итог копит само устройство — см. DeviceTraffic.
+    var deviceTrafficTotal by dataStore.long(SettingsKey.DEVICE_TRAFFIC_TOTAL) { 0L }
+    var deviceTrafficSeen by dataStore.long(SettingsKey.DEVICE_TRAFFIC_SEEN) { 0L }
+
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }

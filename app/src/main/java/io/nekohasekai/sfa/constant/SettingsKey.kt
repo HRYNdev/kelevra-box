@@ -111,6 +111,14 @@ object SettingsKey {
     /** Когда началась череда неудачных попыток: через сутки перестаём долбиться. */
     const val LOG_UPLOAD_RETRY_SINCE = "log_upload_retry_since"
 
+    /**
+     * Свой расход трафика: итог за всё время (байты) и последнее показание счётчика ядра,
+     * от которого считается прирост. Счётчик ядра обнуляется на каждом перезапуске,
+     * а серверу нужен расход за всё время — см. [io.nekohasekai.sfa.bg.DeviceTraffic].
+     */
+    const val DEVICE_TRAFFIC_TOTAL = "device_traffic_total"
+    const val DEVICE_TRAFFIC_SEEN = "device_traffic_seen"
+
 
     // cache
     const val STARTED_BY_USER = "started_by_user"
