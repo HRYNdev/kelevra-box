@@ -86,6 +86,7 @@ import io.nekohasekai.sfa.constant.Status
 import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.update.humanUpdateError
 import androidx.compose.runtime.rememberCoroutineScope
+import io.nekohasekai.sfa.database.ProfileManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -584,6 +585,8 @@ fun SFANavHost(
             var notifications by remember { mutableStateOf(Settings.dynamicNotification) }
             var обновлениеИдёт by remember { mutableStateOf(false) }
             var обновлениеИтог by remember { mutableStateOf("") }
+            var настройкиИдут by remember { mutableStateOf(false) }
+            var настройкиИтог by remember { mutableStateOf("") }
             val логиОтправлены = remember { Settings.logUploadLastOk }
             // Ответ стоит похода в файловую систему — спрашиваем один раз на открытие
             // экрана, а не на каждую перерисовку.
@@ -640,6 +643,31 @@ fun SFANavHost(
                     обновлениеИдёт -> "Проверяю…"
                     обновлениеИтог.isNotBlank() -> обновлениеИтог
                     else -> "Сейчас ${io.nekohasekai.sfa.BuildConfig.VERSION_NAME}"
+                },
+                onRefreshProfile = {
+                    настройкиИдут = true
+                    настройкиИтог = ""
+                    scope.launch(Dispatchers.IO) {
+                        настройкиИтог = try {
+                            val id = dashboardViewModel?.uiState?.value?.selectedProfileId ?: -1L
+                            val профиль = if (id != -1L) ProfileManager.get(id) else null
+                            when {
+                                профиль == null -> "Сначала подключитесь по коду"
+                                else -> {
+                                    dashboardViewModel?.updateProfile(профиль)
+                                    "Настройки обновлены"
+                                }
+                            }
+                        } catch (e: Exception) {
+                            "Не получилось: ${e.message ?: "нет связи"}"
+                        }
+                        настройкиИдут = false
+                    }
+                },
+                обновлениеНастроекПодпись = when {
+                    настройкиИдут -> "Обновляю…"
+                    настройкиИтог.isNotBlank() -> настройкиИтог
+                    else -> "Список выходов и правила с сервера"
                 },
                 // Ни разрешений, ни выбора: журнал приложение пишет себе само и раз
                 // в сутки отправляет. Человеку остаётся строка-справка.

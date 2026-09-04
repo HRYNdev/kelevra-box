@@ -70,7 +70,9 @@ fun SimpleSettingsScreen(
     onAdvanced: () -> Unit,
     onComplaint: () -> Unit,
     onCheckUpdate: () -> Unit,
+    onRefreshProfile: () -> Unit,
     обновлениеПодпись: String,
+    обновлениеНастроекПодпись: String,
     отправкаЛоговПодпись: String,
     modifier: Modifier = Modifier,
 ) {
@@ -167,6 +169,15 @@ fun SimpleSettingsScreen(
 
             KGroupTitle("Подписка")
             KCard {
+                // Настройки сети приезжают сами раз в час. Пока этой кнопки не было,
+                // увидеть изменение с сервера можно было только повторным вводом кода,
+                // а он заводит ещё один профиль.
+                KRowItem(
+                    title = "Обновить настройки сети",
+                    subtitle = обновлениеНастроекПодпись,
+                    chevron = false,
+                    onClick = onRefreshProfile,
+                )
                 KRowItem(
                     title = "Подключить по коду",
                     subtitle = "Изменить код доступа",
