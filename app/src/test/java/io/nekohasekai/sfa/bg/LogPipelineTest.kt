@@ -349,6 +349,31 @@ class LogPipelineTest {
         )
     }
 
+    // ------------------------- 7. отпечаток хвоста для счётчика безнадёжных отказов
+
+    @Test
+    fun `отпечаток одного и того же хвоста не меняется от порядка кусков`() {
+        val a = LogUploadWork.Part(File("a.log"), "a.log", offset = 0, length = 10, modified = 1L)
+        val b = LogUploadWork.Part(File("b.log"), "b.log", offset = 5, length = 20, modified = 2L)
+
+        assertEquals(
+            "порядок в списке не должен влиять на отпечаток",
+            LogUploadWork.signature(listOf(a, b)),
+            LogUploadWork.signature(listOf(b, a)),
+        )
+    }
+
+    @Test
+    fun `новые байты в том же файле меняют отпечаток хвоста`() {
+        val было = LogUploadWork.Part(File("a.log"), "a.log", offset = 0, length = 10, modified = 1L)
+        val стало = LogUploadWork.Part(File("a.log"), "a.log", offset = 0, length = 15, modified = 1L)
+
+        assertFalse(
+            "хвост с новыми байтами обязан считаться другим — иначе счётчик отказов доедет и живые логи",
+            LogUploadWork.signature(listOf(было)) == LogUploadWork.signature(listOf(стало)),
+        )
+    }
+
     @Test
     fun `сорванная отправка не съедает кусок — отметки двигаются только после успеха`() {
         val own = tempDir("failed")
