@@ -60,6 +60,8 @@ fun AdvancedScreen(
     onCheck: () -> Unit,
     onLog: () -> Unit,
     onOlcRtc: () -> Unit,
+    onRefreshProfile: () -> Unit,
+    обновлениеНастроекПодпись: String,
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -111,6 +113,18 @@ fun AdvancedScreen(
                 KRowItem(
                     title = "Состояние",
                     subtitle = summary?.words ?: "Пока неизвестно",
+                )
+                KDivider()
+                // Настройки сети приезжают сами раз в час. Пока этой строки не было,
+                // увидеть изменение с сервера можно было только повторным вводом кода,
+                // а он заводит ещё один профиль. Живёт здесь, а не в простых настройках:
+                // обычному человеку кнопка не нужна, а нажать её вместо «Подключить по
+                // коду» он может легко.
+                KRowItem(
+                    title = "Обновить настройки сети",
+                    subtitle = обновлениеНастроекПодпись,
+                    chevron = false,
+                    onClick = onRefreshProfile,
                 )
                 KDivider()
                 // Реклама режется наборами, которые приезжают с сервера. Раньше про это
