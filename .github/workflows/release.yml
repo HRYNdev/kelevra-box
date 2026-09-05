@@ -417,7 +417,7 @@ jobs:
           # Номер берём ТОТ ЖЕ, что у APK ($KELEVRA_BUILD из имени тега), а не номер
           # прогона. Пока здесь стоял github.run_number, релиз kelevra67 выкладывал APK
           # 1.14.67 и файл версии 1.14.59 — приложение сравнивало себя с чужим номером
-          # и обновление не предлагало вовсе (поймано 11.08.2026 на телефоне хозяина).
+          # и обновление не предлагало вовсе (поймано на живом устройстве 11.08.2026).
           # ровно та же формула, что versionCode в app/build.gradle.kts
           VERSION_CODE=$(grep '^VERSION_CODE=' sing-box-for-android/version.properties | cut -d= -f2)
           CODE=$(( VERSION_CODE * 1000 + KELEVRA_BUILD ))
