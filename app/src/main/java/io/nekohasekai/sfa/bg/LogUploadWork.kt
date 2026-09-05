@@ -369,8 +369,29 @@ object LogUploadWork {
         Settings.logUploadStuckCount = 0
     }
 
+    /**
+     * Чем кончилась отправка. Три исхода, а не два: «серверу сейчас плохо» — это не то же
+     * самое, что «сервер разобрал посылку и отверг её».
+     *
+     * Различать пришлось потому, что счётчик безнадёжности (см. [STUCK_LIMIT]) выбрасывает
+     * хвост после трёх отказов подряд. Наш сервер отвечает пятисотыми при нехватке места
+     * под журналы и при сбое записи — состояния временные. Без этого различия семь часов
+     * больного сервера (паузы 1ч + 2ч + 4ч) съедали бы совершенно целые логи, то есть ровно
+     * ту беду, ради которой счётчик и заводился.
+     */
+    internal enum class ИсходОтправки {
+        /** Сервер принял и подтвердил. */
+        Принято,
+
+        /** Сервер разобрал посылку и отказал по её содержимому: четырёхсотые либо «ok:false». */
+        Отвергнуто,
+
+        /** Сервер не в состоянии принять сейчас: пятисотые и всё неожиданное. Судить хвост нельзя. */
+        ВременныйСбой,
+    }
+
     /** Отправка. Успех — только когда сервер ответил {"ok":true}. */
-    private fun upload(archive: ByteArray): Boolean {
+    private fun upload(archive: ByteArray): ИсходОтправки {
         val conn = URL("https://${Kelevra.SUBSCRIPTION_HOST}/logs").openConnection() as HttpURLConnection
         return try {
             conn.requestMethod = "POST"
@@ -385,11 +406,16 @@ object LogUploadWork {
             val code = conn.responseCode
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.readText().orEmpty()
+            if (code in 500..599) {
+                Log.w(TAG, "серверу плохо: http $code — хвост не сужу, попробую позже")
+                return ИсходОтправки.ВременныйСбой
+            }
             if (code !in 200..299) {
                 Log.w(TAG, "сервер отказал: http $code")
-                return false
+                return ИсходОтправки.Отвергнуто
             }
-            runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
+            val ok = runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
+            if (ok) ИсходОтправки.Принято else ИсходОтправки.Отвергнуто
         } finally {
             conn.disconnect()
         }
@@ -425,8 +451,12 @@ object LogUploadWork {
         // безнадёжности не трогаем — иначе телефон без сети 7 часов (бэкофф 1ч+2ч+4ч при
         // неизменном хвосте) выбросил бы совершенно целые логи.
         if (popytka.isFailure) return@withContext false
-        val ok = popytka.getOrDefault(false)
-        if (!ok) {
+        val ishod = popytka.getOrDefault(ИсходОтправки.ВременныйСбой)
+        // Пятисотый ответ значит «серверу сейчас плохо», а не «архив негодный»: он
+        // приходит при нехватке места под журналы и при сбое записи. Уходим как при
+        // отсутствии сети, счётчик безнадёжности не трогаем.
+        if (ishod == ИсходОтправки.ВременныйСбой) return@withContext false
+        if (ishod == ИсходОтправки.Отвергнуто) {
             // Сюда доходит только РЕАЛЬНЫЙ ответ сервера с отказом. Протокол не говорит,
             // отказ временный или архив навсегда битый (см. STUCK_LIMIT) — единственный
             // признак безнадёжности: тот же самый хвост отвергается заново несколько раз
