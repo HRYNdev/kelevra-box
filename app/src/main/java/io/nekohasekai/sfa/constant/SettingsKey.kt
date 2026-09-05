@@ -111,6 +111,10 @@ object SettingsKey {
     /** Когда началась череда неудачных попыток: через сутки перестаём долбиться. */
     const val LOG_UPLOAD_RETRY_SINCE = "log_upload_retry_since"
 
+    /** Отпечаток последнего отвергнутого хвоста логов и счётчик его подряд отказов. */
+    const val LOG_UPLOAD_STUCK_SIGNATURE = "log_upload_stuck_signature"
+    const val LOG_UPLOAD_STUCK_COUNT = "log_upload_stuck_count"
+
     /**
      * Свой расход трафика: итог за всё время (байты) и последнее показание счётчика ядра,
      * от которого считается прирост. Счётчик ядра обнуляется на каждом перезапуске,
