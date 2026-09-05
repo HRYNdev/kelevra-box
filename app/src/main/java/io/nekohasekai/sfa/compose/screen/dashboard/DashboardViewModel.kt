@@ -140,6 +140,24 @@ data class DashboardUiState(
 // DashboardViewModel now only uses UiEvent for all events
 // No need for DashboardEvent anymore as all events are handled globally
 
+/**
+ * Итог одной попытки обновить профиль по ссылке. Экран должен рапортовать «Настройки
+ * обновлены» только для SUCCESS — не сразу после вызова функции, а когда этот итог
+ * реально пришёл.
+ */
+enum class ProfileUpdateOutcome { SUCCESS, FAILED, NOT_APPLICABLE }
+
+/**
+ * Текст статуса для строки на экране расширенных настроек. Вынесена чистой функцией,
+ * чтобы проверяться на JVM без Android и без реального обновления.
+ */
+fun profileUpdateResultText(outcome: ProfileUpdateOutcome, errorText: String? = null): String =
+    when (outcome) {
+        ProfileUpdateOutcome.SUCCESS -> "Настройки обновлены"
+        ProfileUpdateOutcome.FAILED -> "Не получилось: ${errorText ?: "нет связи"}"
+        ProfileUpdateOutcome.NOT_APPLICABLE -> "Обновлять нечего: профиль задан не ссылкой"
+    }
+
 class DashboardViewModel :
     BaseViewModel<DashboardUiState, UiEvent>(),
     CommandClient.Handler {
@@ -404,8 +422,11 @@ class DashboardViewModel :
         // Handled directly in ProfilesCard
     }
 
-    fun updateProfile(profile: Profile) {
-        if (profile.typed.type != TypedProfile.Type.Remote) return
+    fun updateProfile(profile: Profile, onResult: ((ProfileUpdateOutcome, String?) -> Unit)? = null) {
+        if (profile.typed.type != TypedProfile.Type.Remote) {
+            onResult?.invoke(ProfileUpdateOutcome.NOT_APPLICABLE, null)
+            return
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             // Set updating state
@@ -436,6 +457,7 @@ class DashboardViewModel :
                 // Show success state
                 withContext(Dispatchers.Main) {
                     updateState { copy(updatingProfileId = null, updatedProfileId = profile.id) }
+                    onResult?.invoke(ProfileUpdateOutcome.SUCCESS, null)
                 }
 
                 // Clear success state after delay
@@ -454,10 +476,12 @@ class DashboardViewModel :
                 // Адрес подписки несёт код доступа целиком — в журнал он идёт
                 // замаскированным, а человеку вместо стектрейса — русский текст.
                 Log.w("DashboardViewModel", "update profile", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
-                sendErrorMessage(humanProfileError(e))
+                val humanError = humanProfileError(e)
+                sendErrorMessage(humanError)
                 // Clear updating state on error
                 withContext(Dispatchers.Main) {
                     updateState { copy(updatingProfileId = null) }
+                    onResult?.invoke(ProfileUpdateOutcome.FAILED, humanError)
                 }
             }
         }
