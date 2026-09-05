@@ -197,6 +197,12 @@ object Settings {
     var logUploadMarks by dataStore.string(SettingsKey.LOG_UPLOAD_MARKS) { "" }
     var logUploadRetrySince by dataStore.long(SettingsKey.LOG_UPLOAD_RETRY_SINCE) { 0L }
 
+    // Отпечаток и счётчик подряд отвергнутого одного и того же хвоста: протокол не
+    // говорит, отказ временный или архив навсегда битый (см. LogUploadWork), поэтому
+    // о безнадёжности судим по повтору, а не по коду ответа.
+    var logUploadStuckSignature by dataStore.string(SettingsKey.LOG_UPLOAD_STUCK_SIGNATURE) { "" }
+    var logUploadStuckCount by dataStore.int(SettingsKey.LOG_UPLOAD_STUCK_COUNT) { 0 }
+
     // Свой расход трафика. Панель считает по ключу доступа целиком и телефон от ПК
     // не отличает, поэтому итог копит само устройство — см. DeviceTraffic.
     var deviceTrafficTotal by dataStore.long(SettingsKey.DEVICE_TRAFFIC_TOTAL) { 0L }

@@ -72,6 +72,20 @@ object LogUploadWork {
     private val RETRY_MIN_MILLIS = TimeUnit.HOURS.toMillis(1)
     private val RETRY_GIVE_UP_MILLIS = TimeUnit.DAYS.toMillis(1)
 
+    /**
+     * После скольких подряд отказов ПО ОДНОМУ И ТОМУ ЖЕ хвосту считаем его безнадёжным.
+     *
+     * Протокол сервера не отличает «сеть моргнула» от «архив отвергнут навсегда»: ответ
+     * в обоих случаях — просто не-200 или {"ok":false}, без отдельного кода для порчи.
+     * Поэтому единственный признак — повтор: тот же самый набор (файл, смещение, длина)
+     * отвергается заново уже после экспоненциального бэкоффа (1ч → 2ч → 4ч), то есть за
+     * первые часы это уже не короткий сетевой сбой. Три раза — компромисс между «не
+     * похоронить кусок из-за одной неудачной попытки» и «не долбиться сутками в битый
+     * архив, блокируя все следующие»: раньше без этого один битый хвост не пускал
+     * вообще ничего нового, пока WorkManager час за часом пересобирал тот же файл.
+     */
+    private const val STUCK_LIMIT = 3
+
     /** Свой журнал: приложение пишет его само, разрешений не требует. Основной источник. */
     private val ownLogsDir: File
         get() = AppLog.dir(Application.application)
@@ -328,8 +342,56 @@ object LogUploadWork {
         return raw.toByteArray() to taken
     }
 
+    /**
+     * Отпечаток конкретного хвоста: какие куски (файл, смещение, длина) в него вошли.
+     * Тот же отпечаток на следующей попытке значит, что ни один байт не изменился —
+     * значит, отказ бьёт в одно и то же место, а не в случайно другой набор.
+     */
+    internal fun signature(taken: List<Part>): String =
+        taken.sortedBy { it.label }.joinToString("|") { "${it.label}:${it.offset}:${it.length}" }
+
+    /**
+     * Считает отказ по данному хвосту и решает, пора ли сдаться.
+     *
+     * Если отпечаток сменился (появились новые байты или другой набор файлов) —
+     * счётчик стартует заново: это уже не та посылка, что отвергалась раньше.
+     */
+    private fun recordFailureAndCheckStuck(taken: List<Part>): Boolean {
+        val sig = signature(taken)
+        val count = if (Settings.logUploadStuckSignature == sig) Settings.logUploadStuckCount + 1 else 1
+        Settings.logUploadStuckSignature = sig
+        Settings.logUploadStuckCount = count
+        return count >= STUCK_LIMIT
+    }
+
+    private fun clearStuckState() {
+        Settings.logUploadStuckSignature = ""
+        Settings.logUploadStuckCount = 0
+    }
+
+    /**
+     * Чем кончилась отправка. Три исхода, а не два: «серверу сейчас плохо» — это не то же
+     * самое, что «сервер разобрал посылку и отверг её».
+     *
+     * Различать пришлось потому, что счётчик безнадёжности (см. [STUCK_LIMIT]) выбрасывает
+     * хвост после трёх отказов подряд. Наш сервер отвечает пятисотыми при нехватке места
+     * под журналы и при сбое записи — состояния временные. Без этого различия семь часов
+     * больного сервера (паузы 1ч + 2ч + 4ч) съедали бы совершенно целые логи, то есть ровно
+     * ту беду, ради которой счётчик и заводился.
+     */
+    internal enum class ИсходОтправки {
+        /** Сервер принял и подтвердил. */
+        Принято,
+
+        /** Сервер разобрал посылку и отказал по её содержимому: четырёхсотые либо «ok:false». */
+        Отвергнуто,
+
+        /** Сервер не в состоянии принять сейчас: пятисотые и всё неожиданное. Судить хвост нельзя. */
+        ВременныйСбой,
+    }
+
     /** Отправка. Успех — только когда сервер ответил {"ok":true}. */
-    private fun upload(archive: ByteArray): Boolean {
+    private fun upload(archive: ByteArray): ИсходОтправки {
         val conn = URL("https://${Kelevra.SUBSCRIPTION_HOST}/logs").openConnection() as HttpURLConnection
         return try {
             conn.requestMethod = "POST"
@@ -344,11 +406,16 @@ object LogUploadWork {
             val code = conn.responseCode
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.readText().orEmpty()
+            if (code in 500..599) {
+                Log.w(TAG, "серверу плохо: http $code — хвост не сужу, попробую позже")
+                return ИсходОтправки.ВременныйСбой
+            }
             if (code !in 200..299) {
                 Log.w(TAG, "сервер отказал: http $code")
-                return false
+                return ИсходОтправки.Отвергнуто
             }
-            runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
+            val ok = runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
+            if (ok) ИсходОтправки.Принято else ИсходОтправки.Отвергнуто
         } finally {
             conn.disconnect()
         }
@@ -377,10 +444,45 @@ object LogUploadWork {
         }
 
         Log.i(TAG, "отправляю логи: ${taken.size} шт., ${archive.size / 1024} КБ сжатыми")
-        val ok = runCatching { upload(archive) }
+        val popytka = runCatching { upload(archive) }
             .onFailure { Log.w(TAG, "отправка логов сорвалась", Kelevra.maskThrowable(it)) }
-            .getOrDefault(false)
-        if (!ok) return@withContext false
+        // Исключение из upload() = до сервера ВООБЩЕ не доехали (нет сети, DNS, таймаут):
+        // о хвосте это не говорит ничего, судить его нельзя. Уходим как раньше, счётчик
+        // безнадёжности не трогаем — иначе телефон без сети 7 часов (бэкофф 1ч+2ч+4ч при
+        // неизменном хвосте) выбросил бы совершенно целые логи.
+        if (popytka.isFailure) return@withContext false
+        val ishod = popytka.getOrDefault(ИсходОтправки.ВременныйСбой)
+        // Пятисотый ответ значит «серверу сейчас плохо», а не «архив негодный»: он
+        // приходит при нехватке места под журналы и при сбое записи. Уходим как при
+        // отсутствии сети, счётчик безнадёжности не трогаем.
+        if (ishod == ИсходОтправки.ВременныйСбой) return@withContext false
+        if (ishod == ИсходОтправки.Отвергнуто) {
+            // Сюда доходит только РЕАЛЬНЫЙ ответ сервера с отказом. Протокол не говорит,
+            // отказ временный или архив навсегда битый (см. STUCK_LIMIT) — единственный
+            // признак безнадёжности: тот же самый хвост отвергается заново несколько раз
+            // подряд, уже после бэкоффа.
+            if (recordFailureAndCheckStuck(taken)) {
+                Log.w(
+                    TAG,
+                    "хвост из ${taken.size} шт. отвергнут $STUCK_LIMIT раз подряд без изменений — " +
+                        "считаю его безнадёжным и выбрасываю из очереди",
+                )
+                taken.forEach { part ->
+                    marks[part.label] = Mark(
+                        size = part.offset + part.length,
+                        modified = part.modified,
+                        sent = part.offset + part.length,
+                    )
+                }
+                saveMarks(marks)
+                clearStuckState()
+                // true — не «отправлено», а «разобрано»: WorkManager не должен
+                // долбить в этот же битый хвост ещё сутки, блокируя новые логи.
+                return@withContext true
+            }
+            return@withContext false
+        }
+        clearStuckState()
 
         // Отметки двигаем только после успеха: сорванная отправка не должна съесть кусок.
         taken.forEach { part ->
