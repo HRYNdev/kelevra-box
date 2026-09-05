@@ -287,6 +287,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 }
             }
 
+            // Журнал ядра пишем только когда ядро есть: дома оно не поднимается вовсе.
+            runCatching { CoreLog.start() }
             Log.i(TAG, "сервис запущен: профиль «$lastProfileName», ядро поднято")
             status.postValue(Status.Started)
             withContext(Dispatchers.Main) {
@@ -1005,6 +1007,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 //                Seq.destroyRef(refnum)
             }
             stopOlcRtc()
+            runCatching { CoreLog.stop() }
             Settings.startedByUser = false
             withContext(Dispatchers.Main) {
                 Log.i(TAG, "сервис остановлен")
