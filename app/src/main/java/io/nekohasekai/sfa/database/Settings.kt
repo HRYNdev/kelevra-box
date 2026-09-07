@@ -191,7 +191,7 @@ object Settings {
     // «показывали/нет»: на следующий ответ карточка обязана появиться снова.
     var complaintReplySeen by dataStore.string(SettingsKey.COMPLAINT_REPLY_SEEN) { "" }
 
-    // Суточная отправка журнала разработчику. Выключателя нет: сеть своя, семейная,
+    // Суточная отправка журнала разработчику. Выключателя нет: сеть доверенная,
     // и журнал с телефона — единственное, чем разбираются жалобы вроде «само включается».
     var logUploadLastOk by dataStore.long(SettingsKey.LOG_UPLOAD_LAST_OK) { 0L }
     var logUploadMarks by dataStore.string(SettingsKey.LOG_UPLOAD_MARKS) { "" }
