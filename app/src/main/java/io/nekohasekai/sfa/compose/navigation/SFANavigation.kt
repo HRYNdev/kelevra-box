@@ -25,6 +25,7 @@ import io.nekohasekai.sfa.compose.screen.connections.ConnectionsPage
 import io.nekohasekai.sfa.compose.screen.connections.ConnectionsViewModel
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardScreen
 import io.nekohasekai.sfa.compose.screen.dashboard.DashboardViewModel
+import io.nekohasekai.sfa.compose.screen.dashboard.profileUpdateResultText
 import io.nekohasekai.sfa.compose.screen.home.AdvancedScreen
 import io.nekohasekai.sfa.compose.screen.home.AppsBypassScreen
 import io.nekohasekai.sfa.compose.screen.home.ConnectionsScreen
@@ -725,20 +726,24 @@ fun SFANavHost(
                     настройкиИдут = true
                     настройкиИтог = ""
                     scope.launch(Dispatchers.IO) {
-                        настройкиИтог = try {
-                            val id = dashboardViewModel?.uiState?.value?.selectedProfileId ?: -1L
-                            val профиль = if (id != -1L) ProfileManager.get(id) else null
-                            when {
-                                профиль == null -> "Сначала подключитесь по коду"
-                                else -> {
-                                    dashboardViewModel?.updateProfile(профиль)
-                                    "Настройки обновлены"
-                                }
+                        val id = dashboardViewModel?.uiState?.value?.selectedProfileId ?: -1L
+                        val профиль = if (id != -1L) ProfileManager.get(id) else null
+                        if (профиль == null) {
+                            настройкиИтог = "Сначала подключитесь по коду"
+                            настройкиИдут = false
+                        } else {
+                            // Подпись ставится только колбэком updateProfile — когда обновление
+                            // реально завершилось (успехом, ошибкой или «нечего обновлять»),
+                            // а не сразу после вызова функции.
+                            val принято = dashboardViewModel?.updateProfile(профиль) { outcome, errorText ->
+                                настройкиИтог = profileUpdateResultText(outcome, errorText)
+                                настройкиИдут = false
                             }
-                        } catch (e: Exception) {
-                            "Не получилось: ${e.message ?: "нет связи"}"
+                            if (принято == null) {
+                                настройкиИтог = "Не получилось: нет связи с приложением"
+                                настройкиИдут = false
+                            }
                         }
-                        настройкиИдут = false
                     }
                 },
                 обновлениеНастроекПодпись = when {
