@@ -1045,6 +1045,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             commandServer.close()
         }
         stopOlcRtc()
+        // Ядро могло подняться и до аварии (CoreLog.start() зовётся раньше конца startService()).
+        // Без этой строки объект остаётся «занят» навсегда — следующие старты сервиса
+        // журнал ядра молча пропускают, потому что start() видит живой client и выходит.
+        runCatching { CoreLog.stop() }
         withContext(Dispatchers.Main) {
             if (receiverRegistered) {
                 service.unregisterReceiver(receiver)
