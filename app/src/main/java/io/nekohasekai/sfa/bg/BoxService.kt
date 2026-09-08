@@ -261,7 +261,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                     effectiveConfig(content),
                     OverrideOptions().apply {
                         autoRedirect = Settings.autoRedirect
-                        applyPerAppProxy()
+                        applyPerAppProxy(content)
                     },
                 )
             } catch (e: Exception) {
@@ -317,7 +317,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * Для sing-box это безопасно: его исходящие и так идут через protected-сокеты
      * (`autoDetectInterfaceControl`), а не через таблицу маршрутов tun.
      */
-    private fun OverrideOptions.applyPerAppProxy() {
+    private fun OverrideOptions.applyPerAppProxy(content: String) {
         val self = Application.application.packageName
 
         // Ядро olcRTC не переживает собственный tun — выводим весь пакет наружу.
@@ -329,30 +329,51 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val roomLive = roomWanted || OlcRtcCore.state is OlcRtcCore.State.Ready
         val selfOutsideTun = roomLive && service is VpnService
 
-        if (!Vendor.isPerAppProxyAvailable() || !Settings.perAppProxyEnabled) {
-            // Без per-app списка апстрим не задаёт ничего, и приложение остаётся в tun.
+        if (!Vendor.isPerAppProxyAvailable()) {
+            // Устройство не умеет разделять трафик по приложениям — остаётся только
+            // вывести из tun себя, и то если этого требует комната.
             if (selfOutsideTun) {
                 excludePackage = PlatformInterfaceWrapper.StringArray(listOf(self).iterator())
-                Log.i(TAG, "olcRTC: $self выведен из tun (per-app список выключен)")
+                Log.i(TAG, "olcRTC: $self выведен из tun (разделение по приложениям недоступно)")
             }
             return
         }
 
-        val appList = Settings.getEffectivePerAppProxyList()
-        if (Settings.getEffectivePerAppProxyMode() == Settings.PER_APP_PROXY_INCLUDE) {
-            // Белый список: «вывести из tun» = просто не добавлять себя в него.
+        val vybor = Settings.getEffectivePerAppProxyList()
+
+        // Белый список — редкий ручной режим из расширенных настроек, и живёт он только
+        // при включённом тумблере: смешивать его с чёрным нельзя, это обратные смыслы.
+        if (Settings.perAppProxyEnabled &&
+            Settings.getEffectivePerAppProxyMode() == Settings.PER_APP_PROXY_INCLUDE
+        ) {
             includePackage =
                 PlatformInterfaceWrapper.StringArray(
-                    (if (selfOutsideTun) appList - self else appList + self).iterator(),
+                    (if (selfOutsideTun) vybor - self else vybor + self).iterator(),
                 )
-        } else {
-            excludePackage =
-                PlatformInterfaceWrapper.StringArray(
-                    (if (selfOutsideTun) appList + self else appList - self).iterator(),
-                )
+            if (selfOutsideTun) Log.i(TAG, "olcRTC: $self выведен из tun")
+            return
         }
+
+        // Чёрный список собирается из двух источников и НЕ ждёт тумблера.
+        //
+        // Тумблер живёт в расширенных настройках и по умолчанию выключен, а экран
+        // «Приложения мимо сети» его не трогал: человек отмечал приложения, список
+        // ложился в настройки и там же оставался — до ядра не доезжало ничего.
+        // Снаружи это выглядело как сломанная настройка, ею и было.
+        //
+        // Базовый список приходит с сервера прямо в конфиге (`exclude_package` у tun) —
+        // читаем его оттуда, а не из настроек: конфиг есть всегда, а сводка /info могла
+        // ещё не приехать, и тогда исключение Госуслуг потерялось бы молча.
+        val bazovye = PaketyMimoSeti.izKonfiga(content)
+        var itog = bazovye + vybor
+        itog = if (selfOutsideTun) itog + self else itog - self
+        if (itog.isEmpty()) return
+
+        excludePackage = PlatformInterfaceWrapper.StringArray(itog.iterator())
+        Log.i(TAG, "мимо сети: ${itog.size} приложений (с сервера ${bazovye.size}, выбрано ${vybor.size})")
         if (selfOutsideTun) Log.i(TAG, "olcRTC: $self выведен из tun")
     }
+
 
     /**
      * Отдаёт пробам защиту от нашего же tun.
@@ -738,7 +759,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             effectiveConfig(content),
             OverrideOptions().apply {
                 autoRedirect = Settings.autoRedirect
-                applyPerAppProxy()
+                applyPerAppProxy(content)
             },
         )
     }
@@ -933,7 +954,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 effectiveConfig(content),
                 OverrideOptions().apply {
                     autoRedirect = Settings.autoRedirect
-                    applyPerAppProxy()
+                    applyPerAppProxy(content)
                 },
             )
         } catch (e: Exception) {
