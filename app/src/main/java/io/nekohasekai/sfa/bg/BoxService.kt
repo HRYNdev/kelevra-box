@@ -289,6 +289,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
             // Журнал ядра пишем только когда ядро есть: дома оно не поднимается вовсе.
             runCatching { CoreLog.start() }
+            // Записи с полями живут рядом с журналом ядра и тем же сроком: без
+            // поднятого ядра писать в них нечего (см. Zapisi).
+            runCatching { Zapisi.start() }
             Log.i(TAG, "сервис запущен: профиль «$lastProfileName», ядро поднято")
             status.postValue(Status.Started)
             withContext(Dispatchers.Main) {
@@ -1029,6 +1032,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             stopOlcRtc()
             runCatching { CoreLog.stop() }
+        runCatching { Zapisi.stop() }
+            runCatching { Zapisi.stop() }
             Settings.startedByUser = false
             withContext(Dispatchers.Main) {
                 Log.i(TAG, "сервис остановлен")
