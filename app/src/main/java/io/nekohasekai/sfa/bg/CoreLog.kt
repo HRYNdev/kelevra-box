@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,6 +77,9 @@ object CoreLog {
 
     private val oknoKody = LinkedHashMap<String, Int>()
 
+    /** Имена сайтов, по которым отказывали в этом окне: ось «сайт» для разбора. */
+    private val oknoImena = LinkedHashMap<String, Int>()
+
     @Volatile
     private var trevogaBylaV = 0L
 
@@ -89,6 +93,16 @@ object CoreLog {
         "sbros" to "connection reset",
     )
 
+    /** Адрес назначения из строки отказа: «open connection to [2a02::1]:443» или «1.2.3.4:443». */
+    private val RX_ADRES_OTKAZA =
+        Regex("""open connection to \[?([0-9a-fA-F:.]+)]?:\d+""")
+
+    /** Порт назначения из той же строки. */
+    private val RX_PORT = Regex("""open connection to \[?[0-9a-fA-F:.]+]?:(\d+)""")
+
+    /** Каким выходом шли: «using outbound/direct[direct]». */
+    private val RX_VYHOD = Regex("""using outbound/([a-zA-Z0-9_.\-]+)""")
+
     private fun uchest(line: String) {
         val teper = System.currentTimeMillis()
         if (oknoNachalo == 0L) oknoNachalo = teper
@@ -98,6 +112,26 @@ object CoreLog {
             val nizhnyaya = line.lowercase(Locale.US)
             val kod = PRICHINY.firstOrNull { nizhnyaya.contains(it.second) }?.first ?: "prochee"
             oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
+            // Имя сайта у ядра есть, а в строку отказа оно его не кладёт: там только
+            // адрес. Без имени ось «сайт» в журнале телефона отсутствует вовсе, и
+            // диагноз 10.09.2026 приходилось ставить обратным запросом руками.
+            val adres = RX_ADRES_OTKAZA.find(line)?.groupValues?.getOrNull(1).orEmpty()
+            if (adres.isNotEmpty()) {
+                val imya = runCatching { ImenaSaytov.imya(adres) }.getOrDefault("")
+                if (imya.isNotEmpty()) {
+                    oknoImena[imya] = (oknoImena[imya] ?: 0) + 1
+                    runCatching {
+                        rotator?.append(
+                            "${stampFormat.format(Date(teper))} -- отказ: $imya → $adres ($kod)\n",
+                        )
+                    }
+                }
+                // Тот же отказ — записью с полями. Разбор по ней не зависит от того,
+                // какими словами ядро описало беду (см. Zapisi).
+                val vyhod = RX_VYHOD.find(line)?.groupValues?.getOrNull(1).orEmpty()
+                val port = RX_PORT.find(line)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                runCatching { Zapisi.otkaz(imya, adres, port, kod, vyhod, 0) }
+            }
         }
         if (teper - oknoNachalo < OKNO_SVODKI_MS) return
         zakrytOkno(teper)
@@ -107,23 +141,87 @@ object CoreLog {
         val soed = oknoSoedineniy
         val otk = oknoOtkazov
         val kody = oknoKody.entries.joinToString(",") { "${it.key}=${it.value}" }
+        // Топ имён: пяти хватает, чтобы увидеть «ломается именно Яндекс», а не гадать.
+        val topImen = oknoImena.entries.sortedByDescending { it.value }.take(5)
+        val imena = topImen.joinToString(",") { "${it.key}=${it.value}" }
+        // Копии для записи с полями: сами карты ниже очищаются под новое окно.
+        val kodyDlyaZapisi = LinkedHashMap(oknoKody)
+        val imenaDlyaZapisi = LinkedHashMap<String, Int>().apply {
+            topImen.forEach { put(it.key, it.value) }
+        }
         oknoNachalo = teper
         oknoSoedineniy = 0
         oknoOtkazov = 0
         oknoKody.clear()
+        oknoImena.clear()
         if (soed == 0 && otk == 0) return
         val dolya = if (soed > 0) otk * 100 / soed else 100
         runCatching {
             rotator?.append(
                 "${stampFormat.format(Date(teper))} -- сводка за 10 мин: соединений $soed, " +
-                    "отказов $otk ($dolya%)${if (kody.isEmpty()) "" else ", причины $kody"}\n",
+                    "отказов $otk ($dolya%)${if (kody.isEmpty()) "" else ", причины $kody"}" +
+                    "${if (imena.isEmpty()) "" else ", имена $imena"}\n",
+            )
+        }
+        // Та же сводка записью с полями: по ней сервер считает норму, и разбирать
+        // текстовую строку регулярным выражением ему больше не нужно.
+        runCatching {
+            Zapisi.svodka(
+                okno = (OKNO_SVODKI_MS / 1000L).toInt(),
+                soed = soed,
+                otkazy = otk,
+                kody = kodyDlyaZapisi,
+                imena = imenaDlyaZapisi,
             )
         }
         if (dolya >= DOLYA_TREVOGI && otk >= 10 && teper - trevogaBylaV > TREVOGA_NE_CHASHCHE_MS) {
             trevogaBylaV = teper
             Log.w(TAG, "отказов $dolya% за окно — отправляю журнал, не дожидаясь ночи")
+            runCatching { Zapisi.perehod("trevoga", "отказов $dolya% за окно, всего $otk") }
+            sohranitOknoSyrya(teper, dolya, otk)
             LogUploadWork.otpravitSeychas()
         }
+    }
+
+    /**
+     * Последние строки ядра, чтобы при тревоге сохранить ОКНО вокруг события.
+     *
+     * Зачем. Поток ядра заполняет свои шесть мегабайт за считанные минуты и вытесняет
+     * сам себя: к ночной отправке от беды не остаётся ни строки. Сводка говорит, что
+     * беда была, а вот КАКАЯ — видно только в сырье, и новую болезнь, которой в каталоге
+     * нет, распознать без него нельзя вовсе. Держим кольцом в памяти, на диск кладём
+     * только когда действительно тревога.
+     */
+    private const val OKNO_SYRYA_STROK = 2000
+
+    private val kolco = ArrayDeque<String>(OKNO_SYRYA_STROK)
+
+    private fun zapomnit(line: String) {
+        synchronized(kolco) {
+            if (kolco.size >= OKNO_SYRYA_STROK) kolco.removeFirst()
+            kolco.addLast(line)
+        }
+    }
+
+    /** Сложить кольцо в отдельный файл: отправка забирает весь каталог, значит уедет само. */
+    private fun sohranitOknoSyrya(teper: Long, dolya: Int, otkazov: Int) {
+        val stroki = synchronized(kolco) { kolco.toList() }
+        if (stroki.isEmpty()) return
+        runCatching {
+            val papka = AppLog.dir(Application.application)
+            val imya = "kelevra-syrye-" + SimpleDateFormat("MMdd-HHmmss", Locale.US).format(Date(teper)) + ".log"
+            val fayl = File(papka, imya)
+            fayl.writeText(
+                "=== окно сырья: отказов $otkazov ($dolya%), строк ${stroki.size} ===\n" +
+                    stroki.joinToString("\n") + "\n",
+            )
+            Log.i(TAG, "окно сырья сохранено: $imya, строк ${stroki.size}")
+            // Больше двух окон не держим: третье вытесняет самое старое. Иначе череда
+            // тревог на плохой сети забьёт хранилище телефона.
+            val vse = papka.listFiles { f -> f.name.startsWith("kelevra-syrye-") }?.sortedBy { it.name }
+                ?: return@runCatching
+            vse.dropLast(2).forEach { runCatching { it.delete() } }
+        }.onFailure { Log.w(TAG, "окно сырья не сохранилось: ${it.message}") }
     }
 
     private val handler = object : CommandClient.Handler {
@@ -134,6 +232,7 @@ object CoreLog {
                 for (entry in message) {
                     val line = ansi.replace(entry.message, "").trimEnd()
                     if (line.isEmpty()) continue
+                    runCatching { zapomnit(line) }
                     runCatching { uchest(line) }
                     append(stamp).append(' ').append(line).append('\n')
                 }
