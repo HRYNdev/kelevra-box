@@ -42,6 +42,22 @@ import io.nekohasekai.libbox.NetworkInterface as LibboxNetworkInterface
 
 private var neighborCallback: INeighborTableCallback.Stub? = null
 
+// Сколько раз система не назвала владельца соединения.
+//
+// Зачем счётчик. Промах здесь — штатная гонка, а не поломка: Android отдаёт
+// INVALID_UID, когда сокет уже закрылся к моменту вопроса. И спрашивать владельца
+// ядро на Android будет ВСЕГДА, безусловно (`route/router.go`: `if C.IsAndroid &&
+// platformInterface != nil { needFindProcess = true }`), даже когда правил по
+// приложениям в профиле нет вовсе — а у нас их нет ни одного, исключения сделаны
+// через `exclude_package` на входе туннеля, то есть средствами системы, и от этого
+// поиска не зависят. Значит промах не меняет маршрут ничему.
+//
+// Почему было плохо. На каждый промах писались `Log.e` со стектрейсом и он же
+// повторно в `System.err`. Разбор 10.09.2026 по журналам: у Влада 7867 промахов за
+// сутки, это десятки тысяч строк, которые вытесняли из журнала всё, по чему вообще
+// ставится диагноз. Теперь — счётчик и одна строка на каждую тысячу.
+private var promakhovVladeltsa = 0L
+
 interface PlatformInterfaceWrapper : PlatformInterface {
     override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
@@ -77,8 +93,14 @@ interface PlatformInterfaceWrapper : PlatformInterface {
             owner.setAndroidPackageNames(StringArray(packages?.toList()?.iterator() ?: emptyList<String>().iterator()))
             return owner
         } catch (e: Exception) {
-            Log.e("PlatformInterface", "getConnectionOwnerUid", e)
-            e.printStackTrace(System.err)
+            promakhovVladeltsa++
+            if (promakhovVladeltsa % 1000L == 1L) {
+                Log.i(
+                    "PlatformInterface",
+                    "владелец соединения не найден, промах №$promakhovVladeltsa " +
+                        "(штатная гонка, маршрут не меняет)",
+                )
+            }
             throw e
         }
     }

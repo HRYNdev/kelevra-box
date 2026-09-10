@@ -197,6 +197,16 @@ object Settings {
     var logUploadMarks by dataStore.string(SettingsKey.LOG_UPLOAD_MARKS) { "" }
     var logUploadRetrySince by dataStore.long(SettingsKey.LOG_UPLOAD_RETRY_SINCE) { 0L }
 
+    // Две отметки для паспорта устройства (см. Kelevra.deviceHeaders).
+    //
+    // Возраст профиля лежит в базе профилей, а факт отзыва разрешения знает только
+    // служба в момент остановки. Заголовок собирается синхронно и на каждом запросе,
+    // поэтому обе величины кладутся здесь: читать базу или ждать службу в этом месте
+    // нельзя, а без них сервер не отвечает на «правила не доезжают» и «туннель гасит
+    // сама система» — разбор 10.09.2026, у Влада именно второе.
+    var profilObnovlenV by dataStore.long(SettingsKey.PROFIL_OBNOVLEN_V) { 0L }
+    var vpnRazreshenieOtozvanoV by dataStore.long(SettingsKey.VPN_RAZRESHENIE_OTOZVANO_V) { 0L }
+
     // Отпечаток и счётчик подряд отвергнутого одного и того же хвоста: протокол не
     // говорит, отказ временный или архив навсегда битый (см. LogUploadWork), поэтому
     // о безнадёжности судим по повтору, а не по коду ответа.

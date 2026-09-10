@@ -7,7 +7,9 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
 import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -60,6 +62,10 @@ import java.util.zip.GZIPOutputStream
 object LogUploadWork {
     private const val TAG = "KelevraLogUpload"
     private const val WORK_NAME = "KelevraLogUpload"
+
+    // Отдельное имя для отправки по просьбе сервера: суточное расписание при этом
+    // не сдвигается (см. otpravitSeychas).
+    private const val WORK_NAME_PO_PROSBE = "KelevraLogUploadPoProsbe"
 
     /** Конец дня по местному времени: сутки прожиты, человек ещё не спит. */
     private const val SEND_HOUR = 23
@@ -183,6 +189,39 @@ object LogUploadWork {
      */
     fun schedule() {
         runCatching { schedule0() }.onFailure { Log.w(TAG, "не удалось поставить отправку логов", it) }
+    }
+
+    /**
+     * Отправить журнал СЕЙЧАС, по просьбе сервера.
+     *
+     * Зачем. Расписание отправляет журнал раз в сутки в 23:30, а жалоба приходит днём:
+     * к ночи подробностей того часа уже нет, ротация их вытесняет. На сервере просьба
+     * написана с 09.09.2026, но клиент про неё не знал вовсе.
+     *
+     * Отдельным именем работы, а не через периодическую: та привязана к своему времени,
+     * и дёргать её вручную значило бы сдвигать суточное расписание всем.
+     *
+     * Повторяется, если сеть недоступна: сама задача разбирает исход и просит повтор, а
+     * метку просьбы сервер снимает только по факту приёма файла.
+     */
+    fun otpravitSeychas() {
+        runCatching {
+            WorkManager.getInstance(Application.application).enqueueUniqueWork(
+                WORK_NAME_PO_PROSBE,
+                ExistingWorkPolicy.KEEP,
+                OneTimeWorkRequest.Builder(UploadTask::class.java)
+                    .setConstraints(
+                        Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
+                    )
+                    .setBackoffCriteria(
+                        BackoffPolicy.EXPONENTIAL,
+                        RETRY_MIN_MILLIS,
+                        TimeUnit.MILLISECONDS,
+                    )
+                    .build(),
+            )
+            Log.i(TAG, "журнал по просьбе сервера: поставлен в очередь")
+        }.onFailure { Log.w(TAG, "журнал по просьбе сервера не поставился", it) }
     }
 
     private fun schedule0() {

@@ -1137,6 +1137,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Разрешение на VPN отобрали снаружи (другое VPN-приложение, политика, человек в
         // системных настройках). Со стороны это «оно само выключилось».
         Log.w(TAG, "система отозвала разрешение на VPN — останавливаюсь")
+        // Отметку кладём в настройки, чтобы она уехала на сервер в паспорте устройства
+        // (см. Kelevra.deviceHeaders). Разбор 10.09.2026: у Влада туннель гасила сама
+        // система, и узнать это можно было только вручную внутри архива журнала.
+        runCatching { Settings.vpnRazreshenieOtozvanoV = System.currentTimeMillis() }
         stopService()
     }
 

@@ -65,7 +65,39 @@ object Kelevra {
         "X-Device-Platform" to PLATFORM,
         "X-App-Version" to appVersion,
         io.nekohasekai.sfa.bg.DeviceTraffic.header(io.nekohasekai.sfa.bg.DeviceTraffic.total()),
+        pasportHeader(),
     )
+
+    /**
+     * Паспорт устройства одной строкой: чем оно описывает СЕБЯ сверх имени и версии.
+     *
+     * Зачем. Разбор 10.09.2026: сервер знал про устройство пять полей и не мог ответить
+     * ни на «система отобрала разрешение на туннель», ни на «какой возраст профиля», ни
+     * на «сколько живёт процесс» — а из этого складывается половина диагнозов, и каждый
+     * такой разбор стоил по полсессии. У Влада, например, туннель гасила сама система,
+     * и увидеть это можно было только внутри архива журнала, вручную.
+     *
+     * Одной строкой, а не десятком заголовков: они едут в КАЖДОМ запросе, а полей будет
+     * больше. Формат «ключ=значение» через точку с запятой — тот же, что у десктопа,
+     * сервер разбирает обе платформы одним куском кода и незнакомые ключи кладёт рядом.
+     */
+    private fun pasportHeader(): Pair<String, String>? = runCatching {
+        val chasti = mutableListOf<String>()
+        chasti += "os=" + osVersion.replace(';', ' ').replace('=', ' ').take(40)
+        chasti += "yadro=" + io.nekohasekai.libbox.Libbox.version().take(24)
+
+        val obnovlen = io.nekohasekai.sfa.database.Settings.profilObnovlenV
+        if (obnovlen > 0) {
+            val minut = (System.currentTimeMillis() - obnovlen) / 60000L
+            if (minut >= 0) chasti += "profil=$minut"
+        }
+        val otozvano = io.nekohasekai.sfa.database.Settings.vpnRazreshenieOtozvanoV
+        if (otozvano > 0) {
+            val chasov = (System.currentTimeMillis() - otozvano) / 3600000L
+            chasti += "vpn_otozvano_ch=$chasov"
+        }
+        "X-Pasport" to chasti.joinToString(";")
+    }.getOrNull()
 
     /**
      * Чем устройство подписывается в первой строке своего журнала.

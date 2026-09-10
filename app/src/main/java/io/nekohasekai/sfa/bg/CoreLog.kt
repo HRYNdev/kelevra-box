@@ -45,6 +45,87 @@ object CoreLog {
     private var client: CommandClient? = null
     private var scope: CoroutineScope? = null
 
+    /**
+     * Сводка за окно: сколько соединений, сколько отказов и каких.
+     *
+     * Зачем. Разбор 10.09.2026: журнал ядра при работе заполняется за шесть минут и
+     * вытесняет собой всю историю, а жалоба приходит через часы. Строка-сводка на
+     * каждые десять минут весит копейки и переживает любую ротацию, поэтому «в тот
+     * час у человека падало каждое пятое соединение» остаётся видно даже когда самих
+     * строк уже нет.
+     *
+     * И она же служит поводом отправки: перевалило за порог — журнал уезжает сразу, не
+     * дожидаясь ночи, и к моменту жалобы данные уже у меня.
+     */
+    private const val OKNO_SVODKI_MS = 10 * 60 * 1000L
+
+    /** С какой доли отказов окно считается бедой и просит отправку. */
+    private const val DOLYA_TREVOGI = 15
+
+    /** Реже одного раза в час по тревоге не шлём: journal и так уедет ночью. */
+    private const val TREVOGA_NE_CHASHCHE_MS = 60 * 60 * 1000L
+
+    @Volatile
+    private var oknoNachalo = 0L
+
+    @Volatile
+    private var oknoSoedineniy = 0
+
+    @Volatile
+    private var oknoOtkazov = 0
+
+    private val oknoKody = LinkedHashMap<String, Int>()
+
+    @Volatile
+    private var trevogaBylaV = 0L
+
+    /** Коды причин отказа, по которым потом ставится диагноз на сервере. */
+    private val PRICHINY = listOf(
+        "set_nedostupna" to "network is unreachable",
+        "marshruta_net" to "no route to host",
+        "taymaut" to "i/o timeout",
+        "imya_ne_reshilos" to "no such host",
+        "otkaz_soedineniya" to "connection refused",
+        "sbros" to "connection reset",
+    )
+
+    private fun uchest(line: String) {
+        val teper = System.currentTimeMillis()
+        if (oknoNachalo == 0L) oknoNachalo = teper
+        if (line.contains("inbound connection to")) oknoSoedineniy++
+        if (line.contains("ERROR") && line.contains("open connection to")) {
+            oknoOtkazov++
+            val nizhnyaya = line.lowercase(Locale.US)
+            val kod = PRICHINY.firstOrNull { nizhnyaya.contains(it.second) }?.first ?: "prochee"
+            oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
+        }
+        if (teper - oknoNachalo < OKNO_SVODKI_MS) return
+        zakrytOkno(teper)
+    }
+
+    private fun zakrytOkno(teper: Long) {
+        val soed = oknoSoedineniy
+        val otk = oknoOtkazov
+        val kody = oknoKody.entries.joinToString(",") { "${it.key}=${it.value}" }
+        oknoNachalo = teper
+        oknoSoedineniy = 0
+        oknoOtkazov = 0
+        oknoKody.clear()
+        if (soed == 0 && otk == 0) return
+        val dolya = if (soed > 0) otk * 100 / soed else 100
+        runCatching {
+            rotator?.append(
+                "${stampFormat.format(Date(teper))} -- сводка за 10 мин: соединений $soed, " +
+                    "отказов $otk ($dolya%)${if (kody.isEmpty()) "" else ", причины $kody"}\n",
+            )
+        }
+        if (dolya >= DOLYA_TREVOGI && otk >= 10 && teper - trevogaBylaV > TREVOGA_NE_CHASHCHE_MS) {
+            trevogaBylaV = teper
+            Log.w(TAG, "отказов $dolya% за окно — отправляю журнал, не дожидаясь ночи")
+            LogUploadWork.otpravitSeychas()
+        }
+    }
+
     private val handler = object : CommandClient.Handler {
         override fun appendLogs(message: List<LogEntry>) {
             val target = rotator ?: return
@@ -53,6 +134,7 @@ object CoreLog {
                 for (entry in message) {
                     val line = ansi.replace(entry.message, "").trimEnd()
                     if (line.isEmpty()) continue
+                    runCatching { uchest(line) }
                     append(stamp).append(' ').append(line).append('\n')
                 }
             }

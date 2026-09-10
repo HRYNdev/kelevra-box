@@ -29,6 +29,18 @@ data class SubscriptionInfo(
     /** ответ на жалобу, отправленную с этого устройства; null — отвечать нечего */
     val reply: ComplaintReply? = null,
     /**
+     * Сервер просит журнал НЕ ДОЖИДАЯСЬ ночного расписания.
+     *
+     * Зачем. Журнал уезжает раз в сутки, а жалоба приходит днём: к моменту разбора
+     * подробностей того часа уже нет. Просьба на сервере была написана ещё 09.09.2026
+     * (`zhurnal_prosim.json`), но в клиенте этих слов не было ВОВСЕ — сервер отдавал
+     * признак в пустоту и считал просьбу доставленной. Так и потерялась просьба к
+     * телефону Вики: она снялась, а файл не приехал.
+     *
+     * Старый сервер поля не присылает — тогда false, и всё работает как раньше.
+     */
+    val sendLogNow: Boolean = false,
+    /**
      * Чьё это устройство и как оно называется — сервер узнаёт по X-Device-Id.
      *
      * Показываются они только внутри вкладки подписки, на главный экран не выносятся:
@@ -183,6 +195,7 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             devices = parseDevices(json),
             // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
             olcrtc = json.optJSONObject("olcrtc"),
+            sendLogNow = json.optBoolean("send_log_now"),
             reply = json.optJSONObject("reply")?.let { answer ->
                 val body = answer.optString("text")
                 if (body.isBlank()) null else ComplaintReply(

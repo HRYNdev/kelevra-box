@@ -151,6 +151,53 @@ object AppLog {
         }
     }
 
+    /**
+     * Чужие теги, которые система пишет внутри нашего процесса и которые в разборе
+     * бесполезны ни разу.
+     *
+     * Замер 10.09.2026 по суточному журналу мамы: из 19 520 строк 11 853 — это
+     * `NotificationManager` про перерисовку нашего же значка в шторке, ещё 3 219 —
+     * `ViewRootImpl` про включение и выключение экрана. Полезного нашего — около
+     * десятой части. Поэтому журнал приложения занимал все свои 14 МБ и вытеснял
+     * историю, а искать в нём приходилось глазами.
+     *
+     * Список чёрный, а не белый: своих тегов много, они появляются с каждой новой
+     * частью клиента, и забытый белый список тихо съел бы именно то, ради чего журнал
+     * и возят. `WM-WorkerWrapper` намеренно НЕ здесь: по нему видно, чем кончилась
+     * фоновая задача (SUCCESS / RETRY), и именно так 10.09 выяснилось, что профиль в
+     * итоге всё-таки забирается повторами.
+     */
+    private val ШУМНЫЕ_ТЕГИ = setOf(
+        "NotificationManager", "ViewRootImpl", "InsetsSource", "HWUI", "OpenGLRenderer",
+        "VRI", "GraphicsEnvironment", "HandWritingStubImpl", "MiuiPreloadClassImpl",
+        "FinalizerDaemon", "WindowOnBackDispatcher", "JobService", "JobInfo",
+        "ActivityThread", "PrivilegeSettingsClient", "ConnectivityBinderUtils",
+        "WM-GreedyScheduler", "WM-SystemJobScheduler", "WM-WorkConstraintsTrack",
+        "WM-Processor", "System.err", "OpenGLRenderer", "libEGL", "AdrenoGLES",
+        "Choreographer", "SurfaceView", "BLASTBufferQueue", "Parcel",
+    )
+
+    /**
+     * Шумная ли это строка. Формат logcat `threadtime`:
+     * `MM-DD HH:MM:SS.mmm  PID  TID L TAG: сообщение`.
+     *
+     * Строку, которую не разобрать (нет двоеточия, свой формат, продолжение стека),
+     * оставляем: потерять непонятное хуже, чем возить лишнее.
+     */
+    internal fun shumnaya(line: String): Boolean {
+        val dvoetochie = line.indexOf(':', startIndex = 20)
+        if (dvoetochie <= 0) return false
+        val do_dvoetochiya = line.substring(0, dvoetochie)
+        val probel = do_dvoetochiya.lastIndexOf(' ')
+        if (probel <= 0) return false
+        val teg = do_dvoetochiya.substring(probel + 1).trim()
+        if (teg.isEmpty()) return false
+        // Строки продолжения стектрейса («\tat io.nekohasekai…») тегом не помечены,
+        // но и смысла не несут: своё исключение уже названо строкой выше.
+        if (line.contains("\tat ")) return true
+        return teg in ШУМНЫЕ_ТЕГИ
+    }
+
     private fun drain(target: LogRotator) {
         val command = mutableListOf("logcat", "-v", "threadtime")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -162,6 +209,7 @@ object AppLog {
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 while (true) {
                     val line = reader.readLine() ?: break
+                    if (shumnaya(line)) continue
                     target.append(line + "\n")
                 }
             }
