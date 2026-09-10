@@ -229,11 +229,21 @@ object LogUploadWork {
         manager.enqueueUniquePeriodicWork(
             WORK_NAME,
             ExistingPeriodicWorkPolicy.UPDATE,
-            PeriodicWorkRequest.Builder(UploadTask::class.java, 1, TimeUnit.DAYS)
+            // Раз в ЧАС, а не раз в сутки в 23:30.
+            //
+            // Почему поменяли (10.09.2026). Ночное расписание разбилось об очевидное:
+            // телефон в это время может спать, а ноутбуки и вовсе выключены. Слова
+            // ноутбуки и вовсе выключены. Тогда журнал не уезжает вовсе, и разбирать
+            // жалобу нечем: у одного ноутбука журналов не было по несколько суток
+            // именно поэтому.
+            //
+            // Дорого это не стоит: отправка ведёт отметку по каждому файлу и посылает
+            // ТОЛЬКО новое, так что часовая посылка — килобайты. Первый запуск без
+            // задержки: если журнал уже есть, он должен доехать сразу, а не через час.
+            PeriodicWorkRequest.Builder(UploadTask::class.java, 1, TimeUnit.HOURS)
                 .setConstraints(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
                 )
-                .setInitialDelay(millisUntilSendTime(), TimeUnit.MILLISECONDS)
                 // Первая повторная попытка через час; дальше WorkManager сам разводит
                 // их шире. Сутки ограничиваем отдельно, в самой задаче.
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, RETRY_MIN_MILLIS, TimeUnit.MILLISECONDS)
@@ -241,7 +251,13 @@ object LogUploadWork {
         )
     }
 
-    /** Сколько ждать до ближайшего 23:30 по местному времени. */
+    /**
+     * Сколько ждать до ближайшего 23:30 по местному времени.
+     *
+     * Больше не расписание, а страховка: с 10.09.2026 посылка уходит раз в час, и
+     * ночной срок нужен только затем, чтобы у суточного добора была своя точка,
+     * если часовые попытки почему-то все до одной не дошли.
+     */
     internal fun millisUntilSendTime(now: Long = System.currentTimeMillis()): Long {
         val target = Calendar.getInstance().apply {
             timeInMillis = now
