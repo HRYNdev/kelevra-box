@@ -86,6 +86,10 @@ class UpdateProfileWork {
                     }
                     profile.typed.lastUpdated = Date()
                     ProfileManager.update(profile)
+                    // Отметка для паспорта устройства: по ней сервер видит, доезжают ли
+                    // до человека наши правки правил вообще. Читать базу профилей в
+                    // момент сборки заголовка нельзя, поэтому храним отдельно.
+                    runCatching { Settings.profilObnovlenV = System.currentTimeMillis() }
                 } catch (e: Exception) {
                     // Адрес подписки несёт код доступа целиком, а текст ошибки его часто
                     // повторяет — в лог идёт замаскированная копия исключения.

@@ -111,6 +111,11 @@ object SettingsKey {
     /** Когда началась череда неудачных попыток: через сутки перестаём долбиться. */
     const val LOG_UPLOAD_RETRY_SINCE = "log_upload_retry_since"
 
+    // Паспорт устройства: две отметки, которые нельзя достать синхронно из базы
+    // профилей и из службы, а в заголовок они нужны при каждом запросе.
+    const val PROFIL_OBNOVLEN_V = "profil_obnovlen_v"
+    const val VPN_RAZRESHENIE_OTOZVANO_V = "vpn_razreshenie_otozvano_v"
+
     /** Отпечаток последнего отвергнутого хвоста логов и счётчик его подряд отказов. */
     const val LOG_UPLOAD_STUCK_SIGNATURE = "log_upload_stuck_signature"
     const val LOG_UPLOAD_STUCK_COUNT = "log_upload_stuck_count"

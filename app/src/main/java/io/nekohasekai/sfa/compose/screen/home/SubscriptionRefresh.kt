@@ -138,6 +138,13 @@ object SubscriptionRefresh {
             // olcrtc — стираем, чтобы не держать протухшую комнату.
             OlcRtcParams.applyServer(loaded.olcrtc)
             _info.value = loaded
+            // Сервер попросил журнал, не дожидаясь ночи — отдаём сразу. Метку своей
+            // просьбы он снимает по факту приёма файла, поэтому повторить её он сможет,
+            // если отправка не дойдёт (см. SubscriptionInfo.sendLogNow).
+            if (loaded.sendLogNow) {
+                Log.i(TAG, "сервер просит журнал сейчас — отправляю, не дожидаясь ночи")
+                io.nekohasekai.sfa.bg.LogUploadWork.otpravitSeychas()
+            }
         }
         return loaded
     }
