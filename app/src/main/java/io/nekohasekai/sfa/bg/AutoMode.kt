@@ -1038,6 +1038,9 @@ object AutoMode {
         synchronized(lock) { lock.notifyAll() }
     }
 
+    /** Этой группой выхода правит автомат: переключать её надо через [chooseManually]. */
+    fun isChooser(groupTag: String): Boolean = layout.chooser == groupTag
+
     /** Имя комнаты приходит с сервера, поэтому узнаём её по корню слова, как и экран. */
     private fun looksLikeRoom(tag: String): Boolean =
         tag.lowercase().let { it.contains("комнат") || it.contains("room") }
