@@ -210,7 +210,7 @@ class LogPipelineTest {
         own.put("kelevra-app.log.1", "BoxService: туннель поднят\n", modified = вчера)
 
         val parts = LogUploadWork.collectParts(listOf(own), emptyMap())
-        assertEquals(3, parts.size) // намеренная порча для проверки красного прогона (задание 46)
+        assertEquals(2, parts.size)
 
         val (archive, taken) = LogUploadWork.buildArchive(parts)
         assertEquals(2, taken.size)
