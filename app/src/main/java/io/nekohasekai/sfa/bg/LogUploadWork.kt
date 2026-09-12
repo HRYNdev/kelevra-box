@@ -67,6 +67,9 @@ object LogUploadWork {
     // не сдвигается (см. otpravitSeychas).
     private const val WORK_NAME_PO_PROSBE = "KelevraLogUploadPoProsbe"
 
+    /** Повтор после неудачи: своя очередь, чтобы не сдвигать часовое расписание. */
+    private const val WORK_NAME_POVTOR = "KelevraLogUploadPovtor"
+
     /** Конец дня по местному времени: сутки прожиты, человек ещё не спит. */
     private const val SEND_HOUR = 23
     private const val SEND_MINUTE = 30
@@ -76,6 +79,9 @@ object LogUploadWork {
 
     /** Повтор не чаще раза в час и не дольше суток. */
     private val RETRY_MIN_MILLIS = TimeUnit.HOURS.toMillis(1)
+
+    /** Через сколько повторять неудачную отправку. Меньше часа, иначе повтор бесполезен. */
+    private val POVTOR_PAUSE_MILLIS = TimeUnit.MINUTES.toMillis(7)
     private val RETRY_GIVE_UP_MILLIS = TimeUnit.DAYS.toMillis(1)
 
     /**
@@ -189,6 +195,12 @@ object LogUploadWork {
      */
     fun schedule() {
         runCatching { schedule0() }.onFailure { Log.w(TAG, "не удалось поставить отправку логов", it) }
+        // Часовой отсчёт начинается от постановки, то есть после перезапуска приложения
+        // первый журнал уезжал только через час. 12.09.2026 после убийства приложения
+        // системой так и вышло: процесс поднялся в 15:29, а журнал поехал вечером.
+        // Если давно не отправляли — отправляем сразу, не дожидаясь круга.
+        val davno = System.currentTimeMillis() - Settings.logUploadLastOk
+        if (davno > TimeUnit.HOURS.toMillis(1)) otpravitSeychas("давно не отправляли")
     }
 
     /**
@@ -204,7 +216,7 @@ object LogUploadWork {
      * Повторяется, если сеть недоступна: сама задача разбирает исход и просит повтор, а
      * метку просьбы сервер снимает только по факту приёма файла.
      */
-    fun otpravitSeychas() {
+    fun otpravitSeychas(prichina: String = "по просьбе сервера") {
         runCatching {
             WorkManager.getInstance(Application.application).enqueueUniqueWork(
                 WORK_NAME_PO_PROSBE,
@@ -220,8 +232,30 @@ object LogUploadWork {
                     )
                     .build(),
             )
-            Log.i(TAG, "журнал по просьбе сервера: поставлен в очередь")
-        }.onFailure { Log.w(TAG, "журнал по просьбе сервера не поставился", it) }
+            Log.i(TAG, "журнал $prichina: поставлен в очередь")
+        }.onFailure { Log.w(TAG, "журнал $prichina не поставился", it) }
+    }
+
+    /**
+     * Повтор после неудачной отправки — отдельной одноразовой работой.
+     *
+     * Своим именем, чтобы не толкаться ни с суточным расписанием, ни с просьбой сервера,
+     * и с политикой KEEP: пока один повтор ждёт своего часа, второй не нужен.
+     */
+    private fun povtorPozzhe() {
+        runCatching {
+            WorkManager.getInstance(Application.application).enqueueUniqueWork(
+                WORK_NAME_POVTOR,
+                ExistingWorkPolicy.KEEP,
+                OneTimeWorkRequest.Builder(UploadTask::class.java)
+                    .setConstraints(
+                        Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
+                    )
+                    .setInitialDelay(POVTOR_PAUSE_MILLIS, TimeUnit.MILLISECONDS)
+                    .build(),
+            )
+            Log.i(TAG, "отправка не удалась — повтор через ${POVTOR_PAUSE_MILLIS / 60000} мин, часовое расписание не трогаю")
+        }.onFailure { Log.w(TAG, "повтор отправки не поставился", it) }
     }
 
     private fun schedule0() {
@@ -570,7 +604,14 @@ object LogUploadWork {
                 Settings.logUploadRetrySince = 0L
                 return Result.success()
             }
-            return Result.retry()
+            // `Result.retry()` из ПЕРИОДИЧЕСКОЙ работы стоит дороже, чем кажется: откат
+            // WorkManager заменяет собой период, а не идёт рядом с ним. Час, два, четыре —
+            // и часовая отправка превращается в четырёхчасовую. 12.09.2026 из-за этого
+            // журнал не уезжал с 15:10 до вечера, и разбирать жалобу было нечем ровно
+            // тогда, когда она случилась. Поэтому period не трогаем (успех), а повтор
+            // ставим отдельной одноразовой работой через несколько минут.
+            povtorPozzhe()
+            return Result.success()
         }
     }
 }

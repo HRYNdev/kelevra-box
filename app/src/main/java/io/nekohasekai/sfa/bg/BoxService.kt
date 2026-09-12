@@ -34,6 +34,7 @@ import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.bg.path.ProbeSocket
 import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.compose.MainActivity
+import io.nekohasekai.sfa.compose.screen.home.SubscriptionRefresh
 import io.nekohasekai.sfa.constant.Action
 import io.nekohasekai.sfa.constant.Alert
 import io.nekohasekai.sfa.constant.Status
@@ -56,6 +57,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     companion object {
         private const val PROFILE_UPDATE_INTERVAL = 15L * 60 * 1000 // 15 minutes in milliseconds
         private const val TAG = "BoxService"
+
+        /** Реже этого за новым токеном комнаты не ходим: под белым списком сервер недоступен. */
+        private const val TOKEN_REFRESH_PAUSE_MILLIS = 10L * 60 * 1000
 
         /**
          * По этим словам собственный лог ядра повторяется предупреждением: паника,
@@ -148,6 +152,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     @Volatile
     private var roomRaising = false
+
+    /** Когда последний раз ходили к серверу за свежим токеном комнаты. */
+    private var tokenRefreshedAt = 0L
 
     /** Что автомат умеет сделать с сервисом. Больше он ни во что не лезет. */
     private val autoModeHost = object : AutoMode.Host {
@@ -790,6 +797,31 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * @return чем кончилась просьба. Разница между «не стал спрашивать» и «не встала»
      *   стоит двух минут простоя — см. [AutoMode.RoomAck].
      */
+    /** Последняя неудача подъёма комнаты — это отвергнутый носителем токен? */
+    private fun tokenOtvergnutNow(): Boolean =
+        OlcRtcCore.lastError?.let { OlcRtcCore.tokenOtvergnut(it) } == true
+
+    /**
+     * Сходить к своему серверу за свежим токеном комнаты.
+     *
+     * @return `true`, если токен действительно сменился и есть смысл пробовать снова.
+     *   `false` — сервер недоступен (обычное дело под белым списком) или отдал тот же.
+     */
+    private fun obnovitTokenKomnaty(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - tokenRefreshedAt < TOKEN_REFRESH_PAUSE_MILLIS) return false
+        tokenRefreshedAt = now
+        val bylo = OlcRtcParams.resolve().wbToken
+        Log.i(TAG, "комната не встала из-за токена — спрашиваю свежий у сервера")
+        runCatching { Zapisi.perehod("token_otvergnut", "носитель отверг токен комнаты") }
+        runCatching { runBlocking { SubscriptionRefresh.loadInfo() } }
+            .onFailure { Log.w(TAG, "за токеном сходить не вышло: ${it.message}") }
+        val stalo = OlcRtcParams.resolve().wbToken
+        val smenilsya = !stalo.isNullOrBlank() && stalo != bylo
+        Log.i(TAG, if (smenilsya) "токен комнаты обновлён — пробую поднять ещё раз" else "токен прежний, второй заход не делаю")
+        return smenilsya
+    }
+
     private fun setRoomWanted(wanted: Boolean, reason: String): AutoMode.RoomAck {
         // Поднимать нечего, если параметров комнаты нет или человек нажал аварийный
         // выключатель. Гасить — можно всегда.
@@ -848,6 +880,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     private fun raiseRoom(reason: String) {
         startOlcRtcIfEnabled()
+        // Носитель отверг токен — пробуем забрать свежий у сервера и подняться ещё раз.
+        // Сам по себе повтор бесполезен: отвечает не сеть, а WbStream, и будет отвечать
+        // так же, пока токен не сменится. А вот новый токен на сервере к этому моменту
+        // уже может лежать: 12.09.2026 он лежал там три часа, пока телефон долбился
+        // старым. Пробуем один раз и не чаще, чем раз в [TOKEN_REFRESH_PAUSE_MILLIS]:
+        // под белым списком сервер подписки недоступен, и долбиться в него незачем.
+        if (tokenOtvergnutNow() && obnovitTokenKomnaty()) {
+            startOlcRtcIfEnabled()
+        }
         val rebuilt = synchronized(tunnelLock) {
             roomRaising = false
             when {
@@ -1092,6 +1133,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @OptIn(DelicateCoroutinesApi::class)
     @Suppress("SameReturnValue")
     internal fun onStartCommand(): Int {
+        // Уведомление поднимаем ПЕРВОЙ строкой, до журнала, до защиты сокетов и до любой
+        // корутины. Система даёт от `startForegroundService` до `startForeground` пять
+        // секунд и убивает процесс, если не успели. Раньше подъём стоял в самом конце
+        // цепочки (открытие базы, командный сервер, возврат на главный поток), а при
+        // повторной команде на запуск не случался вовсе — из-за раннего выхода ниже.
+        // 12.09.2026 система убила приложение дважды за день, в 12:02 и в 15:17, и
+        // вместе со вторым разом на пять часов встала очередь фоновых работ: журналы
+        // перестали уезжать, а протухший токен комнаты стало нечем заменить.
+        // Имя профиля здесь ещё не известно — его допишет `startService()`, который
+        // зовёт `show()` повторно.
+        runCatching { notification.show(lastProfileName, R.string.status_starting) }
         // Журнал мог не открыться на старте процесса (телефон ещё не разблокирован после
         // перезагрузки) — здесь хранилище уже наверняка доступно. Живую запись повторный
         // вызов не трогает.
