@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -66,7 +67,10 @@ class ImenaSaytovTest {
      * что зашит в ImenaSaytov.ADRES — так что клиент говорит с настоящим TCP
      * собеседником, а не с имитацией внутри процесса.
      */
-    private fun podnyatServer(telo: AtomicReference<String>): Pair<ServerSocket, Thread> {
+    private fun podnyatServer(
+        telo: AtomicReference<String>,
+        zaprosov: AtomicInteger = AtomicInteger(0),
+    ): Pair<ServerSocket, Thread> {
         val socket = ServerSocket(9090)
         val поток = Thread {
             while (!socket.isClosed) {
@@ -74,6 +78,7 @@ class ImenaSaytovTest {
                 Thread {
                     client.use { c ->
                         runCatching {
+                            zaprosov.incrementAndGet()
                             c.getInputStream().bufferedReader().readLine() // request line, выбрасываем
                             val body = telo.get().toByteArray(StandardCharsets.UTF_8)
                             val out = c.getOutputStream()
@@ -137,6 +142,39 @@ class ImenaSaytovTest {
             // И спустя окно тот же адрес по-прежнему резолвится (уже из кэша или заново).
             Thread.sleep(5100)
             assertEquals("b.example", ImenaSaytov.imya("10.0.0.2"))
+        } finally {
+            runCatching { socket.close() }
+            runCatching { thread.interrupt() }
+        }
+    }
+
+    /**
+     * КОНТРОЛЬ ПУСТОТОЙ: троттлинг не должен исчезнуть вместе с багом.
+     *
+     * Повторный промах по ОДНОМУ И ТОМУ ЖЕ адресу в пределах окна 5с не должен уходить
+     * к ядру второй раз — иначе «починка» — это просто снятая защита, а не адресный
+     * троттлинг. Считаем реальные TCP-запросы к серверу счётчиком zaprosov.
+     */
+    @Test
+    fun povtor_po_tomu_zhe_adresu_v_okne_ne_dolbit_yadro() {
+        val telo = AtomicReference(
+            """{"connections":[{"metadata":{"host":"a.example","destinationIP":"10.0.0.1"}}]}""",
+        )
+        val zaprosov = AtomicInteger(0)
+        val (socket, thread) = podnyatServer(telo, zaprosov)
+        try {
+            assertEquals("a.example", ImenaSaytov.imya("10.0.0.1"))
+            assertEquals(1, zaprosov.get())
+
+            // Тот же адрес ещё раз, тут же — кэш уже есть, к ядру идти не должны вовсе.
+            assertEquals("a.example", ImenaSaytov.imya("10.0.0.1"))
+            assertEquals(1, zaprosov.get())
+
+            // Моделируем обычное LRU-вытеснение: адрес выпал из kesh, а троттлинг про
+            // него ещё помнит — второй промах на ТОТ ЖЕ адрес не должен дойти до ядра.
+            ImenaSaytov.zabytKeshAdresa("10.0.0.1")
+            assertEquals("", ImenaSaytov.imya("10.0.0.1"))
+            assertEquals(1, zaprosov.get())
         } finally {
             runCatching { socket.close() }
             runCatching { thread.interrupt() }
