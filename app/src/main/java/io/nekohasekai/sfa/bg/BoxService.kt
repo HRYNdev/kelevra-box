@@ -843,6 +843,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 Log.i(TAG, "комната уже поднимается ($reason) — второй раз не прошу")
                 return AutoMode.RoomAck.Raising
             }
+            // Присмотр сам гасит и поднимает ядро. Заход автомата видел в этот момент
+            // «комната не поднята» и запускал свой подъём параллельно, а `OlcRtcCore.start`
+            // гасит чужой запуск — два подъёма рвали друг друга.
+            if (wanted && (OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting)) {
+                Log.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
+                return AutoMode.RoomAck.Raising
+            }
             val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
             roomWanted = wanted
             if (wanted == up) {
@@ -861,6 +868,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
 
             Log.i(TAG, "комната больше не нужна ($reason) — гашу ядро")
+            // Выход уводим до гашения: между остановкой ядра комнаты и пересборкой
+            // основного ядра селектор ещё смотрел в её сокс.
+            AutoMode.roomLost("комната больше не нужна: $reason")
             stopOlcRtc()
             return runCatching {
                 restartCore()

@@ -12,6 +12,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.concurrent.thread
 
 /**
  * Запись журнала ЯДРА в файл, рядом с журналом приложения.
@@ -99,6 +100,9 @@ object CoreLog {
     @Volatile
     private var trevogaBylaV = 0L
 
+    /** Отказы в свой же сокс на петле: см. [SocksBreaker]. */
+    private val predohranitel = SocksBreaker()
+
     @Volatile
     private var bystroNachalo = 0L
 
@@ -143,6 +147,12 @@ object CoreLog {
         if (line.contains("ERROR") && line.contains("open connection to")) {
             oknoOtkazov++
             bystroOtkazov++
+            if (predohranitel.offer(line, teper)) {
+                Log.w(TAG, "шторм отказов в локальный сокс — увожу выход с мёртвой комнаты")
+                runCatching { Zapisi.perehod("predohranitel", "отказы в локальный сокс") }
+                // Переключение выхода — вызов в командный сервер; поток журнала им не держим.
+                thread(name = "socks-breaker", isDaemon = true) { AutoMode.roomLost("предохранитель") }
+            }
             if (shtorm(bystroOtkazov, bystroSoed)) {
                 podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${BYSTRO_OKNO_MS / 1000} с")
             }
