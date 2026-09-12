@@ -939,6 +939,31 @@ object AutoMode {
         synchronized(lock) { lock.notifyAll() }
     }
 
+    /**
+     * Комната пропала или сейчас будет погашена: увести селектор на основной канал ДО того,
+     * как её сокс перестанет слушать.
+     *
+     * Зовут те, кто узнаёт о смерти комнаты раньше автомата: присмотр перед перезапуском
+     * ядра и когда ядро вышло само, сервис перед гашением комнаты, предохранитель по шторму
+     * отказов на её порт. Раньше выход уводил только очередной заход автомата — от минуты в
+     * ручном режиме до трёх с половиной в автоматическом, и всё это время каждое соединение
+     * получало `connection refused` за миллисекунду.
+     *
+     * Выбор принудительный, мимо кэша [selected]: селектор мог переключить экран групп, и
+     * кэш про это не знает. Выбор человека не трогается — вернуть комнату, когда она
+     * встанет, решает следующий заход.
+     */
+    fun roomLost(reason: String) {
+        if (!active) return
+        val h = host ?: return
+        val main = layout.main ?: return
+        Log.w(TAG, "комната пропала ($reason) — увожу выход на основной канал")
+        runCatching { Zapisi.perehod("komnata_propala", reason) }
+        selected = null
+        choose(h, main, "комната пропала")
+        synchronized(lock) { lock.notifyAll() }
+    }
+
     /** Перечитывает раскладку выходов и входов из конфига, который сейчас в ядре. */
     private fun refreshLayout(reason: String) {
         val content = runCatching { host?.profileConfig() }.getOrNull() ?: return
@@ -2912,7 +2937,10 @@ object AutoMode {
         OlcRtcCore.health is OlcRtcCore.Health.Live
 
     /** Поднято ли ядро комнаты. Ответ самого ядра, без ожидания вердикта присмотра. */
-    private fun roomUp(): Boolean = OlcRtcCore.state is OlcRtcCore.State.Ready
+    // Одного состояния мало: горутина ядра может выйти сама, сокс закроется, а состояние
+    // так и останется Ready — его меняют только старт и остановка. Тогда выбранная комната
+    // считалась поднятой, и трафик шёл в неслушающий порт.
+    private fun roomUp(): Boolean = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
 
     /**
      * Комната ещё не сказала своего слова: либо поднимается, либо поднялась, но присмотр
