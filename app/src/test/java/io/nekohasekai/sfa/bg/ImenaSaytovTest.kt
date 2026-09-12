@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.bg
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
@@ -175,6 +176,72 @@ class ImenaSaytovTest {
             ImenaSaytov.zabytKeshAdresa("10.0.0.1")
             assertEquals("", ImenaSaytov.imya("10.0.0.1"))
             assertEquals(1, zaprosov.get())
+        } finally {
+            runCatching { socket.close() }
+            runCatching { thread.interrupt() }
+        }
+    }
+
+    /**
+     * Немой сервер: принимает TCP-соединение и НИКОГДА не отвечает — держит его до
+     * readTimeout клиента (1500 мс из ImenaSaytov.prochitat). Моделирует «ядро не
+     * отвечает», а не «ядро упало сразу» (мгновенный connection refused не покажет
+     * беды — залипание именно на самом чтении ответа).
+     */
+    private fun podnyatNemoyServer(zaprosov: AtomicInteger): Pair<ServerSocket, Thread> {
+        val socket = ServerSocket(9090)
+        val поток = Thread {
+            while (!socket.isClosed) {
+                val client = try { socket.accept() } catch (e: Exception) { break }
+                zaprosov.incrementAndGet()
+                Thread {
+                    client.use { c ->
+                        runCatching {
+                            c.getInputStream().bufferedReader().readLine() // забрали запрос
+                            Thread.sleep(3000) // и просто молчим дольше клиентского readTimeout
+                        }
+                    }
+                }.start()
+            }
+        }
+        поток.isDaemon = true
+        поток.start()
+        return socket to поток
+    }
+
+    /**
+     * ДОКАЗАТЕЛЬСТВО РЕГРЕССА (приёмка PR #10, 12.09.2026, ветка telemetriya-korobki-razbor).
+     *
+     * До правки адресный троттлинг был и предохранителем: одна метка на всё приложение
+     * резала обращения к ядру не чаще раза в NE_CHASHCHE_MS, что бы ни случилось. После
+     * переезда на карту `sprashivaliPoAdresu` предохранитель исчез — каждый НОВЫЙ адрес
+     * идёт в prochitat() всегда, потолка на их число нет. Если ядро при этом молчит
+     * (`connectTimeout`/`readTimeout` = 1500 мс), пачка из 20 разных адресов даёт до
+     * 20 реальных синхронных попыток и ~20×1.5с блокировки на @Synchronized-мониторе —
+     * вместо одного промаха в 5с, как было раньше.
+     *
+     * До починки: zaprosov ~20, elapsed ~20×1.5с (десятки секунд).
+     * После починки: первая попытка ставит ГЛОБАЛЬНЫЙ отбой на неудачу — остальные 19
+     * новых адресов в то же окно к ядру не идут вовсе.
+     */
+    @Test
+    fun nemoe_yadro_ne_dolbim_na_kazhdyy_novyy_adres() {
+        val zaprosov = AtomicInteger(0)
+        val (socket, thread) = podnyatNemoyServer(zaprosov)
+        try {
+            val start = System.currentTimeMillis()
+            for (i in 0 until 20) {
+                ImenaSaytov.imya("10.9.0.$i")
+            }
+            val elapsed = System.currentTimeMillis() - start
+            assertTrue(
+                "ожидали не больше 2 реальных попыток к немому ядру, было ${zaprosov.get()}",
+                zaprosov.get() <= 2,
+            )
+            assertTrue(
+                "ожидали меньше 3000 мс на 20 новых адресов, было $elapsed",
+                elapsed < 3000,
+            )
         } finally {
             runCatching { socket.close() }
             runCatching { thread.interrupt() }
