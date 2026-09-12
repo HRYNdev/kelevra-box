@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.compose.screen.dashboard.groups
 
 import androidx.lifecycle.viewModelScope
 import io.nekohasekai.libbox.OutboundGroup
+import io.nekohasekai.sfa.bg.AutoMode
 import io.nekohasekai.sfa.bg.AutoModeSticky
 import io.nekohasekai.sfa.compose.base.BaseViewModel
 import io.nekohasekai.sfa.compose.base.ScreenEvent
@@ -175,7 +176,14 @@ class GroupsViewModel(private val sharedCommandClient: CommandClient? = null) :
 
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // Select the new outbound immediately
+                // Группа, которой правит автомат, переключается через него же, как на
+                // главном экране. Прямой selectOutbound ставил сюда и неподнятую комнату:
+                // весь трафик уходил в сокс, который никто не слушает, а автомат про такой
+                // выбор не знал вовсе и держал в памяти прежний выход.
+                if (AutoMode.isChooser(groupTag) && !AutoMode.chooseManually(itemTag)) {
+                    // Комната ещё не стоит — автомат применит выбор, когда она встанет.
+                    return@launch
+                }
                 CommandTarget.standaloneClient().selectOutbound(groupTag, itemTag)
                 // Выбор сделан руками — залипшего выбора автомата тут больше нет.
                 AutoModeSticky.forget()
