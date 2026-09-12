@@ -55,6 +55,17 @@ object ImenaSaytov {
     }
 
     /**
+     * Предохранитель. Адресный троттлинг режет только повтор по ТОМУ ЖЕ адресу — на
+     * пачку РАЗНЫХ новых адресов потолка нет, а prochitat() синхронный (connectTimeout/
+     * readTimeout = 1500 мс) под @Synchronized. Если ядро молчит, отказов бывает по три
+     * сотни за семь минут (см. комментарий класса) — и это до 300 × 1.5 с блокировки на
+     * мониторе. Метка ниже — когда последний раз ПОДРЯД получили пустой ответ; пока она
+     * держит окно, к ядру не идём вовсе, ни по какому адресу.
+     */
+    @Volatile
+    private var otkazyvaloS = 0L
+
+    /**
      * Имя сайта по адресу, если ядро его называло. Пусто — значит не знаем, и врать
      * не будем: в журнал уйдёт один адрес, как раньше.
      */
@@ -74,10 +85,15 @@ object ImenaSaytov {
     @Synchronized
     private fun obnovit(adres: String) {
         val teper = System.currentTimeMillis()
+        if (teper - otkazyvaloS < NE_CHASHCHE_MS) return
         val posledniyRaz = sprashivaliPoAdresu[adres]
         if (posledniyRaz != null && teper - posledniyRaz < NE_CHASHCHE_MS) return
         sprashivaliPoAdresu[adres] = teper
-        val telo = runCatching { prochitat() }.getOrNull() ?: return
+        val telo = runCatching { prochitat() }.getOrNull()
+        if (telo.isNullOrEmpty()) {
+            otkazyvaloS = teper
+            return
+        }
         runCatching { razobrat(telo) }.onFailure {
             Log.w(TAG, "список соединений ядра не разобрался: ${it.message}")
         }
@@ -132,5 +148,6 @@ object ImenaSaytov {
     internal fun zabyt() {
         kesh.clear()
         sprashivaliPoAdresu.clear()
+        otkazyvaloS = 0L
     }
 }
