@@ -332,7 +332,7 @@ object AutoMode {
      * Пять минут — это цена вопроса «когда пустят обратно»: не чаще одного замера
      * за это время, но и не реже.
      */
-    private const val HINT_TTL_MILLIS = 5 * 60_000L
+    internal const val HINT_TTL_MILLIS = 5 * 60_000L
 
     /** Как объясняем человеку отказ по подсказке. */
     private const val WHITELIST_REASON = "сеть пускает наружу только свои адреса"
@@ -1446,8 +1446,10 @@ object AutoMode {
 
         val atHome = dnsHome && carried != false
         if (hint != NetworkMode.Whitelist && !atHome &&
-            askDetector(broken, hintAge(network), nodeAnswers())
+            askDetector(broken, hintAge(network), nodeAnswers(), suspect = massovyeOtkazySvezhie())
         ) {
+            // Повод от массовых отказов — на один замер, а не на всё время его свежести.
+            massovyeOtkazyAt = 0L
             hint = askNetworkMode(network)
         }
 
@@ -2421,9 +2423,17 @@ object AutoMode {
         broken: Boolean,
         cachedAgeMillis: Long?,
         nodeAnswers: Boolean = false,
+        /**
+         * Реальные соединения массово падают ([massovyeOtkazy]), хотя проверки канала
+         * проходят. Так выглядит белый список, который пропускает TCP и рвёт TLS: узел
+         * принимает соединение, малая проба проскакивает, а приложения умирают. Здесь
+         * «узел отвечает» уже не довод против замера. Свежий вердикт по-прежнему
+         * не перемеряется — один повод стоит не больше одного замера за срок подсказки.
+         */
+        suspect: Boolean = false,
     ): Boolean = when {
-        !broken -> false
-        nodeAnswers -> false
+        !broken && !suspect -> false
+        nodeAnswers && !suspect -> false
         cachedAgeMillis == null -> true
         else -> cachedAgeMillis >= HINT_TTL_MILLIS
     }
@@ -2437,10 +2447,44 @@ object AutoMode {
      * уже доказательство, что вокруг не белый список, и подсказку об обратном оно
      * опровергает делом.
      */
-    private fun nodeAnswered(reason: String) {
+    private fun nodeAnswered(reason: String, network: Network? = null, portOnly: Boolean = false) {
+        // Принятое TCP-соединение не опровергает белый список, который рвёт TLS: там TCP
+        // принимают куда угодно ([NetworkModeDecision.survivesOpenPort]).
+        if (portOnly && NetworkModeDecision.survivesOpenPort(NetworkModeDetector.reportFor(network))) {
+            Log.i(TAG, "$reason — но белый список здесь рвёт TLS, а не TCP: подсказку не забываю")
+            return
+        }
         nodeAnsweredAt = SystemClock.elapsedRealtime()
         NetworkModeDetector.forget(reason)
     }
+
+    /** Когда в последний раз реальные соединения массово падали; 0 — повода нет. */
+    @Volatile
+    private var massovyeOtkazyAt = 0L
+
+    @Volatile
+    private var massovyeBudilAt = 0L
+
+    /**
+     * Реальные соединения массово падают — повод спросить режим сети на ближайшем заходе.
+     *
+     * Зовёт [CoreLog] по своим окнам отказов. Сети тут нет: только отметка и, не чаще раза
+     * за срок подсказки, побудка захода, если стоим на туннельном выходе.
+     */
+    fun massovyeOtkazy(prichina: String) {
+        if (!active) return
+        val now = SystemClock.elapsedRealtime()
+        massovyeOtkazyAt = now
+        Log.i(TAG, "реальные соединения массово падают ($prichina) — на заходе спрошу режим сети")
+        val current = gate.current
+        if (current != Situation.Main && current != Situation.Room) return
+        if (massovyeBudilAt != 0L && now - massovyeBudilAt < HINT_TTL_MILLIS) return
+        massovyeBudilAt = now
+        synchronized(lock) { lock.notifyAll() }
+    }
+
+    private fun massovyeOtkazySvezhie(): Boolean =
+        massovyeOtkazyAt != 0L && SystemClock.elapsedRealtime() - massovyeOtkazyAt < HINT_TTL_MILLIS
 
     /** Подсказка про эту сеть, пока она свежая. Ничего не меряет. */
     private fun cachedHint(network: Network): NetworkMode {
@@ -2537,7 +2581,7 @@ object AutoMode {
                         "основной канал: ни один из ${endpoints.size} адресов не отвечает"
                     },
                 )
-                if (open) nodeAnswered("узел основного канала принял соединение")
+                if (open) nodeAnswered("узел основного канала принял соединение", network, portOnly = true)
             }
         }
         // Узел молчит — приглядке есть что искать. Отозвался (или адресов мы не знаем) —
@@ -2789,6 +2833,11 @@ object AutoMode {
             // Молчание — обычный исход под запретом, и вслух о нём говорить незачем, кроме
             // как для разбора: без этой строки не видно, ходила приглядка вообще или нет.
             Log.i(TAG, "приглядка из комнаты: узел ${endpoint.host}:${endpoint.port} молчит")
+            return false
+        }
+        if (NetworkModeDecision.survivesOpenPort(NetworkModeDetector.reportFor(network))) {
+            // Под белым списком, который рвёт TLS, узел «отвечает» всегда — будить из-за
+            // этого полный заход каждые полминуты незачем.
             return false
         }
         Log.i(TAG, "приглядка из комнаты: узел основного канала ответил — проверяю канал целиком")

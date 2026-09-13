@@ -34,6 +34,26 @@ class CoreLogShtormTest {
     }
 
     @Test
+    fun `таймауты и сбросы при заметной доле — повод спросить режим сети`() {
+        assertTrue(CoreLog.povodSprositRezhim(dolya = 40, kody = mapOf("taymaut" to 7, "sbros" to 3)))
+    }
+
+    @Test
+    fun `отказы в свой сокс и нерешённые имена поводом не считаются`() {
+        assertFalse(
+            CoreLog.povodSprositRezhim(
+                dolya = 90,
+                kody = mapOf("otkaz_soedineniya" to 500, "imya_ne_reshilos" to 50, "taymaut" to 2),
+            ),
+        )
+    }
+
+    @Test
+    fun `много отказов при малой доле — не повод`() {
+        assertFalse(CoreLog.povodSprositRezhim(dolya = 5, kody = mapOf("taymaut" to 100)))
+    }
+
+    @Test
     fun `без соединений доля считается полной`() {
         assertEquals(100, CoreLog.dolyaOtkazov(otkazov = 5, soed = 0))
         assertEquals(50, CoreLog.dolyaOtkazov(otkazov = 5, soed = 10))
