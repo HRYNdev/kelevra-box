@@ -34,6 +34,10 @@ on:
         description: "Ветка/тег/SHA olcrtc (в НАШЕМ форке)"
         required: false
         default: "kelevra"
+      kelevra_build:
+        description: "Номер сборки для проверочного APK без тега (пусто — номер прогона)"
+        required: false
+        default: ""
 
 env:
   NDK_VERSION: "28.0.13004108"
@@ -361,8 +365,18 @@ jobs:
           test -s app/release.keystore
 
       - name: Номер сборки — из тега, а не из номера прогона
+        env:
+          KELEVRA_BUILD_INPUT: ${{ github.event.inputs.kelevra_build }}
         run: |
           set -e
+          # Проверочная сборка без тега ставится поверх установленной версии только с
+          # номером выше её, а номер прогона ниже номеров выпусков. Поэтому при ручном
+          # запуске номер можно задать явно; на выпуск по тегу это не влияет.
+          if [ "$GITHUB_REF_TYPE" != "tag" ] && printf '%s' "$KELEVRA_BUILD_INPUT" | grep -Eq '^[0-9]+$'; then
+            echo "KELEVRA_BUILD=$KELEVRA_BUILD_INPUT" >> "$GITHUB_ENV"
+            echo "номер сборки задан при запуске: $KELEVRA_BUILD_INPUT"
+            exit 0
+          fi
           # Номер прогона живёт своей жизнью (перезапуски, отменённые сборки, прогоны
           # других веток), и 10.08.2026 тег kelevra58 выпустил версию 1.14.54: имя тега
           # и версия разъехались, а телефон с более высоким номером обновление с сервера

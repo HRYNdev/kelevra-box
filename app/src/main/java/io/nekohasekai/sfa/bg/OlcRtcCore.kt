@@ -198,7 +198,21 @@ object OlcRtcCore {
     /** Отказы, которые повтором не лечатся: чинить надо параметры или сборку. */
     private fun isPermanent(reason: String): Boolean =
         reason.startsWith("не задан") || reason.startsWith("порт SOCKS") ||
-            reason.startsWith("ядро собрано без") || reason.startsWith("нет protect")
+            reason.startsWith("ядро собрано без") || reason.startsWith("нет protect") ||
+            tokenOtvergnut(reason)
+
+    /**
+     * Носитель отверг наш аккаунт-токен: комната не встанет, пока токен не сменят.
+     *
+     * Отличать это от «сети нет» обязательно. Токен WB живёт около месяца и гаснет молча,
+     * никакого срока в нём самом нет: снятый 05.08.2026 умер 04.09, и восемь дней комната
+     * не поднималась вообще, а в журнале стояли три одинаковые попытки по пять секунд
+     * каждый заход. Повтор тут бесполезен по определению — отвечает сервер, а не сеть.
+     */
+    fun tokenOtvergnut(reason: String): Boolean {
+        val s = reason.lowercase()
+        return "status 401" in s || "invalid_token" in s || "unauthenticated" in s
+    }
 
     private fun startOnce(
         params: Params,
