@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import android.content.pm.PackageInstaller as AndroidPackageInstaller
@@ -39,6 +40,7 @@ object SystemPackageInstaller {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
 
+            Log.i("KelevraObnovlenie", "файл обновления передан системе: ${apkFile.length()} байт")
             session.commit(pendingIntent.intentSender)
         }
     }

@@ -1,9 +1,12 @@
 package io.nekohasekai.sfa.vendor
 
 import android.os.Build
+import android.util.Log
 import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.ktx.unwrap
+import io.nekohasekai.sfa.update.IshodUstanovki
 import io.nekohasekai.sfa.update.UpdateInfo
 import io.nekohasekai.sfa.update.UpdateTrack
 import io.nekohasekai.sfa.utils.HTTPClient
@@ -11,6 +14,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.Closeable
+import java.io.File
 
 class GitHubUpdateChecker : Closeable {
     companion object {
@@ -95,6 +99,7 @@ class GitHubUpdateChecker : Closeable {
             releaseNotes = release.body,
             isPrerelease = release.prerelease,
             fileSize = apkAsset?.size ?: 0,
+            sha256 = IshodUstanovki.sha256IzDigest(apkAsset?.digest),
         )
     }
 
@@ -129,9 +134,27 @@ class GitHubUpdateChecker : Closeable {
         return releases
     }
 
+    /**
+     * Адрес списка релизов. Только в debug-сборке его можно подменить файлом
+     * `files/debug-releases-url.txt` (кладётся через `run-as`), чтобы проверять обновление
+     * на подменном списке без публикации релиза. В выпускной сборке ветка вырезается.
+     */
+    private fun releasesUrl(): String {
+        if (BuildConfig.DEBUG) {
+            val podmena = runCatching {
+                File(Application.application.filesDir, "debug-releases-url.txt").readText().trim()
+            }.getOrNull()
+            if (!podmena.isNullOrEmpty()) {
+                Log.i("KelevraObnovlenie", "список релизов берётся с подменного адреса (debug): $podmena")
+                return podmena
+            }
+        }
+        return RELEASES_URL
+    }
+
     private fun getReleasesPage(githubToken: String, page: Int): List<GitHubRelease> {
         val request = client.newRequest()
-        request.setURL("$RELEASES_URL?per_page=$RELEASES_PER_PAGE&page=$page")
+        request.setURL("${releasesUrl()}?per_page=$RELEASES_PER_PAGE&page=$page")
         request.setHeader("Accept", "application/vnd.github.v3+json")
         val token = githubToken.trim()
         if (token.isNotEmpty()) {
@@ -219,6 +242,8 @@ class GitHubUpdateChecker : Closeable {
         val name: String = "",
         @SerialName("browser_download_url") val browserDownloadUrl: String = "",
         val size: Long = 0,
+        // Хеш, который GitHub считает сам при загрузке файла в релиз: «sha256:<hex>».
+        val digest: String? = null,
     )
 
     @Serializable
