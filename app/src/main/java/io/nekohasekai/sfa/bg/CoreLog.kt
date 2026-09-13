@@ -3,11 +3,13 @@ package io.nekohasekai.sfa.bg
 import android.util.Log
 import io.nekohasekai.libbox.LogEntry
 import io.nekohasekai.sfa.Application
+import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.utils.CommandClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -266,6 +268,70 @@ object CoreLog {
         }
     }
 
+    /** Сколько окон сырья держим железно, даже если ни одно ещё не уехало. */
+    private const val MAX_OKNA_SYRYA = 2
+
+    /** И сколько их лежит на диске самое большее — потолок поверх всего. */
+    private const val MAX_VSEGO_OKON = 8
+
+    /**
+     * Какие файлы окна сырья удалить.
+     *
+     * Чистая функция — без [File] и [Application], чтобы её можно было пощупать
+     * юнит-тестом без Robolectric. Разбор 10.09.2026 нашёл в прежней версии (просто
+     * `dropLast(2)` после сортировки по имени) дыру: удаление считало только возраст
+     * файла и не смотрело, уехал ли он на сервер. При устойчивом «ядро валит
+     * соединения» (тревога каждый час) и одновременно «отправка недоступна много
+     * часов» (сценарий VPN без сети) третий файл вытеснял ПЕРВЫЙ ДО отправки — терялось
+     * ровно то окно, ради которого механизм и написан.
+     *
+     * [imena] — имена файлов `kelevra-syrye-*` (в имени таймстамп, сортировка по имени
+     * = по времени). [otpravleny] — те из них, про которые точно известно, что они уже
+     * уехали. Кандидаты на удаление — все, кроме [ostavit] самых свежих; из кандидатов
+     * удаляются только отправленные — неотправленный файл переживёт любое число
+     * последующих тревог, пока не уедет сам.
+     *
+     * Но не бесконечно: сверх [potolok] файлов уходят самые старые, даже неотправленные.
+     * Иначе прежний страх («череда тревог забьёт хранилище телефона») возвращается уже
+     * в другом виде: тревога не чаще раза в час, но окно — 2000 строк ядра (~240 КБ),
+     * то есть сутки без связи дают почти 6 МБ, неделя — под 40. Из двух потерь выбираем
+     * старейшую: свежее окно ближе к беде, которую сервер ещё не видел.
+     */
+    internal fun staryeFajlyKUdaleniyu(
+        imena: List<String>,
+        otpravleny: Set<String>,
+        ostavit: Int = MAX_OKNA_SYRYA,
+        potolok: Int = MAX_VSEGO_OKON,
+    ): List<String> {
+        val poVremeni = imena.sorted()
+        val kandidaty = poVremeni.dropLast(ostavit)
+        val udalit = kandidaty.filter { it in otpravleny }.toMutableSet()
+        var ostanetsya = poVremeni.size - udalit.size
+        for (imya in kandidaty) {
+            if (ostanetsya <= potolok) break
+            if (udalit.add(imya)) ostanetsya--
+        }
+        return poVremeni.filter { it in udalit }
+    }
+
+    /**
+     * Признак «отправлен» для реальных файлов: читает те же отметки, что копит
+     * [LogUploadWork] (файл не трогаем — только читаем его общую отметку), и считает
+     * файл уехавшим, если по нему записано `sent >= size` при совпавшем размере.
+     */
+    private fun otpravlennyeImena(fajly: List<File>): Set<String> {
+        val raw = runCatching { Settings.logUploadMarks }.getOrDefault("")
+        if (raw.isBlank()) return emptySet()
+        return runCatching {
+            val json = JSONObject(raw)
+            fajly.filter { f ->
+                val mark = json.optJSONObject(f.name) ?: return@filter false
+                val size = mark.optLong("size")
+                size > 0 && size == f.length() && mark.optLong("sent") >= size
+            }.map { it.name }.toSet()
+        }.getOrDefault(emptySet())
+    }
+
     /** Сложить кольцо в отдельный файл: отправка забирает весь каталог, значит уедет само. */
     private fun sohranitOknoSyrya(teper: Long, dolya: Int, otkazov: Int) {
         val stroki = synchronized(kolco) { kolco.toList() }
@@ -279,11 +345,10 @@ object CoreLog {
                     stroki.joinToString("\n") + "\n",
             )
             Log.i(TAG, "окно сырья сохранено: $imya, строк ${stroki.size}")
-            // Больше двух окон не держим: третье вытесняет самое старое. Иначе череда
-            // тревог на плохой сети забьёт хранилище телефона.
-            val vse = papka.listFiles { f -> f.name.startsWith("kelevra-syrye-") }?.sortedBy { it.name }
+            val vse = papka.listFiles { f -> f.name.startsWith("kelevra-syrye-") }?.toList()
                 ?: return@runCatching
-            vse.dropLast(2).forEach { runCatching { it.delete() } }
+            staryeFajlyKUdaleniyu(vse.map { it.name }, otpravlennyeImena(vse))
+                .forEach { name -> runCatching { File(papka, name).delete() } }
         }.onFailure { Log.w(TAG, "окно сырья не сохранилось: ${it.message}") }
     }
 
