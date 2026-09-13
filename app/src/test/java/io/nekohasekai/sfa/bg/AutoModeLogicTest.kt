@@ -879,4 +879,46 @@ class AutoModeLogicTest {
             AutoMode.manualTarget(manual = "Комната", room = "Комната", main = null, roomUp = false),
         )
     }
+
+    // ------------------------------------------------- «ищу путь», комната уже стоит
+
+    @Test
+    fun `ищу путь - поднятая комната без пройденной пробы выходом не становится`() {
+        // Ядро комнаты стоит и слушает сокс, но присмотр ещё не провёл через него запрос
+        // (или провёл, и данные не пошли). Увести туда выход — значит повесить соединения.
+        assertEquals(
+            null,
+            AutoMode.searchingTarget(room = "Комната", selected = "Нидерланды", roomUp = true, roomLive = false),
+        )
+    }
+
+    @Test
+    fun `ищу путь - комната с пройденной пробой становится выходом сразу`() {
+        assertEquals(
+            "Комната",
+            AutoMode.searchingTarget(room = "Комната", selected = "Нидерланды", roomUp = true, roomLive = true),
+        )
+    }
+
+    @Test
+    fun `ищу путь - устаревшая живая проба при упавшем ядре не в счёт`() {
+        // Вердикт присмотра мог остаться от прошлой жизни ядра: состояние Ready меняют
+        // только старт и остановка, а горутина могла выйти сама.
+        assertEquals(
+            null,
+            AutoMode.searchingTarget(room = "Комната", selected = "Нидерланды", roomUp = false, roomLive = true),
+        )
+    }
+
+    @Test
+    fun `ищу путь - уже стоим в комнате или комнаты нет - выход не трогаем`() {
+        assertEquals(
+            null,
+            AutoMode.searchingTarget(room = "Комната", selected = "Комната", roomUp = true, roomLive = true),
+        )
+        assertEquals(
+            null,
+            AutoMode.searchingTarget(room = null, selected = "Нидерланды", roomUp = true, roomLive = true),
+        )
+    }
 }

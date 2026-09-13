@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.bg
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.ServerSocket
@@ -242,6 +243,66 @@ class ImenaSaytovTest {
                 "ожидали меньше 3000 мс на 20 новых адресов, было $elapsed",
                 elapsed < 3000,
             )
+        } finally {
+            runCatching { socket.close() }
+            runCatching { thread.interrupt() }
+        }
+    }
+
+    /**
+     * Общий потолок: лавина отказов к РАЗНЫМ адресам при живом ядре.
+     *
+     * Каждый новый адрес — синхронный запрос всего списка соединений в потоке чтения
+     * журнала. Замер на эмуляторе 13.09.2026: 13-21 мс процессора ядра на запрос при
+     * сорока новых адресах в секунду. Короткая пачка проходит, остальное ждёт.
+     */
+    @Test
+    fun lavina_raznyh_adresov_ne_bolshe_pachki_zaprosov() {
+        val telo = AtomicReference("""{"connections":[]}""")
+        val zaprosov = AtomicInteger(0)
+        val (socket, thread) = podnyatServer(telo, zaprosov)
+        try {
+            for (i in 0 until 50) {
+                ImenaSaytov.imya("10.8.0.$i")
+            }
+            assertTrue("ожидали не больше 3 запросов на пачку, было ${zaprosov.get()}", zaprosov.get() <= 3)
+            assertTrue("пачка должна проходить, было ${zaprosov.get()}", zaprosov.get() >= 2)
+        } finally {
+            runCatching { socket.close() }
+            runCatching { thread.interrupt() }
+        }
+    }
+
+    @Test
+    fun potolok_pachka_potom_po_raspisaniyu() {
+        val potolok = PotolokZaprosov(emkost = 3, popolnenieMs = 500L)
+        assertTrue(potolok.vzyat(1_000L))
+        assertTrue(potolok.vzyat(1_000L))
+        assertTrue(potolok.vzyat(1_000L))
+        assertFalse(potolok.vzyat(1_000L))
+        assertFalse(potolok.vzyat(1_400L))
+        assertTrue(potolok.vzyat(1_500L))
+        assertFalse(potolok.vzyat(1_600L))
+        // Долгая тишина копит не больше ёмкости.
+        assertTrue(potolok.vzyat(60_000L))
+        assertTrue(potolok.vzyat(60_000L))
+        assertTrue(potolok.vzyat(60_000L))
+        assertFalse(potolok.vzyat(60_000L))
+    }
+
+    @Test
+    fun otkaz_potolka_ne_pomechaet_adres_sproshennym() {
+        // Упёрлись в потолок — запроса не было, и через время тот же адрес спрашивается.
+        val telo = AtomicReference("""{"connections":[]}""")
+        val zaprosov = AtomicInteger(0)
+        val (socket, thread) = podnyatServer(telo, zaprosov)
+        try {
+            for (i in 0 until 10) ImenaSaytov.imya("10.7.0.$i")
+            val poslePachki = zaprosov.get()
+            telo.set("""{"connections":[{"metadata":{"host":"late.example","destinationIP":"10.7.0.9"}}]}""")
+            Thread.sleep(700)
+            assertEquals("late.example", ImenaSaytov.imya("10.7.0.9"))
+            assertEquals(poslePachki + 1, zaprosov.get())
         } finally {
             runCatching { socket.close() }
             runCatching { thread.interrupt() }

@@ -38,6 +38,12 @@ object ImenaSaytov {
     /** Про ОДИН И ТОТ ЖЕ адрес реже раза в пять секунд ядро не тревожим. */
     private const val NE_CHASHCHE_MS = 5_000L
 
+    /** Сколько запросов к ядру проходит пачкой подряд. */
+    private const val PACHKA_ZAPROSOV = 3
+
+    /** Сколько запросов к ядру в секунду держим после пачки. */
+    private const val ZAPROSOV_V_SEKUNDU = 2
+
     private val kesh = object : LinkedHashMap<String, String>(64, 0.75f, false) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean =
             size > POTOLOK
@@ -66,6 +72,21 @@ object ImenaSaytov {
     private var otkazyvaloS = 0L
 
     /**
+     * Общий потолок частоты запросов к ядру, на все адреса разом.
+     *
+     * Адресный отбой не ограничивает пачку РАЗНЫХ адресов, и при живом ядре каждый новый
+     * адрес — синхронный запрос всего списка соединений прямо в потоке чтения журнала.
+     * Замер на эмуляторе 13.09.2026 при лавине отказов к сотням адресов: список ядра
+     * 44-81 КБ, один запрос стоит ядру 13-21 мс процессора, разбор ответа сверху. При
+     * сорока новых адресах в секунду это почти целое ядро процессора ради строк журнала.
+     *
+     * Короткая пачка проходит целиком (первые отказы после смены сети — самые нужные),
+     * дальше не чаще [ZAPROSOV_V_SEKUNDU]. Один ответ несёт ВСЕ живые соединения, поэтому
+     * пропущенный запрос имени обычно не теряет: следующий принесёт и его.
+     */
+    private val potolok = PotolokZaprosov(emkost = PACHKA_ZAPROSOV, popolnenieMs = 1000L / ZAPROSOV_V_SEKUNDU)
+
+    /**
      * Имя сайта по адресу, если ядро его называло. Пусто — значит не знаем, и врать
      * не будем: в журнал уйдёт один адрес, как раньше.
      */
@@ -88,6 +109,9 @@ object ImenaSaytov {
         if (teper - otkazyvaloS < NE_CHASHCHE_MS) return
         val posledniyRaz = sprashivaliPoAdresu[adres]
         if (posledniyRaz != null && teper - posledniyRaz < NE_CHASHCHE_MS) return
+        // Адрес не помечаем «спрошенным», если упёрлись в общий потолок: запроса не было,
+        // и следующий отказ по нему вправе спросить снова.
+        if (!potolok.vzyat(teper)) return
         sprashivaliPoAdresu[adres] = teper
         val telo = runCatching { prochitat() }.getOrNull()
         if (telo.isNullOrEmpty()) {
@@ -149,5 +173,33 @@ object ImenaSaytov {
         kesh.clear()
         sprashivaliPoAdresu.clear()
         otkazyvaloS = 0L
+        potolok.sbrosit()
+    }
+}
+
+/**
+ * Ведро запросов: [emkost] проходят подряд, дальше по одному на каждые [popolnenieMs].
+ * Время передаётся снаружи — поведение проверяется тестом без ожидания.
+ */
+internal class PotolokZaprosov(private val emkost: Int, private val popolnenieMs: Long) {
+    private var zhetony = emkost.toDouble()
+    private var otmetka = Long.MIN_VALUE
+
+    /** true — запрос разрешён и жетон взят. */
+    @Synchronized
+    fun vzyat(teper: Long): Boolean {
+        if (otmetka != Long.MIN_VALUE && teper > otmetka) {
+            zhetony = (zhetony + (teper - otmetka).toDouble() / popolnenieMs).coerceAtMost(emkost.toDouble())
+        }
+        if (otmetka == Long.MIN_VALUE || teper > otmetka) otmetka = teper
+        if (zhetony < 1.0) return false
+        zhetony -= 1.0
+        return true
+    }
+
+    @Synchronized
+    fun sbrosit() {
+        zhetony = emkost.toDouble()
+        otmetka = Long.MIN_VALUE
     }
 }
