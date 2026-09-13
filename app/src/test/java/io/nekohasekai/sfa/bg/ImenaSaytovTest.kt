@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicInteger
@@ -63,6 +64,17 @@ class ImenaSaytovTest {
     }
 
     /**
+     * Порт 9090 с SO_REUSEADDR. Сервер закрывает соединения первым, и после каждого теста
+     * на порту остаются сокеты в TIME_WAIT. На Linux без этого флага следующий тест не
+     * может занять порт и падает с BindException; на Windows занимает, поэтому локально
+     * зелёное и красное в CI.
+     */
+    private fun zanyatPort(): ServerSocket = ServerSocket().apply {
+        reuseAddress = true
+        bind(InetSocketAddress("127.0.0.1", 9090))
+    }
+
+    /**
      * Минимальный HTTP/1.0-сервер на голом ServerSocket (com.sun.net.httpserver в
      * android.jar не резолвится — juнит-модуль компилируется против Android SDK
      * stub'ов, а не полного desktop JDK). Слушает 127.0.0.1:9090 — ровно тот адрес,
@@ -73,7 +85,7 @@ class ImenaSaytovTest {
         telo: AtomicReference<String>,
         zaprosov: AtomicInteger = AtomicInteger(0),
     ): Pair<ServerSocket, Thread> {
-        val socket = ServerSocket(9090)
+        val socket = zanyatPort()
         val поток = Thread {
             while (!socket.isClosed) {
                 val client = try { socket.accept() } catch (e: Exception) { break }
@@ -190,7 +202,7 @@ class ImenaSaytovTest {
      * беды — залипание именно на самом чтении ответа).
      */
     private fun podnyatNemoyServer(zaprosov: AtomicInteger): Pair<ServerSocket, Thread> {
-        val socket = ServerSocket(9090)
+        val socket = zanyatPort()
         val поток = Thread {
             while (!socket.isClosed) {
                 val client = try { socket.accept() } catch (e: Exception) { break }
