@@ -144,8 +144,11 @@ object AppLog {
      * чем журнал с дыркой.
      */
     private fun pumpLoop(target: LogRotator) {
+        // Одна отметка на всю жизнь записи: перезапуск logcat продолжает с неё, а не с
+        // начала буфера.
+        val metka = LogcatMetka()
         while (true) {
-            val failure = runCatching { drain(target) }.exceptionOrNull()
+            val failure = runCatching { drain(target, metka) }.exceptionOrNull()
             note("=== чтение logcat прервалось${failure?.let { ": ${it.javaClass.simpleName}" }.orEmpty()}, поднимаю заново ===")
             runCatching { Thread.sleep(RESTART_PAUSE_MILLIS) }.onFailure { return }
         }
@@ -198,17 +201,14 @@ object AppLog {
         return teg in ШУМНЫЕ_ТЕГИ
     }
 
-    private fun drain(target: LogRotator) {
-        val command = mutableListOf("logcat", "-v", "threadtime")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            command += "--pid"
-            command += Process.myPid().toString()
-        }
-        val process = Runtime.getRuntime().exec(command.toTypedArray())
+    private fun drain(target: LogRotator, metka: LogcatMetka) {
+        val pid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) Process.myPid() else null
+        val process = Runtime.getRuntime().exec(metka.komanda(pid).toTypedArray())
         try {
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 while (true) {
                     val line = reader.readLine() ?: break
+                    if (metka.uzhePisali(line)) continue
                     if (shumnaya(line)) continue
                     target.append(line + "\n")
                 }
@@ -216,6 +216,65 @@ object AppLog {
         } finally {
             runCatching { process.destroy() }
         }
+    }
+}
+
+/**
+ * Докуда logcat уже прочитан — чтобы перезапуск чтения не переписывал буфер заново.
+ *
+ * Без отметки каждый обрыв logcat (система уронила процесс, буфер пересоздали) давал
+ * новый запуск без `-T`, и он отдавал весь накопленный буфер процесса с начала: те же
+ * строки второй раз ложились в журнал и уезжали в архив дублями.
+ *
+ * Как устроено. Запоминается время последней прочитанной строки (формат `threadtime`,
+ * `MM-DD HH:MM:SS.mmm`) и сами строки с этим временем. Перезапуск идёт с `-T <время>`:
+ * logcat отдаёт строки начиная с этой отметки ВКЛЮЧИТЕЛЬНО, поэтому строки ровно этой
+ * миллисекунды приходят ещё раз и отсекаются по памяти. Строки без времени (служебные
+ * «beginning of main») не двигают отметку и не отсекаются.
+ *
+ * Первый запуск идёт без `-T` намеренно: буфер процесса до старта записи — это начало
+ * его же жизни, и оно нужно журналу.
+ */
+internal class LogcatMetka {
+    private var vremya: String? = null
+    private val naVremeni = HashSet<String>()
+
+    /** Команда очередного запуска logcat. [pid] — сужение по своему процессу (API 24+). */
+    fun komanda(pid: Int?): List<String> {
+        val command = mutableListOf("logcat", "-v", "threadtime")
+        vremya?.let {
+            command += "-T"
+            command += it
+        }
+        if (pid != null) {
+            command += "--pid"
+            command += pid.toString()
+        }
+        return command
+    }
+
+    /**
+     * Прочитанная строка. true — такая уже была записана до перезапуска, писать не надо.
+     * Всё остальное запоминается как новая отметка.
+     */
+    fun uzhePisali(line: String): Boolean {
+        val stamp = vremyaStroki(line) ?: return false
+        if (stamp == vremya) return !naVremeni.add(line)
+        vremya = stamp
+        naVremeni.clear()
+        naVremeni.add(line)
+        return false
+    }
+
+    private fun vremyaStroki(line: String): String? {
+        if (line.length < STAMP_LENGTH) return null
+        val stamp = line.substring(0, STAMP_LENGTH)
+        return stamp.takeIf { RX_STAMP.matches(it) }
+    }
+
+    private companion object {
+        const val STAMP_LENGTH = 18
+        val RX_STAMP = Regex("""\d\d-\d\d \d\d:\d\d:\d\d\.\d\d\d""")
     }
 }
 
