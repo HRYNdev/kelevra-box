@@ -35,7 +35,7 @@ object ImenaSaytov {
     /** Сколько имён держим. Больше не нужно: спрашивают про свежие отказы. */
     private const val POTOLOK = 256
 
-    /** Реже раза в пять секунд ядро не тревожим. */
+    /** Про ОДИН И ТОТ ЖЕ адрес реже раза в пять секунд ядро не тревожим. */
     private const val NE_CHASHCHE_MS = 5_000L
 
     private val kesh = object : LinkedHashMap<String, String>(64, 0.75f, false) {
@@ -43,8 +43,27 @@ object ImenaSaytov {
             size > POTOLOK
     }
 
+    /**
+     * Метка «когда в последний раз спрашивали ядро ПРО ЭТОТ адрес» — раньше была одна
+     * на всё приложение, и первый же промах кэша на любой адрес запрещал спрашивать про
+     * любой другой адрес ближайшие 5 секунд, хотя ядро прямо сейчас знает верный ответ.
+     * Тот же потолок POTOLOK не даёт карте расти бесконечно при переборе новых адресов.
+     */
+    private val sprashivaliPoAdresu = object : LinkedHashMap<String, Long>(64, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean =
+            size > POTOLOK
+    }
+
+    /**
+     * Предохранитель. Адресный троттлинг режет только повтор по ТОМУ ЖЕ адресу — на
+     * пачку РАЗНЫХ новых адресов потолка нет, а prochitat() синхронный (connectTimeout/
+     * readTimeout = 1500 мс) под @Synchronized. Если ядро молчит, отказов бывает по три
+     * сотни за семь минут (см. комментарий класса) — и это до 300 × 1.5 с блокировки на
+     * мониторе. Метка ниже — когда последний раз ПОДРЯД получили пустой ответ; пока она
+     * держит окно, к ядру не идём вовсе, ни по какому адресу.
+     */
     @Volatile
-    private var sprashivali = 0L
+    private var otkazyvaloS = 0L
 
     /**
      * Имя сайта по адресу, если ядро его называло. Пусто — значит не знаем, и врать
@@ -54,17 +73,27 @@ object ImenaSaytov {
     fun imya(adres: String): String {
         if (adres.isEmpty()) return ""
         kesh[adres]?.let { return it }
-        obnovit()
+        obnovit(adres)
         return kesh[adres] ?: ""
     }
 
-    /** Забрать у ядра список соединений и разложить по адресам. */
+    /**
+     * Забрать у ядра список соединений и разложить по адресам. Троттлинг — по КОНКРЕТНОМУ
+     * адресу: долбёжка по одному и тому же адресу режется, а промах на новый (ещё не
+     * спрошенный) адрес всегда доходит до ядра — иначе первый же burst глушит соседей.
+     */
     @Synchronized
-    private fun obnovit() {
+    private fun obnovit(adres: String) {
         val teper = System.currentTimeMillis()
-        if (teper - sprashivali < NE_CHASHCHE_MS) return
-        sprashivali = teper
-        val telo = runCatching { prochitat() }.getOrNull() ?: return
+        if (teper - otkazyvaloS < NE_CHASHCHE_MS) return
+        val posledniyRaz = sprashivaliPoAdresu[adres]
+        if (posledniyRaz != null && teper - posledniyRaz < NE_CHASHCHE_MS) return
+        sprashivaliPoAdresu[adres] = teper
+        val telo = runCatching { prochitat() }.getOrNull()
+        if (telo.isNullOrEmpty()) {
+            otkazyvaloS = teper
+            return
+        }
         runCatching { razobrat(telo) }.onFailure {
             Log.w(TAG, "список соединений ядра не разобрался: ${it.message}")
         }
@@ -105,9 +134,20 @@ object ImenaSaytov {
     /** Для проверок: сколько имён сейчас помним. */
     internal fun skolkoPomnim(): Int = kesh.size
 
+    /**
+     * Для проверок: выселить один адрес из кэша ИМЁН, не трогая метку троттлинга.
+     * Моделирует обычную жизнь кэша (LRU-вытеснение по POTOLOK) — адрес забыт, но
+     * ядро про него спрашивали недавно, и троттлинг обязан это помнить.
+     */
+    @Synchronized
+    internal fun zabytKeshAdresa(adres: String) {
+        kesh.remove(adres)
+    }
+
     @Synchronized
     internal fun zabyt() {
         kesh.clear()
-        sprashivali = 0L
+        sprashivaliPoAdresu.clear()
+        otkazyvaloS = 0L
     }
 }
