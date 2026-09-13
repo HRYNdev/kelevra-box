@@ -21,4 +21,16 @@ internal object TunnelFacts {
      */
     fun suspendNeeded(suspendedFlag: Boolean, tunOpen: Boolean, roomLive: Boolean): Boolean =
         !suspendedFlag || tunOpen || roomLive
+
+    /**
+     * Можно ли пересобирать ядро (`startOrReloadService`) прямо сейчас.
+     *
+     * Нельзя, пока сервис останавливается или остановлен: командный сервер уже закрыт или
+     * вот-вот закроется, и пересборка поднимет ядро-сироту, которое никто не закроет. Оно
+     * держит общий вход 127.0.0.1:2412, и следующий старт падает «bind: address already
+     * in use» (эмулятор 13.09.2026: стоп во время подъёма комнаты, комната встала через
+     * 46 с после стопа и пересобрала ядро). Нельзя и при погашенном туннеле — дома ядра нет.
+     */
+    fun rebuildAllowed(serviceStopping: Boolean, suspendedFlag: Boolean): Boolean =
+        !serviceStopping && !suspendedFlag
 }

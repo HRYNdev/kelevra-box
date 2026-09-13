@@ -94,6 +94,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private lateinit var commandServer: CommandServer
 
     private var receiverRegistered = false
+
+    /**
+     * Сервис останавливается или остановлен. Ставится первой строкой остановки, снимается
+     * командой на запуск. Пересборки ядра из потоков, переживших стоп (подъём комнаты,
+     * автомат), смотрят сюда — см. [TunnelFacts.rebuildAllowed].
+     */
+    @Volatile
+    private var serviceStopping = false
+
     private val receiver =
         object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
@@ -526,6 +535,22 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             result = quic.content
         }
 
+        // Под белым списком разрешённое оператором — напрямую, остальное — в комнату.
+        // И решение, и сам список без сети: вердикт уже известен, домены вшиты в APK,
+        // а ядро пересобирается и на пути нажатой кнопки.
+        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready &&
+            OlcRtcConfigPatch.wantsFinalViaRoom(
+                autoMode = Settings.autoModeEnabled,
+                manualRoom = Settings.autoModeManualRoom,
+                whitelistAgeMillis = NetworkModeDetector.whitelistAgeMillis(),
+                ttlMillis = AutoMode.HINT_TTL_MILLIS,
+            )
+        ) {
+            val rest = OlcRtcConfigPatch.finalViaRoom(result, OlcRtcParams.socksPort, BelyjSpisok.domeny(), BelyjSpisok.podseti())
+            OlcRtcConfigPatch.log(rest)
+            result = rest.content
+        }
+
         val layout = AutoModeExits.parse(result, OlcRtcParams.socksPort)
         val probe = ProbeInboundPatch.addProbeInbounds(result, layout.measurable)
         ProbeInboundPatch.log(probe)
@@ -754,6 +779,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * поэтому его тут нет.
      */
     private fun restartCore() {
+        // Последний рубеж для всех путей пересборки (подъём комнаты, её гашение, подъём
+        // туннеля): после стопа командный сервер закрыт, и новое ядро осталось бы сиротой
+        // на 127.0.0.1:2412.
+        // Флаг погашенного туннеля здесь не передаём: подъём туннеля зовёт пересборку ещё
+        // при поднятом флаге и снимает его только после.
+        if (!TunnelFacts.rebuildAllowed(serviceStopping, suspendedFlag = false)) {
+            error("сервис останавливается — ядро не пересобираю")
+        }
         val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) }
             ?: error("профиль не выбран")
         val content = File(profile.typed.path).readText()
@@ -911,6 +944,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // Пока поднимались, туннель успели погасить (ушли домой, выключили автомат).
                 // Комната без туннеля бессмысленна, и оставить её висеть нельзя — это ровно
                 // тот круглосуточный чужой видеозвонок, которого схема избегает.
+                serviceStopping -> {
+                    Log.i(TAG, "комната встала, но сервис за это время остановили ($reason) — гашу её, ядро не пересобираю")
+                    roomWanted = false
+                    stopOlcRtc()
+                    false
+                }
+
                 tunnelSuspended -> {
                     Log.i(TAG, "комната встала, но туннель за это время погасили ($reason) — гашу её")
                     roomWanted = false
@@ -1056,6 +1096,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun stopService() {
         if (status.value != Status.Started) return
         Log.i(TAG, "сервис останавливается")
+        serviceStopping = true
         status.value = Status.Stopping
         if (receiverRegistered) {
             service.unregisterReceiver(receiver)
@@ -1076,10 +1117,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             DefaultNetworkListener.stop(AutoMode)
             DefaultNetworkMonitor.stop()
-            closeService()
-            commandServer.apply {
-                close()
+            // Под тем же замком, что и пересборка ядра: если комната пересобирает ядро
+            // прямо сейчас, закрываем уже результат, а не до него.
+            synchronized(tunnelLock) {
+                closeService()
+                commandServer.apply {
+                    close()
 //                Seq.destroyRef(refnum)
+                }
             }
             stopOlcRtc()
             runCatching { CoreLog.stop() }
@@ -1107,6 +1152,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // не оставалось ни строки — то есть падение старта и падение ядра выглядели
         // одинаково: «сервис просто выключился».
         Log.w(TAG, "аварийный останов: $type${message?.let { " — $it" }.orEmpty()}")
+        serviceStopping = true
         Settings.startedByUser = false
         AutoMode.stop()
         ProbeSocket.useProtector(null)
@@ -1160,6 +1206,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         runCatching { AppLog.start(Application.application) }
         if (status.value != Status.Stopped) return Service.START_NOT_STICKY
         Log.i(TAG, "команда на запуск сервиса")
+        serviceStopping = false
         status.value = Status.Starting
         // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
         // идёт с первого же захода — и защита ей нужна ровно тогда же.

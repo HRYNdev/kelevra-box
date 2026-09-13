@@ -186,6 +186,244 @@ object OlcRtcConfigPatch {
         )
     }
 
+    /**
+     * Домены разрешённых сервисов, которых нет в снимке белого списка, но без которых
+     * сервис из списка не работает: картинки и статика лежат на своих доменах CDN.
+     *
+     * Лишнее имя здесь дорого: всё под ним пойдёт напрямую, и если оператор его не
+     * пропускает, оно умрёт там, где через комнату жило бы. Поэтому у каждого имени есть
+     * источник, один из двух:
+     *  - разбор ограничения: картинок WB (`wbbasket.ru`, `wbcontent.net`) и Ozon
+     *    (`ozonusercontent.com`, `ozone.ru`) в снимке нет, а сами сервисы в нём есть;
+     *  - сам снимок: в нём лежат поддомены этого имени (`sun1-13.userapi.com`,
+     *    `st.okcdn.ru`, `api.vk.ru`, `login.vk.com`, `gu-st.ru`, `id.sber.ru`,
+     *    `cdn.tbank.ru`, `imgproxy.cdn-tinkoff.ru`, `s.vtb.ru`, `ws-api.oneme.ru`),
+     *    то есть сервис разрешён, и мы расширяем его до всего домена.
+     */
+    val DOBAVKI_DOMENOV = listOf(
+        "wbbasket.ru", "wbcontent.net", "wb.ru", "wildberries.ru",
+        "ozon.ru", "ozone.ru", "ozonusercontent.com",
+        "userapi.com", "okcdn.ru", "vk.com", "vk.ru",
+        "yastatic.net",
+        "gu-st.ru",
+        "sber.ru", "tbank.ru", "cdn-tinkoff.ru", "vtb.ru",
+        "oneme.ru",
+    )
+
+    /**
+     * Приложения разрешённых сервисов — напрямую, что бы они ни открывали.
+     *
+     * Нужны там, где домена нет: приложение ходит по адресу без имени или на домен CDN,
+     * которого нет ни в снимке, ни в добавках. Имена пакетов сверены по карточкам RuStore.
+     *
+     * Браузеров здесь нет сознательно, в том числе «Яндекс Старта»: у браузера любой сайт —
+     * «его трафик», и всё вне списка ушло бы напрямую, в стену, вместо комнаты.
+     * Встроенные браузеры VK и MAX — та же цена в малом: ссылка наружу из них откроется
+     * напрямую. Заблокированное всё равно ловят наборы выше.
+     *
+     * Пакет на Android ядро узнаёт всегда: при платформенном интерфейсе sing-box ищет
+     * владельца соединения безусловно (`route/router.go`, `C.IsAndroid && platformInterface`),
+     * а приложение отвечает через `getConnectionOwnerUid` ([PlatformInterfaceWrapper]).
+     */
+    val PAKETY_RAZRESHYONNYE = listOf(
+        "ru.ozon.app.android",
+        "com.wildberries.ru",
+        "ru.rostel",
+        "ru.sberbankmobile",
+        "com.idamob.tinkoff.android",
+        "ru.vtb24.mobilebanking.android",
+        "ru.alfabank.mobile.android",
+        "ru.yandex.taxi",
+        "ru.yandex.yandexmaps",
+        "com.vkontakte.android",
+        "ru.oneme.app",
+    )
+
+    /**
+     * Включена ли комната по белому списку — то есть нужна ли правка [finalViaRoom].
+     *
+     * Два признака:
+     *  - комнату выбрал человек руками при выключенном автомате — он видит, что без неё
+     *    не ходит;
+     *  - определитель режима сети недавно сказал «белый список». Вердикт перемеряется раз
+     *    в минуту-полторы и забывается при смене сети, так что срок [ttlMillis] его зря
+     *    не держит.
+     * Комната, поднятая автоматом по другой причине (заблокирован только узел основного
+     * канала), конфиг не трогает: там `final = direct` верен, напрямую живо всё.
+     *
+     * Флажок ручной комнаты при включённом автомате — остаток прошлого выбора, не довод.
+     *
+     * @param whitelistAgeMillis сколько лет вердикту «белый список»; `null` — вердикта нет.
+     */
+    fun wantsFinalViaRoom(
+        autoMode: Boolean,
+        manualRoom: Boolean,
+        whitelistAgeMillis: Long?,
+        ttlMillis: Long,
+    ): Boolean = when {
+        !autoMode && manualRoom -> true
+        whitelistAgeMillis == null -> false
+        else -> whitelistAgeMillis in 0 until ttlMillis
+    }
+
+    /**
+     * Под белым списком: разрешённое оператором — напрямую, остальное — через комнату.
+     *
+     * Сервер отдаёт `route.final = direct`. Под белым списком это значит, что всё вне
+     * наборов умирает напрямую. Но и «всё вне наборов — в комнату» неверно: Озон, WB, банки
+     * оператор пропускает сам, и гнать их в видеозвонок на пару мегабит незачем.
+     *
+     * Белый список режет в два слоя: по адресу (пакеты к адресу вне списка пропадают) и у
+     * части операторов по имени в TLS (чужое имя на разрешённом адресе виснет после первых
+     * килобайт). Поэтому «разрешённое» здесь — прежде всего имя, а не адрес.
+     *
+     * Правила дописываются В КОНЕЦ, после всего, что в конфиге уже есть: перехвата DNS,
+     * частных адресов, рекламы, наборов с заблокированным (они и так ведут в селектор с
+     * комнатой), страховки ([LifelinePatch]). Порядок:
+     *  1. Отказ по UDP/443, если его нет выше, — до разрешённого: UDP под белым списком
+     *     режется почти весь, и QUIC к разрешённому сайту висел бы вместо перехода на TCP.
+     *  2. Домены белого списка и [DOBAVKI_DOMENOV] — напрямую, `domain_suffix`.
+     *  3. Приложения [PAKETY_RAZRESHYONNYE] — напрямую, отдельным правилом: поля внутри
+     *     одного правила sing-box складывает через «И», и вместе с доменами правило ловило
+     *     бы только их пересечение.
+     *  4. Прочий UDP — отказ. Комната возит только TCP, оператор этот UDP режет, а
+     *     разрешённое по имени и приложению уже ушло правилами выше. Отказ даёт
+     *     приложению сразу перейти на TCP вместо молчаливого таймаута.
+     *  5. `final` — в селектор, где лежит комната. Именно в селектор: когда комната умирает,
+     *     [AutoMode.roomLost] переключает селектор на основной канал без пересборки ядра, и
+     *     остаток уходит вместе с ним. Разрешённое от селектора не зависит вовсе —
+     *     правила 2 и 3 ведут в прямой выход, так что за границу оно не уйдёт.
+     *
+     *  3а. Живые подсети [podseti] — напрямую, но только для TCP-соединений БЕЗ имени
+     *     (приложение ходит по адресу): логическое `and` из `ip_cidr` и
+     *     `domain_regex: [".*"]` с `invert` — элемент домена на пустом имени отвечает «нет».
+     *     Соединение с чужим именем на разрешённом адресе сюда не попадает: у оператора
+     *     с фильтром по имени оно всё равно умрёт, и ему место в комнате. Набор — не
+     *     раздутый снимок (~30 тыс. записей на десятки млн адресов), а /24 из замеров
+     *     живых адресов через симку (`assets/belyj-spisok/podseti.txt`, ~600 записей).
+     *     Пустой набор — правила нет.
+     *
+     * Только в памяти и только пока комната стоит. Повторная правка ничего не меняет.
+     */
+    fun finalViaRoom(
+        content: String,
+        socksPort: Int,
+        domeny: Collection<String>,
+        podseti: Collection<String> = emptyList(),
+    ): Result =
+        runCatching { patchFinal(content, socksPort, domeny, podseti) }.getOrElse {
+            Result(content, "белый список: правка маршрутов не легла (${it.javaClass.simpleName}), конфиг как есть", false)
+        }
+
+    /**
+     * Снимок плюс добавки, без повторов и без имён, которые уже накрыты родителем:
+     * `domain_suffix: ozon.ru` ловит и `adv.ozon.ru`.
+     */
+    internal fun razreshyonnyeDomeny(izSpiska: Collection<String>): List<String> {
+        val all = (izSpiska.asSequence() + DOBAVKI_DOMENOV.asSequence())
+            .map { it.trim().trim('.').lowercase() }
+            .filter { it.contains('.') }
+            .toCollection(LinkedHashSet())
+        return all.filter { host ->
+            val labels = host.split('.')
+            (1 until labels.size - 1).none { labels.subList(it, labels.size).joinToString(".") in all }
+        }
+    }
+
+    private fun patchFinal(content: String, socksPort: Int, domeny: Collection<String>, podseti: Collection<String>): Result {
+        val root = JSONObject(content)
+        val outbounds = root.optJSONArray("outbounds") ?: return Result(content, "в конфиге нет выходов", false)
+        val socks = socksTags(outbounds, socksPort)
+        if (socks.isEmpty()) return Result(content, "выхода комнаты в конфиге нет, маршруты не трогаем", false)
+        val route = root.optJSONObject("route") ?: return Result(content, "в конфиге нет route", false)
+        val rules = route.optJSONArray("rules") ?: JSONArray().also { route.put("rules", it) }
+
+        val byTag = (0 until outbounds.length())
+            .mapNotNull { outbounds.optJSONObject(it) }
+            .associateBy { it.optString("tag") }
+        val target = finalTarget(rules, byTag, socks)
+        if (route.optString("final") == target && hasPackageRule(rules)) {
+            return Result(content, "белый список: правка уже стоит, final ведёт в «$target»", false)
+        }
+        val direct = byTag.values.firstOrNull { it.optString("type") == "direct" }?.optString("tag")
+            ?.takeIf { it.isNotBlank() }
+            ?: return Result(content, "прямого выхода в конфиге нет — разрешённое вести некуда, маршруты не трогаем", false)
+
+        val added = mutableListOf<String>()
+        if (!hasQuicReject(rules, rules.length())) {
+            rules.put(quicRejectRule())
+            added += "отказ udp/443"
+        }
+        val suffixes = razreshyonnyeDomeny(domeny)
+        if (suffixes.isNotEmpty()) {
+            rules.put(JSONObject().put("outbound", direct).put("domain_suffix", JSONArray(suffixes)))
+            added += "домены напрямую (${suffixes.size})"
+        }
+        rules.put(JSONObject().put("outbound", direct).put("package_name", JSONArray(PAKETY_RAZRESHYONNYE)))
+        added += "приложения напрямую (${PAKETY_RAZRESHYONNYE.size})"
+        val cidr = podseti.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (cidr.isNotEmpty()) {
+            rules.put(podsetiBezImeniRule(direct, cidr))
+            added += "живые подсети без имени напрямую (${cidr.size})"
+        }
+        rules.put(JSONObject().put("action", "reject").put("network", "udp"))
+        added += "прочий UDP — отказ"
+
+        val was = route.optString("final").ifBlank { "не задан" }
+        route.put("final", target)
+        return Result(
+            root.toString(),
+            "белый список: ${added.joinToString("; ")}; final: «$was» → «$target»",
+            true,
+        )
+    }
+
+    /** TCP к живой подсети и без имени — напрямую; см. пункт 3а у [finalViaRoom]. */
+    internal fun podsetiBezImeniRule(direct: String, cidr: List<String>): JSONObject = JSONObject()
+        .put("type", "logical")
+        .put("mode", "and")
+        .put(
+            "rules",
+            JSONArray()
+                .put(JSONObject().put("network", "tcp").put("ip_cidr", JSONArray(cidr)))
+                .put(JSONObject().put("domain_regex", JSONArray(listOf(".*"))).put("invert", true)),
+        )
+        .put("outbound", direct)
+
+    private fun hasPackageRule(rules: JSONArray): Boolean = (0 until rules.length()).any { i ->
+        val list = rules.optJSONObject(i)?.optJSONArray("package_name") ?: return@any false
+        (0 until list.length()).map { list.optString(it) } == PAKETY_RAZRESHYONNYE
+    }
+
+    /** Селектор, в котором лежит сокс комнаты; нет такого — сам сокс. */
+    private fun finalTarget(rules: JSONArray, byTag: Map<String, JSONObject>, socks: Set<String>): String {
+        fun holdsRoom(tag: String): Boolean {
+            val group = byTag[tag] ?: return false
+            if (group.optString("type") != "selector") return false
+            val members = group.optJSONArray("outbounds") ?: return false
+            return (0 until members.length()).any { members.optString(it) in socks }
+        }
+        // Первым смотрим туда, куда конфиг уже гонит наборы: это и есть группа, которую
+        // переключает автомат.
+        (0 until rules.length())
+            .mapNotNull { rules.optJSONObject(it)?.optString("outbound")?.takeIf(String::isNotBlank) }
+            .firstOrNull(::holdsRoom)
+            ?.let { return it }
+        byTag.keys.firstOrNull { it.isNotBlank() && holdsRoom(it) }?.let { return it }
+        return socks.first()
+    }
+
+    private fun socksTags(outbounds: JSONArray, socksPort: Int): Set<String> =
+        (0 until outbounds.length())
+            .mapNotNull { outbounds.optJSONObject(it) }
+            .filter {
+                it.optString("type") == "socks" &&
+                    it.optString("server") in LOOPBACK &&
+                    it.optInt("server_port") == socksPort
+            }
+            .mapNotNull { it.optString("tag").takeIf(String::isNotBlank) }
+            .toCollection(LinkedHashSet())
+
     private fun quicRejectRule(): JSONObject = JSONObject()
         .put("action", "reject")
         .put("network", "udp")
