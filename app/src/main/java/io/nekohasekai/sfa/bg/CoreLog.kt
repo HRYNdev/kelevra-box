@@ -156,6 +156,8 @@ object CoreLog {
                 thread(name = "socks-breaker", isDaemon = true) { AutoMode.roomLost("предохранитель") }
             }
             if (shtorm(bystroOtkazov, bystroSoed)) {
+                // Шторм в коротком окне — и повод спросить режим сети. Поток журнала не держим.
+                thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("шторм за ${BYSTRO_OKNO_MS / 1000} с") }
                 podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${BYSTRO_OKNO_MS / 1000} с")
             }
             val nizhnyaya = line.lowercase(Locale.US)
@@ -223,8 +225,28 @@ object CoreLog {
                 imena = imenaDlyaZapisi,
             )
         }
+        if (povodSprositRezhim(dolya, kodyDlyaZapisi)) {
+            thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("за окно $dolya%, причины $kody") }
+        }
         if (dolya >= DOLYA_TREVOGI && otk >= 10) podnyatTrevogu(teper, dolya, otk, "за окно")
     }
+
+    /**
+     * Повод спросить у автомата режим сети по итогам окна.
+     *
+     * Отказы в свой же сокс на петле (`connection refused`) и нерешённые имена не в счёт:
+     * первыми занимается предохранитель, вторые — про DNS, а не про то, что сеть рвёт
+     * соединения. Считаются таймауты, сбросы и прочее — так выглядит сеть, которая TCP
+     * пропускает, а дальше не пускает.
+     */
+    internal fun povodSprositRezhim(dolya: Int, kody: Map<String, Int>): Boolean {
+        if (dolya < DOLYA_TREVOGI) return false
+        val schitaem = kody.filterKeys { it != "otkaz_soedineniya" && it != "imya_ne_reshilos" }.values.sum()
+        return schitaem >= POVOD_MIN_OTKAZOV
+    }
+
+    /** Сколько отказов в окне нужно, чтобы стоило спрашивать режим сети. */
+    internal const val POVOD_MIN_OTKAZOV = 10
 
     /** Доля отказов в процентах; без соединений считаем, что отказывает всё. */
     internal fun dolyaOtkazov(otkazov: Int, soed: Int): Int = if (soed > 0) otkazov * 100 / soed else 100

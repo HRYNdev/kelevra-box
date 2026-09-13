@@ -46,6 +46,9 @@ import kotlin.random.Random
  *
  * Шаги 3 и 4 идут по одному соединению: рукопожатие и передача переиспользуют тот же
  * сокет. Всего за замер — **не больше двух TCP-соединений**, и они последовательные.
+ * Исключение одно: рукопожатие с канарейкой сломано. Тогда ещё до двух рукопожатий по
+ * очереди — к незаблокированному неразрешённому адресу и к разрешённому, — чтобы отличить
+ * DPI от белого списка, который пропускает TCP и рвёт TLS.
  *
  * ## Почему пробы такие скупые
  * Два ограничения, оба из практики, оба обязательные:
@@ -156,6 +159,40 @@ object NetworkModeDetector {
 
         /** Внешний резолвер для необязательного признака. */
         val externalResolver: String = "1.1.1.1",
+
+        /**
+         * Неразрешённый, но нигде не заблокированный адрес для рукопожатия — отличает
+         * белый список, который рвёт TLS, от DPI, который рвёт только запрещённые имена.
+         *
+         * Адрес из тех же неразрешённых точек ([unlisted]): в списке оператора его нет,
+         * а блокировать публичный резолвер некому. Имя — его собственное, сертификат
+         * настоящий, так что в обычной сети рукопожатие обязано вставать.
+         */
+        val unlistedTls: Endpoint = Endpoint(host = "dns.google", literals = listOf("8.8.8.8"), port = 443),
+
+        /**
+         * Передача больше окна «16–20 КБ» с того же незаблокированного неразрешённого
+         * адреса: таблица стилей страницы dns.google, 36 КБ (замер 13.09.2026). Путь
+         * версионный; сменится — сервер ответит коротким 404, а короткий ответ белого
+         * списка не доказывает (см. [NetworkModeDecision.FREEZE_PROOF_BYTES]).
+         */
+        val unlistedBulk: Endpoint = Endpoint(
+            host = "dns.google",
+            literals = listOf("8.8.8.8", "8.8.4.4"),
+            port = 443,
+            path = "/static/e6eca759/matter.min.css",
+        ),
+
+        /**
+         * Контроль к [unlistedBulk]: разрешённый адрес с ответом больше окна — главная
+         * страница max.ru, ~42 КБ (замер 13.09.2026; оба адреса есть в снимке оператора).
+         */
+        val allowedBulk: Endpoint = Endpoint(
+            host = "max.ru",
+            literals = listOf("155.212.204.140", "155.212.204.5"),
+            port = 443,
+            path = "/",
+        ),
     ) {
         companion object {
             val DEFAULT = Targets(
@@ -237,6 +274,13 @@ object NetworkModeDetector {
 
     /** Последний известный вердикт, если он был. Без сети и без побочных действий. */
     fun lastReport(): NetworkModeReport? = last
+
+    /**
+     * Сколько лет последнему вердикту «белый список»; `null` — такого вердикта сейчас нет.
+     * Без сети: зовётся при сборке конфига, в том числе на пути нажатой кнопки.
+     */
+    fun whitelistAgeMillis(): Long? =
+        last?.takeIf { it.mode == NetworkMode.Whitelist }?.let { System.currentTimeMillis() - it.atMillis }
 
     /**
      * Готовый вердикт про **эту** сеть, если он есть. Ничего не меряет и ничего не шлёт.
@@ -365,11 +409,44 @@ object NetworkModeDetector {
             tls.socket?.let { owned = it }
             signals = signals.copy(tlsCanary = tls.outcome)
 
+            // Рукопожатие с канарейкой сломано. Это DPI — или белый список, который TCP
+            // пропускает, а TLS рвёт. Различаем двумя рукопожатиями по очереди, и только
+            // здесь: в обычной сети до этой ветки не доходит, лишнего TLS там нет.
+            if (tls.outcome == ProbeOutcome.Reset || tls.outcome == ProbeOutcome.Stalled ||
+                tls.outcome == ProbeOutcome.Failed
+            ) {
+                owned.closeQuietly()
+                owned = null
+                signals = signals.copy(tlsUnlisted = handshakeOnce(network, targets.unlistedTls))
+                if (signals.tlsUnlisted == ProbeOutcome.Reset || signals.tlsUnlisted == ProbeOutcome.Stalled) {
+                    val attempts = controlTls(network, targets.allowed)
+                    signals = signals.copy(
+                        tlsAllowed = NetworkModeDecision.controlOutcome(attempts),
+                        tlsAllowedTries = attempts.size,
+                    )
+                }
+            }
+
             // Проба 3: короткая передача по этой же сессии.
             val session = tls.socket
             if (tls.outcome == ProbeOutcome.Ok && session != null) {
                 val bulk = readBulk(session, targets.canary.host, targets.canary.path)
                 signals = signals.copy(bulkCanary = bulk.outcome, bulkBytes = bulk.bytes)
+                // Поток с канарейкой встал после рукопожатия: DPI — или белый список,
+                // который пропускает первые 16–20 КБ. Только здесь, в обычной сети до
+                // этой ветки не доходит; цена — одна-две передачи до 64 КБ.
+                if (bulk.outcome == ProbeOutcome.Reset || bulk.outcome == ProbeOutcome.Stalled) {
+                    owned.closeQuietly()
+                    owned = null
+                    val unlisted = transferOnce(network, targets.unlistedBulk)
+                    signals = signals.copy(bulkUnlisted = unlisted.outcome, bulkUnlistedBytes = unlisted.bytes)
+                    Log.i(TAG, "передача с неразрешённого ${targets.unlistedBulk.host}: ${unlisted.outcome}, ${unlisted.bytes} Б")
+                    if (unlisted.outcome == ProbeOutcome.Reset || unlisted.outcome == ProbeOutcome.Stalled) {
+                        val allowed = transferOnce(network, targets.allowedBulk)
+                        signals = signals.copy(bulkAllowed = allowed.outcome, bulkAllowedBytes = allowed.bytes)
+                        Log.i(TAG, "передача с разрешённого ${targets.allowedBulk.host}: ${allowed.outcome}, ${allowed.bytes} Б")
+                    }
+                }
             }
 
             if (probeExternalDns) {
@@ -394,6 +471,67 @@ object NetworkModeDetector {
             tookMillis = SystemClock.elapsedRealtime() - started,
             note = NetworkModeDecision.explain(mode, signals),
         )
+    }
+
+    /**
+     * Одно рукопожатие: соединились, пожали руки, закрыли. Не соединились — исходом
+     * будет исход TCP (тишина, отказ), и за сломанный TLS он не сойдёт.
+     */
+    private fun handshakeOnce(network: Network, endpoint: Endpoint): ProbeOutcome {
+        val opened = openTcp(network, endpoint)
+        val plain = opened.socket ?: return opened.outcome
+        val tls = startTls(plain, endpoint.host, endpoint.port)
+        tls.socket.closeQuietly()
+        plain.closeQuietly()
+        return tls.outcome
+    }
+
+    /**
+     * Контрольное рукопожатие к разрешённому — по его адресам по очереди, пока одно не
+     * пройдёт. Одна осечка к одному адресу (стенд 13.09: потерянный SYN к ya.ru) раньше
+     * переворачивала вердикт в DpiBlacklist. Останавливаемся на первом прошедшем или после
+     * [NetworkModeDecision.CONTROL_CONFIDENT_TRIES] провалов именно TLS; не больше
+     * [MAX_CONTROL_TRIES] попыток — цена пробы остаётся в пределах трёх рукопожатий.
+     */
+    private fun controlTls(network: Network, endpoint: Endpoint): List<ProbeOutcome> {
+        val attempts = mutableListOf<ProbeOutcome>()
+        val addresses = endpoint.literals.ifEmpty { listOf("") }.take(MAX_CONTROL_TRIES)
+        for (literal in addresses) {
+            val one = if (literal.isEmpty()) endpoint else endpoint.copy(literals = listOf(literal))
+            val outcome = handshakeOnce(network, one)
+            attempts += outcome
+            Log.i(TAG, "контроль TLS ${one.host}@${literal.ifEmpty { "имя" }}: $outcome")
+            if (outcome == ProbeOutcome.Ok || outcome == ProbeOutcome.Answered) break
+            if (attempts.count { it == ProbeOutcome.Reset || it == ProbeOutcome.Stalled } >=
+                NetworkModeDecision.CONTROL_CONFIDENT_TRIES
+            ) {
+                break
+            }
+        }
+        return attempts
+    }
+
+    private const val MAX_CONTROL_TRIES = 3
+
+    /**
+     * Соединились, пожали руки, прочли короткую передачу, закрыли. Не соединились или
+     * рукопожатие не прошло — исход этой стадии и ноль байт.
+     */
+    private fun transferOnce(network: Network, endpoint: Endpoint): Bulk {
+        val opened = openTcp(network, endpoint)
+        val plain = opened.socket ?: return Bulk(opened.outcome, 0)
+        val tls = startTls(plain, endpoint.host, endpoint.port)
+        val session = tls.socket
+        return try {
+            if (tls.outcome != ProbeOutcome.Ok || session == null) {
+                Bulk(ProbeOutcome.Failed, 0)
+            } else {
+                readBulk(session, endpoint.host, endpoint.path)
+            }
+        } finally {
+            session.closeQuietly()
+            plain.closeQuietly()
+        }
     }
 
     /** Контрольная проба: открыли, посмотрели, сразу закрыли. */

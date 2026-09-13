@@ -399,6 +399,29 @@ class AutoModeLogicTest {
     }
 
     @Test
+    fun `проверки проходят, узел отвечает, а соединения массово падают — зовём`() {
+        assertTrue(AutoMode.askDetector(broken = false, cachedAgeMillis = null, nodeAnswers = true, suspect = true))
+        assertTrue(
+            AutoMode.askDetector(
+                broken = false,
+                cachedAgeMillis = AutoMode.HINT_TTL_MILLIS,
+                nodeAnswers = true,
+                suspect = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `массовые отказы не перемеряют свежий вердикт`() {
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = 60_000L, nodeAnswers = true, suspect = true))
+    }
+
+    @Test
+    fun `без массовых отказов ответ узла по-прежнему снимает вопрос`() {
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = null, nodeAnswers = true, suspect = false))
+    }
+
+    @Test
     fun `подсказка протухла — спрашиваем заново`() {
         // Иначе снятие ограничения на той же сети мы бы не заметили никогда: события
         // смены сети при этом не будет, а основной канал помечается мёртвым без пробы.
