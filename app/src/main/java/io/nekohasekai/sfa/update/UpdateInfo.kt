@@ -13,6 +13,8 @@ data class UpdateInfo(
     val releaseNotes: String?,
     val isPrerelease: Boolean,
     val fileSize: Long = 0,
+    /** SHA-256 файла из списка релизов; у старых релизов его нет. */
+    val sha256: String? = null,
 ) {
     fun toJson(): String = Json.encodeToString(this)
 

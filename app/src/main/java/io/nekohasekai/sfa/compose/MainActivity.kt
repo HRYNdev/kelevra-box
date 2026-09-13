@@ -142,6 +142,12 @@ import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.ktx.hasPermission
 import io.nekohasekai.sfa.ktx.launchCustomTab
 import io.nekohasekai.sfa.update.UpdateState
+import io.nekohasekai.sfa.update.IshodUstanovki
+import io.nekohasekai.sfa.update.UpdateInfo
+import io.nekohasekai.sfa.update.humanUpdateError
+import kotlinx.coroutines.CancellationException
+import io.nekohasekai.sfa.compose.component.UpdateFailedDialog
+import io.nekohasekai.sfa.compose.component.UpdateNeUdalosDialog
 import io.nekohasekai.sfa.utils.RemoteControlManager
 import io.nekohasekai.sfa.vendor.Vendor
 import kotlinx.coroutines.Dispatchers
@@ -673,6 +679,34 @@ class MainActivity :
         var downloadJob by remember { mutableStateOf<Job?>(null) }
         var downloadError by remember { mutableStateOf<String?>(null) }
 
+        // Одно действие на «Обновить» и на «Попробовать ещё раз».
+        val zapustitObnovlenie: (UpdateInfo) -> Unit = { info ->
+            UpdateState.setInstallStatus(UpdateState.InstallStatus.Idle)
+            showDownloadDialog = true
+            downloadError = null
+            downloadJob = scope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        Vendor.downloadAndInstall(this@MainActivity, info.downloadUrl)
+                    }
+                    showDownloadDialog = false
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w("KelevraObnovlenie", "обновление сорвалось до передачи системе: ${e.message}")
+                    // Сырой текст исключения бывал английским и служебным.
+                    // Окно скачивания закрывается: ошибку показывает отдельное окно с повтором.
+                    showDownloadDialog = false
+                    downloadError = if (e is io.nekohasekai.sfa.update.FaylNeGoden) {
+                        IshodUstanovki.tekst(io.nekohasekai.sfa.update.OtkazUstanovki.BITYY_FAYL)
+                    } else {
+                        humanUpdateError(e, this@MainActivity, R.string.update_download_failed)
+                    }
+                    Vendor.zaplanirovatPovtorObnovleniya(this@MainActivity)
+                }
+            }
+        }
+
         if (showUpdateDialog && shouldShowUpdateDialog) {
             UpdateAvailableDialog(
                 updateInfo = updateInfo!!,
@@ -680,23 +714,7 @@ class MainActivity :
                     Settings.lastShownUpdateVersion = updateInfo!!.versionCode
                     showUpdateDialog = false
                 },
-                onUpdate = {
-                    showDownloadDialog = true
-                    downloadError = null
-                    downloadJob = scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                Vendor.downloadAndInstall(
-                                    this@MainActivity,
-                                    updateInfo!!.downloadUrl,
-                                )
-                            }
-                            showDownloadDialog = false
-                        } catch (e: Exception) {
-                            downloadError = e.message
-                        }
-                    }
-                },
+                onUpdate = { zapustitObnovlenie(updateInfo!!) },
             )
         }
 
@@ -747,6 +765,43 @@ class MainActivity :
                         Text(stringResource(if (downloadError != null) R.string.ok else android.R.string.cancel))
                     }
                 },
+            )
+        }
+
+        // Исход установки. Отказ системы клался в состояние и не показывался нигде: окно
+        // скачивания закрывается сразу после передачи файла системе, и человек не узнавал,
+        // что версия осталась прежней.
+        val installStatus by UpdateState.installStatus
+        val otkazUstanovki = installStatus as? UpdateState.InstallStatus.Failed
+        // Скачивание сорвалось или файл не прошёл проверку. Раньше это был красный текст
+        // в окне скачивания с одной кнопкой «ОК», и перекачать можно было только через
+        // 15 минут по расписанию. Теперь окно как у отказа установки: повтор сразу.
+        val oshibkaSkachivaniya = downloadError
+        if (oshibkaSkachivaniya != null && !showDownloadDialog) {
+            val info = updateInfo
+            UpdateNeUdalosDialog(
+                zagolovok = "Обновление не скачалось",
+                tekst = oshibkaSkachivaniya,
+                instrukciya = null,
+                onRetry = if (info != null) {
+                    { zapustitObnovlenie(info) }
+                } else {
+                    null
+                },
+                onDismiss = { downloadError = null },
+            )
+        }
+
+        if (otkazUstanovki != null && !showDownloadDialog && downloadError == null) {
+            val info = updateInfo
+            UpdateFailedDialog(
+                otkaz = otkazUstanovki,
+                onRetry = if (info != null && IshodUstanovki.mozhnoPovtorit(otkazUstanovki.prichina)) {
+                    { zapustitObnovlenie(info) }
+                } else {
+                    null
+                },
+                onDismiss = { UpdateState.setInstallStatus(UpdateState.InstallStatus.Idle) },
             )
         }
 

@@ -13,8 +13,14 @@ import io.nekohasekai.sfa.compose.screen.qrscan.QRCodeCropArea
 import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.update.UpdateCheckException
 import io.nekohasekai.sfa.update.UpdateInfo
+import io.nekohasekai.sfa.update.IshodUstanovki
+import io.nekohasekai.sfa.update.OtkazUstanovki
 import io.nekohasekai.sfa.update.UpdateState
 import io.nekohasekai.sfa.update.UpdateTrack
+import kotlinx.coroutines.DelicateCoroutinesApi
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 
 object Vendor : VendorInterface {
     private const val TAG = "Vendor"
@@ -115,12 +121,30 @@ object Vendor : VendorInterface {
     }
 
     override suspend fun downloadAndInstall(context: android.content.Context, downloadUrl: String) {
+        val info = UpdateState.updateInfo.value?.takeIf { it.downloadUrl == downloadUrl }
+        UpdateState.setInstallStatus(UpdateState.InstallStatus.Idle)
         val cachedApk = UpdateState.cachedApkFile.value
-        val apkFile = if (cachedApk != null && cachedApk.exists() && cachedApk.length() > 0) {
+        // Скачанный заранее файл берётся, только если он той же версии и снова проходит
+        // проверку. Прежний признак «файл есть и не пустой» пропускал и недокачанный файл,
+        // и файл прошлой версии.
+        val apkFile = if (cachedApk != null && info != null && cachedApk.exists() &&
+            cachedApk.name == IshodUstanovki.imyaFayla(info.versionCode) &&
+            ApkDownloader.proverit(cachedApk, info) == null
+        ) {
             cachedApk
         } else {
-            ApkDownloader().use { it.download(downloadUrl) }
+            ApkDownloader().use { it.download(downloadUrl, info) }
         }
+        UpdateState.setInstallStatus(UpdateState.InstallStatus.Installing)
         ApkInstaller.install(context, apkFile)
+    }
+
+    @OptIn(DelicateCoroutinesApi::class)
+    override fun zaplanirovatPovtorObnovleniya(context: android.content.Context) {
+        val info = UpdateState.updateInfo.value
+        val app = context.applicationContext
+        GlobalScope.launch(Dispatchers.IO) {
+            UpdatePovtorWork.posleOtkaza(app, info, OtkazUstanovki.DRUGOE)
+        }
     }
 }
