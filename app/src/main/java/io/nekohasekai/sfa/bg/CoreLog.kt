@@ -12,6 +12,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.concurrent.thread
 
 /**
  * Запись журнала ЯДРА в файл, рядом с журналом приложения.
@@ -63,6 +64,22 @@ object CoreLog {
     /** С какой доли отказов окно считается бедой и просит отправку. */
     private const val DOLYA_TREVOGI = 15
 
+    /**
+     * Короткое окно для шторма, рядом с десятиминутным.
+     *
+     * Десятиминутное окно ловит медленную деградацию, но шторм в него не помещается.
+     * 12.09.2026 весь шторм уложился в два всплеска по десять секунд, до 1240 отказов
+     * в секунду, а тревога поднялась через пять минут — уже после того, как автомат
+     * сам переключился и всё починилось. Короткое окно ловит такое на первых секундах.
+     */
+    private const val BYSTRO_OKNO_MS = 30 * 1000L
+
+    /** Сколько отказов в коротком окне считать штормом. Штатно их там единицы. */
+    internal const val BYSTRO_POROG = 200
+
+    /** И какая при этом доля: сотня отказов на десятках тысяч соединений — не шторм. */
+    private const val BYSTRO_DOLYA = 50
+
     /** Реже одного раза в час по тревоге не шлём: journal и так уедет ночью. */
     private const val TREVOGA_NE_CHASHCHE_MS = 60 * 60 * 1000L
 
@@ -82,6 +99,18 @@ object CoreLog {
 
     @Volatile
     private var trevogaBylaV = 0L
+
+    /** Отказы в свой же сокс на петле: см. [SocksBreaker]. */
+    private val predohranitel = SocksBreaker()
+
+    @Volatile
+    private var bystroNachalo = 0L
+
+    @Volatile
+    private var bystroSoed = 0
+
+    @Volatile
+    private var bystroOtkazov = 0
 
     /** Коды причин отказа, по которым потом ставится диагноз на сервере. */
     private val PRICHINY = listOf(
@@ -106,9 +135,27 @@ object CoreLog {
     private fun uchest(line: String) {
         val teper = System.currentTimeMillis()
         if (oknoNachalo == 0L) oknoNachalo = teper
-        if (line.contains("inbound connection to")) oknoSoedineniy++
+        if (teper - bystroNachalo >= BYSTRO_OKNO_MS) {
+            bystroNachalo = teper
+            bystroSoed = 0
+            bystroOtkazov = 0
+        }
+        if (line.contains("inbound connection to")) {
+            oknoSoedineniy++
+            bystroSoed++
+        }
         if (line.contains("ERROR") && line.contains("open connection to")) {
             oknoOtkazov++
+            bystroOtkazov++
+            if (predohranitel.offer(line, teper)) {
+                Log.w(TAG, "шторм отказов в локальный сокс — увожу выход с мёртвой комнаты")
+                runCatching { Zapisi.perehod("predohranitel", "отказы в локальный сокс") }
+                // Переключение выхода — вызов в командный сервер; поток журнала им не держим.
+                thread(name = "socks-breaker", isDaemon = true) { AutoMode.roomLost("предохранитель") }
+            }
+            if (shtorm(bystroOtkazov, bystroSoed)) {
+                podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${BYSTRO_OKNO_MS / 1000} с")
+            }
             val nizhnyaya = line.lowercase(Locale.US)
             val kod = PRICHINY.firstOrNull { nizhnyaya.contains(it.second) }?.first ?: "prochee"
             oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
@@ -174,13 +221,29 @@ object CoreLog {
                 imena = imenaDlyaZapisi,
             )
         }
-        if (dolya >= DOLYA_TREVOGI && otk >= 10 && teper - trevogaBylaV > TREVOGA_NE_CHASHCHE_MS) {
-            trevogaBylaV = teper
-            Log.w(TAG, "отказов $dolya% за окно — отправляю журнал, не дожидаясь ночи")
-            runCatching { Zapisi.perehod("trevoga", "отказов $dolya% за окно, всего $otk") }
-            sohranitOknoSyrya(teper, dolya, otk)
-            LogUploadWork.otpravitSeychas()
-        }
+        if (dolya >= DOLYA_TREVOGI && otk >= 10) podnyatTrevogu(teper, dolya, otk, "за окно")
+    }
+
+    /** Доля отказов в процентах; без соединений считаем, что отказывает всё. */
+    internal fun dolyaOtkazov(otkazov: Int, soed: Int): Int = if (soed > 0) otkazov * 100 / soed else 100
+
+    /**
+     * Шторм ли это в коротком окне.
+     *
+     * Срабатывает ровно на пороге, а не на каждом отказе сверх него: одна тревога на окно.
+     * Доля нужна, чтобы сотня отказов на десятках тысяч живых соединений тревогой не была.
+     */
+    internal fun shtorm(otkazov: Int, soed: Int): Boolean =
+        otkazov == BYSTRO_POROG && dolyaOtkazov(otkazov, soed) >= BYSTRO_DOLYA
+
+    /** Одна тревога на оба окна: короткое и десятиминутное делят общий предел частоты. */
+    private fun podnyatTrevogu(teper: Long, dolya: Int, otk: Int, gde: String) {
+        if (teper - trevogaBylaV <= TREVOGA_NE_CHASHCHE_MS) return
+        trevogaBylaV = teper
+        Log.w(TAG, "отказов $dolya% $gde — отправляю журнал, не дожидаясь ночи")
+        runCatching { Zapisi.perehod("trevoga", "отказов $dolya% $gde, всего $otk") }
+        sohranitOknoSyrya(teper, dolya, otk)
+        LogUploadWork.otpravitSeychas("по тревоге")
     }
 
     /**
