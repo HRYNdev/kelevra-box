@@ -142,12 +142,53 @@ object OlcRtcWatchdog {
         }
     }
 
+    /** Как часто в паузе между пробами спрашивать само ядро, живо ли оно. */
+    private const val SOCKS_WATCH_STEP_MILLIS = 1_000L
+
+    /** Про выход ядра уже сказали — не повторять каждую секунду, пока проба не отработает. */
+    @Volatile
+    private var socksLostReported = false
+
+    /**
+     * Присмотр прямо сейчас гасит и поднимает ядро. Сервис по нему не запускает второй
+     * подъём поверх: `OlcRtcCore.start` гасит чужой запуск, и два подъёма рвали друг друга.
+     */
+    @Volatile
+    var restarting = false
+        private set
+
+    /**
+     * Пауза между пробами — с присмотром за самим ядром.
+     *
+     * Горутина olcRTC может выйти сама: сокс закрывается, а состояние остаётся Ready.
+     * Раньше это находила только проба через пять секунд и три отказа подряд — около
+     * пятнадцати секунд, за которые в мёртвый порт уходили тысячи соединений. Теперь
+     * выход уводится в пределах секунды, а проба дальше решает, поднимать ли заново.
+     */
+    private fun sleepWatchingSocks(): Boolean {
+        var left = CHECK_INTERVAL_MILLIS
+        while (left > 0) {
+            val step = minOf(SOCKS_WATCH_STEP_MILLIS, left)
+            if (!sleepQuietly(step)) return false
+            left -= step
+            if (OlcRtcCore.state is OlcRtcCore.State.Ready && !OlcRtcCore.isRunning()) {
+                if (!socksLostReported) {
+                    socksLostReported = true
+                    Log.w(TAG, "ядро комнаты вышло само — увожу выход, не дожидаясь пробы")
+                    AutoMode.roomLost("ядро комнаты вышло само")
+                }
+                return true
+            }
+        }
+        return true
+    }
+
     private fun loop() {
         var failures = 0
         var lastRestartAt = 0L
 
         while (active) {
-            if (!sleepQuietly(CHECK_INTERVAL_MILLIS)) return
+            if (!sleepWatchingSocks()) return
 
             // Тумблер выключили посреди сессии: работающий канал не рвём, но и
             // поднимать его больше не наше дело.
@@ -173,6 +214,7 @@ object OlcRtcWatchdog {
             if (health is OlcRtcCore.Health.Live) {
                 failures = 0
                 deadInARow = 0
+                socksLostReported = false
                 if (restarts > 0 && lastRestartAt > 0 &&
                     SystemClock.elapsedRealtime() - lastRestartAt > HEALTHY_RESET_MILLIS
                 ) {
@@ -196,6 +238,9 @@ object OlcRtcWatchdog {
                 gaveUp = true
                 note = "подняли $MAX_RESTARTS раз подряд, канал не встал — больше не пробуем"
                 Log.w(TAG, note)
+                // Сдаёмся — значит комнаты не будет. Выход мог вернуться на неё заходом
+                // автомата, пока ядро числилось поднятым: уводим, иначе он там и останется.
+                AutoMode.roomLost("присмотр сдался")
                 active = false
                 return
             }
@@ -215,12 +260,23 @@ object OlcRtcWatchdog {
      *
      * @return false, если по дороге нас выключили — тогда из цикла надо просто выйти.
      */
-    private fun restartCore(reason: String): Boolean {
+    private fun restartCore(reason: String): Boolean = try {
+        restartCore0(reason)
+    } finally {
+        restarting = false
+    }
+
+    private fun restartCore0(reason: String): Boolean {
         restarts++
         val pause = BACKOFF_MILLIS[(restarts - 1).coerceAtMost(BACKOFF_MILLIS.size - 1)]
         note = "канал упал ($reason), поднимаю заново — попытка $restarts из $MAX_RESTARTS"
         Log.w(TAG, "$note, пауза $pause мс")
 
+        // Сначала уводим выход, потом гасим. Раньше порядок был обратный, и всё время
+        // подъёма — пауза плюс до трёх попыток по 25 секунд — трафик получал отказ за
+        // отказом в погашенный сокс.
+        AutoMode.roomLost("присмотр поднимает комнату заново: $reason")
+        restarting = true
         runCatching { OlcRtcCore.stop() }
             .onFailure { Log.w(TAG, "остановка перед подъёмом сорвалась: ${it.message}") }
         // Ядро погашено нарочно и сейчас встанет заново. По одному только состоянию это
@@ -238,6 +294,7 @@ object OlcRtcWatchdog {
 
         when (result) {
             is OlcRtcCore.State.Ready -> {
+                socksLostReported = false
                 note = "канал поднят заново (попытка $restarts)"
                 Log.i(TAG, "$note: SOCKS5 на 127.0.0.1:${params.socksPort}")
                 // Сразу спрашиваем: «поднят» без прошедших байтов — это ещё не канал.

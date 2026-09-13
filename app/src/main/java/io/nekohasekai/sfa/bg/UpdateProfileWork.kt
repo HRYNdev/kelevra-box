@@ -3,8 +3,10 @@ package io.nekohasekai.sfa.bg
 import android.content.Context
 import android.util.Log
 import androidx.work.BackoffPolicy
+import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequest
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -53,6 +55,14 @@ class UpdateProfileWork {
                     .apply {
                         if (minInitDelay > 0) setInitialDelay(minInitDelay, TimeUnit.SECONDS)
                         setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.MINUTES)
+                        // Без сети обновлять профиль нечем, а попытка всё равно считается
+                        // и уводит работу в откат. Требования к сети у этой работы не было
+                        // вовсе — в отличие от отправки журнала рядом.
+                        setConstraints(
+                            Constraints.Builder()
+                                .setRequiredNetworkType(NetworkType.CONNECTED)
+                                .build(),
+                        )
                     }
                     .build(),
             )
