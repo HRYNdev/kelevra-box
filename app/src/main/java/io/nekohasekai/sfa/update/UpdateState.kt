@@ -20,7 +20,7 @@ object UpdateState {
         data object Idle : InstallStatus()
         data object Installing : InstallStatus()
         data object Success : InstallStatus()
-        data class Failed(val error: String) : InstallStatus()
+        data class Failed(val error: String, val prichina: OtkazUstanovki = OtkazUstanovki.DRUGOE) : InstallStatus()
     }
 
     val installStatus = mutableStateOf<InstallStatus>(InstallStatus.Idle)
@@ -29,6 +29,13 @@ object UpdateState {
         updateInfo.value = info
         hasUpdate.value = info != null
         saveToCache(info)
+        // Скачанный файл другой версии ставить нельзя. Раньше он брался по одному признаку
+        // «файл есть и не пустой», и после выхода следующей версии ставилась прежняя.
+        val cached = cachedApkFile.value
+        if (cached != null && (info == null || cached.name != IshodUstanovki.imyaFayla(info.versionCode))) {
+            cachedApkFile.value = null
+            Settings.cachedApkPath = ""
+        }
     }
 
     fun setInstallStatus(status: InstallStatus) {
@@ -68,7 +75,7 @@ object UpdateState {
         val apkPath = Settings.cachedApkPath
         if (apkPath.isNotBlank()) {
             val apkFile = File(apkPath)
-            if (apkFile.exists() && apkFile.length() > 0) {
+            if (apkFile.exists() && apkFile.length() > 0 && apkFile.name == IshodUstanovki.imyaFayla(info.versionCode)) {
                 cachedApkFile.value = apkFile
             } else {
                 Settings.cachedApkPath = ""

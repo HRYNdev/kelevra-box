@@ -221,6 +221,8 @@ object Settings {
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }
+    /** Отказы установки подряд на одну версию, «номер версии:отказов». */
+    var updateInstallFailures by dataStore.string(SettingsKey.UPDATE_INSTALL_FAILURES) { "" }
 
     fun serviceClass(): Class<*> = when (serviceMode) {
         ServiceMode.VPN -> VPNService::class.java

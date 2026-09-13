@@ -28,4 +28,7 @@ interface VendorInterface {
     suspend fun verifySilentInstallMethod(method: String): Boolean = false
 
     suspend fun downloadAndInstall(context: android.content.Context, downloadUrl: String): Unit = throw UnsupportedOperationException("Not supported in this flavor")
+
+    /** Скачивание или передача файла сорвались до ответа системы: поставить повтор по расписанию. */
+    fun zaplanirovatPovtorObnovleniya(context: android.content.Context) {}
 }
