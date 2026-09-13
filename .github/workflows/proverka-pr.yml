@@ -1,0 +1,98 @@
+name: proverka-pr
+
+# У приложения было четыре сценария CI (build, release, warm-core, build-olcrtc), и ни один
+# не висел на pull_request: только ручной запуск, тег v* и пуш в dev. PR мержились по одному
+# локальному прогону gradle в руке того, кто их открывал — без единой машинной проверки.
+# Замерено 12.09.2026: у PR #10 и #11 check-runs: 0.
+#
+# Флейвор other компилируется только с ядром (app/build.gradle.kts:
+# "otherImplementation"(files("libs/libbox.aar")) ), поэтому просто "gradlew test" на PR
+# не соберётся — ядро нужно взять. Копировать сюда сборку ядра из release.yml (90+ строк,
+# форк olcrtc, патч xhttp, кеш по SHA) — плодить второй источник истины, который разъедется
+# при первой же правке release.yml. Вместо этого job ядра ПЕРЕИСПОЛЬЗУЕТ release.yml через
+# workflow_call с core_only: true — тем же способом, что уже делает warm-core.yml.
+on:
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  # Строим только ядро (core_only: true) — job release внутри release.yml не стартует,
+  # APK на PR не нужен и не собирается.
+  yadro:
+    uses: ./.github/workflows/release.yml
+    with:
+      core_only: true
+    # Права нужны те же, что объявляет job release внутри вызванного сценария
+    # (contents: write) — иначе вызов реального workflow отклоняется на старте
+    # (startup_failure без строки лога), это уже поймано в warm-core.yml 11.08.2026.
+    permissions:
+      contents: write
+
+  testy:
+    needs: yadro
+    # Матрица ядра в release.yml собирает два варианта, main и legacy, с fail-fast: false,
+    # и legacy имеет ПРАВО упасть (API 21 старше того, что ждёт olcrtc). Юнит-тестам нужен
+    # только main (libbox.aar) — падение legacy не должно останавливать эту проверку.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      # Тот же путь чекаута, что во всех остальных сценариях этого репозитория —
+      # gradle-проект ожидает себя именно в sing-box-for-android/.
+      - name: Checkout app
+        uses: actions/checkout@v4
+        with:
+          path: sing-box-for-android
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Тот же ключ и restore-keys, что у Gradle-кеша в release.yml (hashFiles считается
+      # от GITHUB_WORKSPACE, а не от working-directory — тот же путь чекаута даёт тот же
+      # хеш): это тот же кеш, прогретый теми же прогонами, а не отдельный холодный.
+      - name: Кеш Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      # Ядро из job yadro. Артефакт core-libbox лежит одним файлом libbox.aar —
+      # download-artifact кладёт СОДЕРЖИМОЕ артефакта в path, имя файла внутри не меняет.
+      - name: Забрать ядро
+        uses: actions/download-artifact@v4
+        with:
+          name: core-libbox
+          path: sing-box-for-android/app/libs
+
+      - name: Проверка что ядро на месте
+        run: |
+          ls -la sing-box-for-android/app/libs/
+          test -f sing-box-for-android/app/libs/libbox.aar || { echo "ОШИБКА: ядро не приехало"; exit 1; }
+
+      # LC_ALL=C.UTF-8: в репозитории есть классы с кириллицей в имени, на POSIX-локали
+      # раннера gradle ловит InvalidPathException (замерено 12.09.2026).
+      - name: Юнит-тесты (флейвор other)
+        working-directory: sing-box-for-android
+        env:
+          LC_ALL: C.UTF-8
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:testOtherDebugUnitTest --no-daemon
+
+      - name: Upload отчёт тестов
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-other
+          path: sing-box-for-android/app/build/reports/tests/testOtherDebugUnitTest/
+          if-no-files-found: warn
