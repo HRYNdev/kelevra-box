@@ -225,6 +225,13 @@ object OlcRtcConfigPatch {
      * владельца соединения безусловно (`route/router.go`, `C.IsAndroid && platformInterface`),
      * а приложение отвечает через `getConnectionOwnerUid` ([PlatformInterfaceWrapper]).
      */
+    /**
+     * Порты, на которых имя у соединения обязано было быть: HTTP несёт `Host`, TLS несёт SNI.
+     * Пустое имя здесь — не «имени нет», а «распознать не удалось», и такое соединение идёт
+     * в комнату, а не напрямую. См. пункт 3а у [finalViaRoom].
+     */
+    val PORTY_S_IMENEM = listOf(80, 443)
+
     val PAKETY_RAZRESHYONNYE = listOf(
         "ru.ozon.app.android",
         "com.wildberries.ru",
@@ -297,6 +304,13 @@ object OlcRtcConfigPatch {
      *  3а. Живые подсети [podseti] — напрямую, но только для TCP-соединений БЕЗ имени
      *     (приложение ходит по адресу): логическое `and` из `ip_cidr` и
      *     `domain_regex: [".*"]` с `invert` — элемент домена на пустом имени отвечает «нет».
+     *     Пустое имя приходит ДВУМЯ путями: имени и правда нет — или распознать не удалось
+     *     (рваный ClientHello, обрыв, таймаут, не-TLS на 443). Ядро в обоих случаях оставляет
+     *     имя пустым и соединение не роняет, а рваный ClientHello — как раз почерк того
+     *     трафика, которому комната и нужна. Различить эти два пути можно только по порту:
+     *     на [PORTY_S_IMENEM] имя обязано было быть, значит пустое имя там — провал
+     *     распознавания, и такое соединение идёт в комнату (при неуверенности — комната).
+     *     Свои приложения это не задевает: они ушли напрямую правилом выше по `package_name`.
      *     Соединение с чужим именем на разрешённом адресе сюда не попадает: у оператора
      *     с фильтром по имени оно всё равно умрёт, и ему место в комнате. Набор — не
      *     раздутый снимок (~30 тыс. записей на десятки млн адресов), а /24 из замеров
@@ -378,7 +392,7 @@ object OlcRtcConfigPatch {
         )
     }
 
-    /** TCP к живой подсети и без имени — напрямую; см. пункт 3а у [finalViaRoom]. */
+    /** TCP к живой подсети и без имени, кроме веб-портов — напрямую; см. пункт 3а у [finalViaRoom]. */
     internal fun podsetiBezImeniRule(direct: String, cidr: List<String>): JSONObject = JSONObject()
         .put("type", "logical")
         .put("mode", "and")
@@ -386,7 +400,8 @@ object OlcRtcConfigPatch {
             "rules",
             JSONArray()
                 .put(JSONObject().put("network", "tcp").put("ip_cidr", JSONArray(cidr)))
-                .put(JSONObject().put("domain_regex", JSONArray(listOf(".*"))).put("invert", true)),
+                .put(JSONObject().put("domain_regex", JSONArray(listOf(".*"))).put("invert", true))
+                .put(JSONObject().put("port", JSONArray(PORTY_S_IMENEM)).put("invert", true)),
         )
         .put("outbound", direct)
 
