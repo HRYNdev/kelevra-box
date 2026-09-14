@@ -272,13 +272,6 @@ object OlcRtcConfigPatch {
      * владельца соединения безусловно (`route/router.go`, `C.IsAndroid && platformInterface`),
      * а приложение отвечает через `getConnectionOwnerUid` ([PlatformInterfaceWrapper]).
      */
-    /**
-     * Порты, на которых имя у соединения обязано было быть: HTTP несёт `Host`, TLS несёт SNI.
-     * Пустое имя здесь — не «имени нет», а «распознать не удалось», и такое соединение идёт
-     * в комнату, а не напрямую. См. пункт 3а у [finalViaRoom].
-     */
-    val PORTY_S_IMENEM = listOf(80, 443)
-
     val PAKETY_RAZRESHYONNYE = listOf(
         "ru.ozon.app.android",
         "com.wildberries.ru",
@@ -348,21 +341,16 @@ object OlcRtcConfigPatch {
      *     остаток уходит вместе с ним. Разрешённое от селектора не зависит вовсе —
      *     правила 2 и 3 ведут в прямой выход, так что за границу оно не уйдёт.
      *
-     *  3а. Живые подсети [podseti] — напрямую, но только для TCP-соединений БЕЗ имени
-     *     (приложение ходит по адресу): логическое `and` из `ip_cidr` и
-     *     `domain_regex: [".*"]` с `invert` — элемент домена на пустом имени отвечает «нет».
-     *     Пустое имя приходит ДВУМЯ путями: имени и правда нет — или распознать не удалось
-     *     (рваный ClientHello, обрыв, таймаут, не-TLS на 443). Ядро в обоих случаях оставляет
-     *     имя пустым и соединение не роняет, а рваный ClientHello — как раз почерк того
-     *     трафика, которому комната и нужна. Различить эти два пути можно только по порту:
-     *     на [PORTY_S_IMENEM] имя обязано было быть, значит пустое имя там — провал
-     *     распознавания, и такое соединение идёт в комнату (при неуверенности — комната).
-     *     Свои приложения это не задевает: они ушли напрямую правилом выше по `package_name`.
-     *     Соединение с чужим именем на разрешённом адресе сюда не попадает: у оператора
-     *     с фильтром по имени оно всё равно умрёт, и ему место в комнате. Набор — не
-     *     раздутый снимок (~30 тыс. записей на десятки млн адресов), а /24 из замеров
-     *     живых адресов через симку (`assets/belyj-spisok/podseti.txt`, ~600 записей).
-     *     Пустой набор — правила нет.
+     * [podseti] сейчас не отпускает напрямую ничего: раньше живые подсети пускали
+     * TCP-соединения БЕЗ имени напрямую, но только на портах, отличных от [80, 443] —
+     * в расчёте, что на 80/443 имя обязано было прийти (HTTP несёт `Host`, TLS — SNI),
+     * а на остальных портах пустое имя считалось «имени и не было». Расчёт не сошёлся:
+     * TLS на 8443, 993 и прочих нестандартных портах тоже несёт SNI, и рваный ClientHello
+     * там даёт то же пустое имя, что и настоящий провал распознавания на 443, — отличить
+     * их по порту нельзя, а список портов, где имя обязано быть, было бы бессмысленно
+     * пополнять: конкретный порт всегда можно унести НЕ туда просто заведя новое
+     * TLS-приложение. Значит пустое имя ненадёжно на любом порту, и правило снято
+     * целиком; при неуверенности — комната.
      *
      * Только в памяти и только пока комната стоит. Повторная правка ничего не меняет.
      */
@@ -422,11 +410,8 @@ object OlcRtcConfigPatch {
         }
         rules.put(JSONObject().put("outbound", direct).put("package_name", JSONArray(PAKETY_RAZRESHYONNYE)))
         added += "приложения напрямую (${PAKETY_RAZRESHYONNYE.size})"
-        val cidr = podseti.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        if (cidr.isNotEmpty()) {
-            rules.put(podsetiBezImeniRule(direct, cidr))
-            added += "живые подсети без имени напрямую (${cidr.size})"
-        }
+        // [podseti] сюда сознательно не подмешиваем: пустое имя ненадёжно на любом порту,
+        // см. KDoc у finalViaRoom. Параметр принимаем ради сигнатуры вызова из BoxService.
         rules.put(JSONObject().put("action", "reject").put("network", "udp"))
         added += "прочий UDP — отказ"
 
@@ -438,19 +423,6 @@ object OlcRtcConfigPatch {
             true,
         )
     }
-
-    /** TCP к живой подсети и без имени, кроме веб-портов — напрямую; см. пункт 3а у [finalViaRoom]. */
-    internal fun podsetiBezImeniRule(direct: String, cidr: List<String>): JSONObject = JSONObject()
-        .put("type", "logical")
-        .put("mode", "and")
-        .put(
-            "rules",
-            JSONArray()
-                .put(JSONObject().put("network", "tcp").put("ip_cidr", JSONArray(cidr)))
-                .put(JSONObject().put("domain_regex", JSONArray(listOf(".*"))).put("invert", true))
-                .put(JSONObject().put("port", JSONArray(PORTY_S_IMENEM)).put("invert", true)),
-        )
-        .put("outbound", direct)
 
     private fun hasPackageRule(rules: JSONArray): Boolean = (0 until rules.length()).any { i ->
         val list = rules.optJSONObject(i)?.optJSONArray("package_name") ?: return@any false
