@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.nio.charset.StandardCharsets
@@ -68,10 +69,31 @@ class ImenaSaytovTest {
      * на порту остаются сокеты в TIME_WAIT. На Linux без этого флага следующий тест не
      * может занять порт и падает с BindException; на Windows занимает, поэтому локально
      * зелёное и красное в CI.
+     *
+     * Замер 14.09.2026 на чистом origin/dev: SO_REUSEADDR снижает частоту BindException,
+     * но не убирает гонку до нуля (5 из 11 прогонов класса падали) — предыдущий тест уже
+     * вызвал close() в finally, но ОС ещё не освободила 127.0.0.1:9090 к моменту bind()
+     * следующего теста. Страховка: до 5 попыток с паузой 100мс; если порт не освободился
+     * и за них — падаем честно, с портом и числом попыток в тексте, а не молча.
      */
-    private fun zanyatPort(): ServerSocket = ServerSocket().apply {
-        reuseAddress = true
-        bind(InetSocketAddress("127.0.0.1", 9090))
+    private fun zanyatPort(): ServerSocket {
+        val maxPopytok = 5
+        var poslednyaya: BindException? = null
+        for (popytka in 1..maxPopytok) {
+            try {
+                return ServerSocket().apply {
+                    reuseAddress = true
+                    bind(InetSocketAddress("127.0.0.1", 9090))
+                }
+            } catch (e: BindException) {
+                poslednyaya = e
+                if (popytka < maxPopytok) Thread.sleep(100)
+            }
+        }
+        throw BindException(
+            "не смог занять 127.0.0.1:9090 за $maxPopytok попыток по 100мс — " +
+                "порт ещё держит предыдущий тест (TIME_WAIT)",
+        ).apply { initCause(poslednyaya) }
     }
 
     /**
