@@ -144,42 +144,73 @@ class OlcRtcFinalPatchTest {
 
     private val podseti = listOf("5.255.255.0/24", "185.73.193.0/24")
 
-    @Test
-    fun `живые подсети — только TCP без имени, после приложений и до отказа UDP`() {
-        val before = rules(config()).size
-        val added = rules(OlcRtcConfigPatch.finalViaRoom(config(), socksPort, spisok, podseti).content).drop(before)
-        assertEquals(4, added.size)
-        assertTrue(added[1].has("package_name"))
-        val rule = added[2]
-        assertEquals("logical", rule.getString("type"))
-        assertEquals("and", rule.getString("mode"))
-        assertEquals("direct", rule.getString("outbound"))
-        val inner = rule.getJSONArray("rules")
-        assertEquals(3, inner.length())
-        val ip = inner.getJSONObject(0)
-        assertEquals("tcp", ip.getString("network"))
-        assertEquals(podseti, strings(ip.getJSONArray("ip_cidr")))
-        val noName = inner.getJSONObject(1)
-        assertEquals(listOf(".*"), strings(noName.getJSONArray("domain_regex")))
-        assertTrue("без invert правило ловило бы соединения С именем", noName.getBoolean("invert"))
-        assertEquals("reject", added[3].getString("action"))
+    /**
+     * Живой матчер поверх сгенерированных правил: тот же порядок и те же поля
+     * (network/ip_cidr, domain_suffix, domain_regex+invert, port+invert, package_name,
+     * reject udp), какими их строит [OlcRtcConfigPatch]. Отвечает — уходит ли TCP-соединение
+     * с данным именем (`null` — пустое, распознать не удалось) и портом напрямую, минуя
+     * комнату, до того как дойдёт до `final`.
+     */
+    private fun napryamuyu(added: List<JSONObject>, direct: String, ip: String, port: Int, host: String?): Boolean {
+        fun leaf(rule: JSONObject): Boolean {
+            rule.optJSONArray("ip_cidr")?.let { cidr ->
+                val hit = strings(cidr).any { net ->
+                    val prefix = net.substringBefore('/').substringBeforeLast('.')
+                    ip.startsWith("$prefix.")
+                }
+                return hit != rule.optBoolean("invert", false)
+            }
+            rule.optJSONArray("domain_regex")?.let {
+                return (host != null) != rule.optBoolean("invert", false)
+            }
+            rule.optJSONArray("port")?.let {
+                val hit = (0 until it.length()).any { i -> it.getInt(i) == port }
+                return hit != rule.optBoolean("invert", false)
+            }
+            return false
+        }
+        for (rule in added) {
+            val matched = when {
+                rule.optString("type") == "logical" -> {
+                    val inner = rule.getJSONArray("rules")
+                    (0 until inner.length()).all { leaf(inner.getJSONObject(it)) }
+                }
+                rule.has("domain_suffix") -> host != null && strings(rule.getJSONArray("domain_suffix")).any { host == it || host.endsWith(".$it") }
+                else -> false
+            }
+            if (matched) return rule.optString("outbound") == direct
+        }
+        return false
     }
 
     @Test
-    fun `пустое имя на 80 и 443 — это провал распознавания, а не отсутствие имени, напрямую не пускаем`() {
+    fun `подсети дали, но правила по адресу больше нет — второго списка портов не заводим`() {
         val before = rules(config()).size
         val added = rules(OlcRtcConfigPatch.finalViaRoom(config(), socksPort, spisok, podseti).content).drop(before)
-        val inner = added[2].getJSONArray("rules")
-        val port = (0 until inner.length()).map { inner.getJSONObject(it) }
-            .firstOrNull { it.has("port") }
-        assertNotNull(
-            "без порта в правиле рваный ClientHello (имя не распозналось) уходил бы мимо комнаты",
-            port,
+        assertEquals(3, added.size)
+        assertTrue(added.none { it.has("ip_cidr") || it.optString("type") == "logical" || it.has("port") })
+    }
+
+    @Test
+    fun `нераспознанное имя к живой подсети на 8443 уходит в комнату — было наоборот, порт значения не имеет`() {
+        val added = rules(OlcRtcConfigPatch.finalViaRoom(config(), socksPort, spisok, podseti).content)
+        assertFalse(
+            "8443 не входил в старый PORTY_S_IMENEM=[80,443] — трафик утекал напрямую",
+            napryamuyu(added, "direct", "5.255.255.7", 8443, host = null),
         )
-        assertEquals(listOf(80, 443), (0 until port!!.getJSONArray("port").length()).map {
-            port.getJSONArray("port").getInt(it)
-        })
-        assertTrue("без invert правило, наоборот, гнало бы напрямую только веб", port.getBoolean("invert"))
+    }
+
+    @Test
+    fun `пустое имя на 443 по-прежнему уходит в комнату — #16 не сломан`() {
+        val added = rules(OlcRtcConfigPatch.finalViaRoom(config(), socksPort, spisok, podseti).content)
+        assertFalse(napryamuyu(added, "direct", "5.255.255.7", 443, host = null))
+    }
+
+    @Test
+    fun `распознанное разрешённое имя по-прежнему уходит напрямую — правка не выключает белый список`() {
+        val added = rules(OlcRtcConfigPatch.finalViaRoom(config(), socksPort, spisok, podseti).content)
+        assertTrue(napryamuyu(added, "direct", "203.0.113.9", 443, host = "adv.ozon.ru"))
+        assertTrue(napryamuyu(added, "direct", "203.0.113.9", 8443, host = "adv.ozon.ru"))
     }
 
     @Test
