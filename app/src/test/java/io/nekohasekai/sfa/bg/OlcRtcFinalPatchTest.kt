@@ -155,7 +155,7 @@ class OlcRtcFinalPatchTest {
         assertEquals("and", rule.getString("mode"))
         assertEquals("direct", rule.getString("outbound"))
         val inner = rule.getJSONArray("rules")
-        assertEquals(2, inner.length())
+        assertEquals(3, inner.length())
         val ip = inner.getJSONObject(0)
         assertEquals("tcp", ip.getString("network"))
         assertEquals(podseti, strings(ip.getJSONArray("ip_cidr")))
@@ -163,6 +163,23 @@ class OlcRtcFinalPatchTest {
         assertEquals(listOf(".*"), strings(noName.getJSONArray("domain_regex")))
         assertTrue("без invert правило ловило бы соединения С именем", noName.getBoolean("invert"))
         assertEquals("reject", added[3].getString("action"))
+    }
+
+    @Test
+    fun `пустое имя на 80 и 443 — это провал распознавания, а не отсутствие имени, напрямую не пускаем`() {
+        val before = rules(config()).size
+        val added = rules(OlcRtcConfigPatch.finalViaRoom(config(), socksPort, spisok, podseti).content).drop(before)
+        val inner = added[2].getJSONArray("rules")
+        val port = (0 until inner.length()).map { inner.getJSONObject(it) }
+            .firstOrNull { it.has("port") }
+        assertNotNull(
+            "без порта в правиле рваный ClientHello (имя не распозналось) уходил бы мимо комнаты",
+            port,
+        )
+        assertEquals(listOf(80, 443), (0 until port!!.getJSONArray("port").length()).map {
+            port.getJSONArray("port").getInt(it)
+        })
+        assertTrue("без invert правило, наоборот, гнало бы напрямую только веб", port.getBoolean("invert"))
     }
 
     @Test
