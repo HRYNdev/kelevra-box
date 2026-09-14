@@ -33,6 +33,27 @@ object OlcRtcConfigPatch {
     /** Стек туннеля без своей таблицы трансляции портов — см. [tunnelStack]. */
     private const val STACK = "gvisor"
 
+    /**
+     * С какой версии у sing-box появился свой стек TCP/IP и ключ `tun.stack` стал
+     * лишним (release notes 1.15.0: "Remove the `stack` option to use it").
+     * Ключ deprecated с 1.15.0, а с 1.17.0 sing-box его снесёт вовсе.
+     */
+    private const val OWN_STACK_MAJOR = 1
+    private const val OWN_STACK_MINOR = 15
+
+    private val VERSION_RE = Regex("""(\d+)\.(\d+)\.(\d+)""")
+
+    /** major.minor из строки ядра вида "1.15.0-alpha.3"; null — распознать не вышло. */
+    private fun parseMajorMinor(version: String): Pair<Int, Int>? {
+        val m = VERSION_RE.find(version) ?: return null
+        val major = m.groupValues[1].toIntOrNull() ?: return null
+        val minor = m.groupValues[2].toIntOrNull() ?: return null
+        return major to minor
+    }
+
+    private fun hasOwnStack(major: Int, minor: Int): Boolean =
+        major > OWN_STACK_MAJOR || (major == OWN_STACK_MAJOR && minor >= OWN_STACK_MINOR)
+
     /** Что получилось: сам конфиг и человекочитаемое объяснение для лога. */
     data class Result(val content: String, val note: String, val patched: Boolean)
 
@@ -127,22 +148,48 @@ object OlcRtcConfigPatch {
      *
      * Правка живёт и в шаблоне на сервере, но профиль у людей закэширован, а обновляется
      * он не сразу. Клиент чинит это у себя, чтобы не ждать.
+     *
+     * С 1.15.0 у sing-box появился свой стек TCP/IP, который эту же беду (своя таблица
+     * трансляции портов) не наследует, а ключ `tun.stack` для него — deprecated (снесут
+     * в 1.17.0). Поэтому на новых ядрах ключ не ставим, а снимаем, если он остался в
+     * конфиге. `coreVersion` — версия ядра из [io.nekohasekai.libbox.Libbox.version];
+     * не распознать не смогли — ведём себя как на старом ядре, то есть ставим `gvisor`.
      */
-    fun tunnelStack(content: String): Result = runCatching {
+    fun tunnelStack(content: String, coreVersion: String = ""): Result = runCatching {
         val root = JSONObject(content)
         val inbounds = root.optJSONArray("inbounds") ?: return@runCatching Result(content, "в конфиге нет входов", false)
+        val mm = parseMajorMinor(coreVersion)
+        val ownStack = mm != null && hasOwnStack(mm.first, mm.second)
+        val versionUnknown = if (mm == null) "версия ядра «$coreVersion» не распознана — " else ""
+
         var changed = 0
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.optJSONObject(i) ?: continue
             if (inbound.optString("type") != "tun") continue
-            if (inbound.optString("stack") == STACK) continue
-            inbound.put("stack", STACK)
+            if (ownStack) {
+                if (!inbound.has("stack")) continue
+                inbound.remove("stack")
+            } else {
+                if (inbound.optString("stack") == STACK) continue
+                inbound.put("stack", STACK)
+            }
             changed++
         }
-        if (changed == 0) {
-            Result(content, "стек туннеля и так «$STACK»", false)
-        } else {
-            Result(root.toString(), "стек туннеля переведён на «$STACK» (входов: $changed) — своей трансляции портов нет", true)
+
+        when {
+            changed == 0 && ownStack -> Result(content, "ключ «stack» и так снят (ядро $coreVersion — свой стек)", false)
+            changed == 0 -> Result(content, "${versionUnknown}стек туннеля и так «$STACK»", false)
+            ownStack -> Result(
+                root.toString(),
+                "ключ «stack» убран из входов (ядро $coreVersion ≥ ${OWN_STACK_MAJOR}.${OWN_STACK_MINOR} — свой стек TCP/IP, " +
+                    "`stack` deprecated с 1.15.0, входов: $changed)",
+                true,
+            )
+            else -> Result(
+                root.toString(),
+                "${versionUnknown}стек туннеля переведён на «$STACK» (входов: $changed) — своей трансляции портов нет",
+                true,
+            )
         }
     }.getOrElse {
         Result(content, "стек туннеля поправить не вышло (${it.javaClass.simpleName}), конфиг как есть", false)
