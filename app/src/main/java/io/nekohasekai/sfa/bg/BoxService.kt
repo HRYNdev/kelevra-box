@@ -518,7 +518,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         // Стек туннеля правим всегда, а не только под комнатой: порты трансляции
         // кончаются на любом выходе, в комнате это было просто заметнее.
-        val stack = OlcRtcConfigPatch.tunnelStack(result)
+        // С какой версии ключ не нужен — решает сама OlcRtcConfigPatch.tunnelStack по
+        // версии ядра, чтобы апгрейд ядра не требовал правки этого места руками.
+        val stack = OlcRtcConfigPatch.tunnelStack(result, Libbox.version())
         OlcRtcConfigPatch.log(stack)
         result = stack.content
 
