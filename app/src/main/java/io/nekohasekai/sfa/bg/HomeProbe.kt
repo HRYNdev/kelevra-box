@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.CancellationSignal
 import androidx.annotation.RequiresApi
 import io.nekohasekai.sfa.bg.path.NetDns
+import io.nekohasekai.sfa.bg.path.NetDnsRace
 import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -54,34 +55,60 @@ internal object HomeProbe {
      *   свой резолвер, и он отвечает не про обстановку вокруг, а про наш же туннель.
      */
     fun ask(network: Network, host: String, timeoutMillis: Long): Answer {
-        when (val own = NetDns.resolve(network, host, timeoutMillis)) {
-            is NetDns.Outcome.Answered ->
-                return Answer.Addresses(own.addresses, "резолвер сети ${own.resolver}")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) return askWithSystem(network, host, timeoutMillis)
+        return when (val own = NetDns.resolve(network, host, timeoutMillis)) {
+            is NetDns.Outcome.Answered -> Answer.Addresses(own.addresses, "резолвер сети ${own.resolver}")
+            // Кеш системы отвечает сразу, ждать его незачем — спрашиваем после своего пути.
+            is NetDns.Outcome.Silent -> runCatching { network.getAllByName(host).toList() }.getOrNull()
+                ?.let { Answer.Addresses(it, "системный кеш (Android до 10)") }
+                ?: Answer.Silent(own.reason)
+        }
+    }
 
-            is NetDns.Outcome.Silent -> {
-                // Свой путь не сработал. Дальше идут системные — они хуже (могут ответить
-                // за наше ядро или из кеша), но лучше, чем ничего: без них сеть, где
-                // обычный UDP на 53-й порт закрыт, вообще перестала бы опознаваться.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    fresh(network, host, timeoutMillis)?.let {
-                        return Answer.Addresses(it, "системный резолвер (свой путь молчит: ${own.reason})")
-                    }
-                } else {
-                    runCatching { network.getAllByName(host).toList() }.getOrNull()?.let {
-                        return Answer.Addresses(it, "системный кеш (Android до 10)")
-                    }
-                }
-                return Answer.Silent(own.reason)
-            }
+    /**
+     * Свой путь и системный резолвер — разом ([NetDnsRace.withBackup]).
+     *
+     * Системный хуже (может ответить за наше ядро или из кеша), поэтому решает свой путь:
+     * ответил — берём его, системный снимаем. Но без системного сеть, где обычный UDP на
+     * 53-й порт закрыт, вообще перестала бы опознаваться, а раньше он запускался только
+     * после того, как свой путь промолчал весь бюджет, — молчание стоило два бюджета подряд.
+     * Теперь, когда свой путь промолчал, системный уже отработал рядом тот же срок.
+     */
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun askWithSystem(network: Network, host: String, timeoutMillis: Long): Answer {
+        val signal = CancellationSignal()
+        val done = CountDownLatch(1)
+        val (own, system) = NetDnsRace.withBackup(
+            budgetMillis = timeoutMillis,
+            primary = { NetDns.resolve(network, host, timeoutMillis) },
+            primaryAnswered = { it is NetDns.Outcome.Answered },
+            backup = { budget -> fresh(network, host, budget, signal, done) },
+            // Снятый запрос колбэка уже не позовёт, поэтому отпускаем и ожидание: иначе поток
+            // запасного пути досиживал бы весь бюджет впустую. Слушатель отмены на сам сигнал
+            // не повесить — его занимает DnsResolver, а слушатель у сигнала один.
+            cancelBackup = {
+                signal.cancel()
+                done.countDown()
+            },
+        )
+        return when (own) {
+            is NetDns.Outcome.Answered -> Answer.Addresses(own.addresses, "резолвер сети ${own.resolver}")
+            is NetDns.Outcome.Silent -> system
+                ?.let { Answer.Addresses(it, "системный резолвер (свой путь молчит: ${own.reason})") }
+                ?: Answer.Silent(own.reason)
         }
     }
 
     /** @return ответ сети или null, если резолвер не ответил (ошибка, отказ, не уложился). */
     @RequiresApi(Build.VERSION_CODES.Q)
-    private fun fresh(network: Network, host: String, timeoutMillis: Long): List<InetAddress>? {
+    private fun fresh(
+        network: Network,
+        host: String,
+        timeoutMillis: Long,
+        signal: CancellationSignal,
+        done: CountDownLatch,
+    ): List<InetAddress>? {
         val answer = AtomicReference<List<InetAddress>?>(null)
-        val done = CountDownLatch(1)
-        val signal = CancellationSignal()
         val asked = runCatching {
             DnsResolver.getInstance().query(
                 network,
