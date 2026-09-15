@@ -34,12 +34,17 @@ object OlcRtcConfigPatch {
     private const val STACK = "gvisor"
 
     /**
-     * С какой версии у sing-box появился свой стек TCP/IP и ключ `tun.stack` стал
-     * лишним (release notes 1.15.0: "Remove the `stack` option to use it").
-     * Ключ deprecated с 1.15.0, а с 1.17.0 sing-box его снесёт вовсе.
+     * С какой версии апстрим СНОСИТ ключ `tun.stack` — источник графика,
+     * `experimental/deprecated/constants.go` (sing-box): `OptionTunStack{DeprecatedVersion:
+     * "1.15.0", ScheduledVersion: "1.17.0"}`. Ключ deprecated с 1.15.0 (появился свой
+     * стек TCP/IP, release notes 1.15.0: "Remove the `stack` option to use it"), но
+     * СНОСЯТ его по расписанию только в 1.17.0 — до тех пор он ещё декодируется.
+     * Замер нарядом 0915-171106 на реальном v1.15.0-alpha.4 это подтвердил (DECODE OK
+     * с ключом в конфиге). Раньше здесь стояло 15 — снимало рабочий ключ на два минора
+     * раньше срока.
      */
-    private const val OWN_STACK_MAJOR = 1
-    private const val OWN_STACK_MINOR = 15
+    private const val STACK_KEY_REMOVED_MAJOR = 1
+    private const val STACK_KEY_REMOVED_MINOR = 17
 
     private val VERSION_RE = Regex("""(\d+)\.(\d+)\.(\d+)""")
 
@@ -51,8 +56,8 @@ object OlcRtcConfigPatch {
         return major to minor
     }
 
-    private fun hasOwnStack(major: Int, minor: Int): Boolean =
-        major > OWN_STACK_MAJOR || (major == OWN_STACK_MAJOR && minor >= OWN_STACK_MINOR)
+    private fun stackKeyRemoved(major: Int, minor: Int): Boolean =
+        major > STACK_KEY_REMOVED_MAJOR || (major == STACK_KEY_REMOVED_MAJOR && minor >= STACK_KEY_REMOVED_MINOR)
 
     /** Что получилось: сам конфиг и человекочитаемое объяснение для лога. */
     data class Result(val content: String, val note: String, val patched: Boolean)
@@ -150,23 +155,25 @@ object OlcRtcConfigPatch {
      * он не сразу. Клиент чинит это у себя, чтобы не ждать.
      *
      * С 1.15.0 у sing-box появился свой стек TCP/IP, который эту же беду (своя таблица
-     * трансляции портов) не наследует, а ключ `tun.stack` для него — deprecated (снесут
-     * в 1.17.0). Поэтому на новых ядрах ключ не ставим, а снимаем, если он остался в
-     * конфиге. `coreVersion` — версия ядра из [io.nekohasekai.libbox.Libbox.version];
+     * трансляции портов) не наследует, а ключ `tun.stack` для него — deprecated, но
+     * ключ ещё живой и декодируется вплоть до 1.17.0 — апстрим сносит его именно там
+     * (`experimental/deprecated/constants.go`, `OptionTunStack.ScheduledVersion`).
+     * Поэтому ключ снимаем только с 1.17.0, а на 1.15.0–1.16.x ставим `gvisor`, как и
+     * раньше. `coreVersion` — версия ядра из [io.nekohasekai.libbox.Libbox.version];
      * не распознать не смогли — ведём себя как на старом ядре, то есть ставим `gvisor`.
      */
     fun tunnelStack(content: String, coreVersion: String = ""): Result = runCatching {
         val root = JSONObject(content)
         val inbounds = root.optJSONArray("inbounds") ?: return@runCatching Result(content, "в конфиге нет входов", false)
         val mm = parseMajorMinor(coreVersion)
-        val ownStack = mm != null && hasOwnStack(mm.first, mm.second)
+        val stackKeyGone = mm != null && stackKeyRemoved(mm.first, mm.second)
         val versionUnknown = if (mm == null) "версия ядра «$coreVersion» не распознана — " else ""
 
         var changed = 0
         for (i in 0 until inbounds.length()) {
             val inbound = inbounds.optJSONObject(i) ?: continue
             if (inbound.optString("type") != "tun") continue
-            if (ownStack) {
+            if (stackKeyGone) {
                 if (!inbound.has("stack")) continue
                 inbound.remove("stack")
             } else {
@@ -177,12 +184,12 @@ object OlcRtcConfigPatch {
         }
 
         when {
-            changed == 0 && ownStack -> Result(content, "ключ «stack» и так снят (ядро $coreVersion — свой стек)", false)
+            changed == 0 && stackKeyGone -> Result(content, "ключ «stack» и так снят (ядро $coreVersion — апстрим его уже не читает)", false)
             changed == 0 -> Result(content, "${versionUnknown}стек туннеля и так «$STACK»", false)
-            ownStack -> Result(
+            stackKeyGone -> Result(
                 root.toString(),
-                "ключ «stack» убран из входов (ядро $coreVersion ≥ ${OWN_STACK_MAJOR}.${OWN_STACK_MINOR} — свой стек TCP/IP, " +
-                    "`stack` deprecated с 1.15.0, входов: $changed)",
+                "ключ «stack» убран из входов (ядро $coreVersion ≥ ${STACK_KEY_REMOVED_MAJOR}.${STACK_KEY_REMOVED_MINOR} — апстрим сносит " +
+                    "ключ по расписанию с этой версии, deprecated он с 1.15.0, входов: $changed)",
                 true,
             )
             else -> Result(
