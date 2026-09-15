@@ -64,6 +64,13 @@ internal object NetDns {
     }
 
     /**
+     * Спрашивает все резолверы сети разом ([NetDnsRace.first]); побеждает первый ответ.
+     *
+     * Раньше спрашивали по очереди, и первый резолвер забирал весь бюджет. При роуминге
+     * между точками запрос телефона до одного из резолверов не доходит вовсе, а второй
+     * ответил бы сразу — но очередь до него не доходила, и заход получал «молчат» там, где
+     * ответ был. Молчание одного теперь не закрывает опрос: ждём остальных, пока есть бюджет.
+     *
      * @param network физическая сеть. Передавать сюда VPN-сеть бессмысленно: у неё свои
      *   резолверы, и ответ будет про наш туннель.
      * @param budgetMillis общий бюджет на все резолверы сети, а не на каждый.
@@ -75,30 +82,30 @@ internal object NetDns {
             return Outcome.Silent("у сети нет своих резолверов")
         }
         val startedAt = SystemClock.elapsedRealtime()
-        var lastReason = "резолверы молчат"
-        for (resolver in resolvers) {
-            val left = budgetMillis - (SystemClock.elapsedRealtime() - startedAt)
-            // Меньше четверти секунды — это не попытка, а способ соврать «молчит».
-            if (left < 250) break
-            when (val reply = ask(network, resolver, host, left)) {
-                is Outcome.Answered -> return reply
-                is Outcome.Silent -> lastReason = reply.reason
-            }
-        }
+        val race = NetDnsRace.first(
+            budgetMillis = budgetMillis,
+            askers = resolvers.map { resolver -> { budget: Long -> ask(network, resolver, host, budget) } },
+            answered = { it is Outcome.Answered },
+        )
+        race.winner?.let { return it }
         // Причина молчания до сих пор возвращалась наверх и там терялась: в журнале
         // оставалось «промолчали 3 из 3» без единого слова о том, почему. Разница между
         // «резолвер не ответил за 2500 мс» и «сеть недостижима» — это разница между
-        // протухшим путём до резолвера и оборванной связью.
-        Log.d(TAG, "$host: $lastReason (за ${SystemClock.elapsedRealtime() - startedAt} мс)")
-        return Outcome.Silent(lastReason)
+        // протухшим путём до резолвера и оборванной связью. Причины теперь по каждому
+        // резолверу: опрашиваются они разом, и «последней» причины больше нет.
+        val reasons = race.silences.mapNotNull { (it as? Outcome.Silent)?.reason } +
+            if (race.unfinished > 0) listOf("не ответили за $budgetMillis мс: ${race.unfinished}") else emptyList()
+        val reason = reasons.joinToString("; ").ifBlank { "резолверы молчат" }
+        Log.d(TAG, "$host: $reason (резолверов ${resolvers.size}, за ${SystemClock.elapsedRealtime() - startedAt} мс)")
+        return Outcome.Silent(reason)
     }
 
     /**
      * Резолверы сети: сперва IPv4.
      *
-     * IPv6-резолверы не выбрасываем — у некоторых сетей других и нет, — но ставим после:
-     * домашний роутер отвечает по обоим, а лишний круг ожидания на link-local адресе
-     * там, где рядом есть обычный, оплачивать незачем.
+     * IPv6-резолверы не выбрасываем — у некоторых сетей других и нет. Спрашиваются все
+     * разом, поэтому порядок ожидания больше не стоит; IPv4 первым оставлен только ради
+     * одинакового порядка в журнале.
      */
     private fun resolversOf(network: Network): List<InetAddress> = runCatching {
         val link = Application.connectivity.getLinkProperties(network) ?: return emptyList()
