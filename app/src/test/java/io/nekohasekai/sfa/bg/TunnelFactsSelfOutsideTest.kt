@@ -1,8 +1,6 @@
 package io.nekohasekai.sfa.bg
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,31 +14,27 @@ class TunnelFactsSelfOutsideTest {
         roomSought: Boolean = false,
     ) = TunnelFacts.selfOutsideTun(vpn, roomWanted, roomAhead, roomReady, roomSought)
 
+    private fun stale(
+        coreRoom: Boolean,
+        coreSelfOutside: Boolean,
+        wantRoom: Boolean,
+        wantSelfOutside: Boolean,
+        roomBusy: Boolean = false,
+    ) = TunnelFacts.coreConfigStale(coreRoom, coreSelfOutside, wantRoom, wantSelfOutside, roomBusy)
+
     @Test
-    fun `подъём из погашенного ради комнаты — список приложений до и после входа один`() {
-        // Пересборка 1: туннель поднимают, комнату ещё не просили, автомат ещё «дома».
-        val naPodyome = outside(roomAhead = true)
-        // Пересборка 2: комната вошла, просьба стоит.
-        val posleVhoda = outside(roomWanted = true, roomReady = true)
-        assertTrue(naPodyome)
-        assertEquals(naPodyome, posleVhoda)
+    fun `подъём туннеля ради комнаты выводит приложение сразу, до входа`() {
+        assertTrue(outside(roomAhead = true))
     }
 
     @Test
-    fun `без подсказки о комнате первая пересборка шла бы без вывода — VPN-сеть пересоздавалась`() {
-        val naPodyome = outside()
-        val posleVhoda = outside(roomWanted = true, roomReady = true)
-        assertNotEquals(naPodyome, posleVhoda)
-    }
-
-    @Test
-    fun `комната поднимается при уже работающем туннеле — вывод держится с просьбы`() {
+    fun `комната поднята или поднимается — вывод держится`() {
         assertTrue(outside(roomWanted = true))
         assertTrue(outside(roomReady = true))
     }
 
     @Test
-    fun `автомат ищет путь или стоит на комнате — вывод держится и между попытками`() {
+    fun `автомат ищет путь — вывод держится и между попытками`() {
         assertTrue(outside(roomSought = true))
     }
 
@@ -55,22 +49,34 @@ class TunnelFactsSelfOutsideTest {
     }
 
     @Test
-    fun `комната не нужна и не поднимается, ядро с выводом — возвращаем в tun`() {
-        assertTrue(TunnelFacts.returnSelfToTun(coreSelfOutside = true, selfOutsideNow = false, roomBusy = false))
+    fun `подъём из погашенного ради комнаты — ядро собрано под неё, до входа пересборки нет`() {
+        // Туннель подняли с подсказкой «следом комната»: конфиг под комнату и вывод уже на месте.
+        assertFalse(stale(coreRoom = true, coreSelfOutside = true, wantRoom = true, wantSelfOutside = true))
     }
 
     @Test
-    fun `комната поднимается — ядро посреди входа не трогаем`() {
-        assertFalse(TunnelFacts.returnSelfToTun(coreSelfOutside = true, selfOutsideNow = false, roomBusy = true))
+    fun `комната при уже работающем туннеле — пересборка нужна, и она одна, до входа`() {
+        assertTrue(stale(coreRoom = false, coreSelfOutside = false, wantRoom = true, wantSelfOutside = true))
     }
 
     @Test
-    fun `комнату ещё ищут — вывод оставляем, следующий вход без пересоздания сети`() {
-        assertFalse(TunnelFacts.returnSelfToTun(coreSelfOutside = true, selfOutsideNow = true, roomBusy = false))
+    fun `комната не встала — ядро возвращаем к конфигу без комнаты`() {
+        assertTrue(stale(coreRoom = true, coreSelfOutside = true, wantRoom = false, wantSelfOutside = true))
     }
 
     @Test
-    fun `ядро и так с приложением в tun — пересобирать нечего`() {
-        assertFalse(TunnelFacts.returnSelfToTun(coreSelfOutside = false, selfOutsideNow = false, roomBusy = false))
+    fun `комната больше не нужна — снимаем и конфиг, и вывод`() {
+        assertTrue(stale(coreRoom = true, coreSelfOutside = true, wantRoom = false, wantSelfOutside = false))
+    }
+
+    @Test
+    fun `комнату поднимают прямо сейчас — посреди входа ядро не трогаем`() {
+        assertFalse(stale(coreRoom = true, coreSelfOutside = true, wantRoom = false, wantSelfOutside = false, roomBusy = true))
+    }
+
+    @Test
+    fun `ядро и так отвечает намерению — пересобирать нечего`() {
+        assertFalse(stale(coreRoom = false, coreSelfOutside = false, wantRoom = false, wantSelfOutside = false))
+        assertFalse(stale(coreRoom = true, coreSelfOutside = true, wantRoom = true, wantSelfOutside = true))
     }
 }
