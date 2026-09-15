@@ -428,6 +428,21 @@ object AutoMode {
     private const val ROUND_MANUAL_MILLIS = 60_000L
 
     /**
+     * Перепроверка после захода, на котором резолверы промолчали: через 20–30 секунд, а не
+     * через обычные пять минут.
+     *
+     * Молчание — это «не узнали», и держать на нём вердикт пять минут значило держать
+     * неизмеренное: дом при роуминге между точками возвращается, когда резолвер снова
+     * отвечает, а узнавали мы об этом только следующим полным заходом. Серия ограничена
+     * [SILENT_RECHECK_ROUNDS] заходами — резолвер, замолчавший надолго, не должен
+     * превращать автомат в пробу каждые полминуты навсегда. Интервал не ровный по той же
+     * причине, что и у приглядок: метроном — узнаваемый след.
+     */
+    internal const val SILENT_RECHECK_MIN_MILLIS = 20_000L
+    internal const val SILENT_RECHECK_MAX_MILLIS = 30_000L
+    internal const val SILENT_RECHECK_ROUNDS = 10
+
+    /**
      * Приглядка из комнаты: разброс паузы между дешёвыми пробами узла.
      *
      * Полный заход стоит дорого — резолв, честная проба через локальный вход, перестановка
@@ -626,6 +641,9 @@ object AutoMode {
     private val gate = AutoModeGate(CONFIRMATIONS)
     private val burst = AutoModeBurst(BURST_STEPS)
     private var searchingRounds = 0
+
+    /** Сколько быстрых перепроверок подряд уже было на молчании резолверов ([silentRecheck]). */
+    private var silentRechecks = 0
 
     /** Итог последнего захода: ничего не поменялось и подтверждений никто не ждёт. */
     @Volatile
@@ -1197,6 +1215,23 @@ object AutoMode {
             // сама, как только обстановка устоялась.
             val hurry = burst.next(settled)
             if (hurry != null) Log.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
+            // Резолверы промолчали — перепроверяем скоро, но не бесконечно. Спешка серии и
+            // набор подтверждений и так ближе, им эта перепроверка не нужна.
+            val blind = observationSilent
+            if (!blind) silentRechecks = 0
+            val recheck = if (idle || hurry != null || pendingSwitch) {
+                null
+            } else {
+                silentRecheck(blind, silentRechecks, Random.nextLong(SILENT_RECHECK_MIN_MILLIS, SILENT_RECHECK_MAX_MILLIS + 1))
+            }
+            if (recheck != null) {
+                silentRechecks++
+                Log.i(
+                    TAG,
+                    "резолверы молчали — следующая проверка через ${recheck / 1000} с " +
+                        "($silentRechecks из $SILENT_RECHECK_ROUNDS)",
+                )
+            }
             val wait = when {
                 // Автомат выключен человеком — но спать вечно нельзя. Реестр путей
                 // остаётся с тем, что было записано до ручного выбора, и экран пишет
@@ -1208,6 +1243,7 @@ object AutoMode {
                 hurry != null -> hurry
                 // Идёт набор подтверждений — досматриваем быстро, а не через пять минут.
                 pendingSwitch -> ROUND_SEARCHING_MILLIS
+                recheck != null -> recheck
                 else -> delayFor(situation)
             }
             // Полный ритм комнаты и дома досиживаем не вслепую: между заходами идёт одна
@@ -1315,6 +1351,8 @@ object AutoMode {
         if (trustOnce) {
             networkChanged = false
             searchingRounds = 0
+            // Новая сеть — новая серия перепроверок на молчании, прошлая исчерпана не здесь.
+            silentRechecks = 0
             burst.restart()
             Log.i(TAG, "сеть сменилась — перепроверяю обстановку")
         }
@@ -2441,6 +2479,28 @@ object AutoMode {
      */
     internal fun burstClosable(changed: Boolean, pending: Boolean, confident: Boolean): Boolean =
         !changed && !pending && confident
+
+    /**
+     * Через сколько перепроверять после захода, на котором резолверы промолчали.
+     *
+     * Вынесено без обращений к Android: «молчание — повод посмотреть скоро, но ограниченной
+     * серией» — утверждение о поведении, и проверяться оно должно тестом.
+     *
+     * @param blind заход ничего не узнал про дом: резолверы промолчали.
+     * @param done сколько быстрых перепроверок подряд уже было.
+     * @param jitterMillis случайная пауза из [SILENT_RECHECK_MIN_MILLIS]..[SILENT_RECHECK_MAX_MILLIS].
+     * @return пауза до следующего захода или `null` — обычный ритм.
+     */
+    internal fun silentRecheck(
+        blind: Boolean,
+        done: Int,
+        jitterMillis: Long,
+        rounds: Int = SILENT_RECHECK_ROUNDS,
+    ): Long? = when {
+        !blind -> null
+        done >= rounds -> null
+        else -> jitterMillis.coerceIn(SILENT_RECHECK_MIN_MILLIS, SILENT_RECHECK_MAX_MILLIS)
+    }
 
     /**
      * Стоит ли тратить замер режима сети.
