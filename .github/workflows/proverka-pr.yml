@@ -65,6 +65,9 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # пакет 'tools' снят из SDK-репозитория Google, дефолт action на нём падает
+          packages: 'platform-tools'
 
       # Ядро из job yadro. Артефакт core-libbox лежит одним файлом libbox.aar —
       # download-artifact кладёт СОДЕРЖИМОЕ артефакта в path, имя файла внутри не меняет.
