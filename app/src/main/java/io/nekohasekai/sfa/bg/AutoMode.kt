@@ -221,9 +221,13 @@ object AutoMode {
 
         /**
          * Поднимает обратно то, что погасили.
+         *
+         * @param roomNext следом попросят комнату. Ядро тогда сразу собирается так, как его
+         *   соберут после входа в комнату (приложение вне tun), и пересборка после входа не
+         *   пересоздаёт VPN-сеть — см. [TunnelFacts.selfOutsideTun].
          * @return true, если туннель действительно подняли этим вызовом.
          */
-        fun resumeTunnel(reason: String): Boolean
+        fun resumeTunnel(reason: String, roomNext: Boolean = false): Boolean
 
         /** Живо ли сейчас ядро sing-box. Пока туннель погашен, его локальным входом не спросить. */
         fun tunnelLive(): Boolean
@@ -1308,7 +1312,7 @@ object AutoMode {
             // Человек выбирает выход сам. Обязанностей у нас тут две: вернуть туннель,
             // если сами же его погасили (иначе выбор руками упрётся в выключенное ядро),
             // и привести комнату в то состояние, которое следует из его выбора.
-            if (host.resumeTunnel("автомат выключен человеком")) selected = null
+            if (host.resumeTunnel("автомат выключен человеком", roomNext = Settings.autoModeManualRoom)) selected = null
             // Выбрать выход можно раньше, чем автомат прочитает конфиг: список выходов
             // экран строит сам, а раскладка появляется только к первому заходу. Тогда
             // [chooseManually] не с чем было сравнить имя и записал «не комната».
@@ -1713,7 +1717,7 @@ object AutoMode {
         // его комнате в неудачу: пауза удваивалась до двух минут, хотя попытки не было.
         // Поэтому порядок обратный — сперва туннель, потом комната.
         if (!host.tunnelLive()) {
-            if (runCatching { host.resumeTunnel("комната нужна, а туннель погашен") }
+            if (runCatching { host.resumeTunnel("комната нужна, а туннель погашен", roomNext = true) }
                     .getOrElse {
                         Log.w(TAG, "туннель поднять не вышло: ${it.message}")
                         false
@@ -1859,7 +1863,7 @@ object AutoMode {
             }
 
             Situation.Room -> {
-                if (host.resumeTunnel("основной канал не поднимается")) selected = null
+                if (host.resumeTunnel("основной канал не поднимается", roomNext = true)) selected = null
                 // Обычно комната уже поднята пробно — вызов идемпотентный и ничего не делает.
                 if (setRoom(host, true, "уходим в комнату").changed) selected = null
                 choose(host, layout.room, "обстановка «комната»")

@@ -33,4 +33,48 @@ internal object TunnelFacts {
      */
     fun rebuildAllowed(serviceStopping: Boolean, suspendedFlag: Boolean): Boolean =
         !serviceStopping && !suspendedFlag
+
+    /**
+     * Выводить ли приложение из tun в ядре, которое собирается прямо сейчас.
+     *
+     * Ядру olcRTC нужен вывод всего пакета из tun ([BoxService.applyPerAppProxy]), и
+     * решение ложится в список приложений мимо сети. Этот список Android у живой VPN-сети
+     * поменять не умеет: при другом списке `establish` пишет «Handover not possible due to
+     * changes to allowed/denied apps», сносит сеть и заводит новую. Эмулятор 15.09.2026:
+     * так было на каждом входе в комнату из погашенного туннеля — ядро собиралось без
+     * вывода, через 2–3 с после входа пересобиралось с выводом, VPN-сеть пересоздавалась,
+     * и в 2 входах из 6 за этим шли чужой ufrag, перезапуск ICE и 24–34 с без данных.
+     *
+     * Поэтому вывод держится не только пока комната поднята или поднимается, но и когда
+     * туннель поднимают ради неё ([roomAhead]) и пока автомат её ищет ([roomSought]).
+     * Пересборка после входа тогда меняет только маршруты, и сеть обновляется на месте.
+     *
+     * @param vpn сервис работает как VPN — в режиме без tun выводить не из чего.
+     * @param roomWanted комнату попросили и не отменили.
+     * @param roomAhead туннель поднимают, чтобы следом поднять комнату.
+     * @param roomReady ядро комнаты сейчас в комнате.
+     * @param roomSought автомат стоит на комнате или ищет путь, либо комнату выбрал человек.
+     */
+    fun selfOutsideTun(
+        vpn: Boolean,
+        roomWanted: Boolean,
+        roomAhead: Boolean,
+        roomReady: Boolean,
+        roomSought: Boolean,
+    ): Boolean = vpn && (roomWanted || roomAhead || roomReady || roomSought)
+
+    /**
+     * Нужна ли пересборка только затем, чтобы вернуть приложение в tun.
+     *
+     * Комната не встала или больше не нужна, а ядро собрано с выводом (см. [selfOutsideTun]).
+     * Без комнаты вывод незачем: свой трафик приложения — выгрузка журналов, обращения к
+     * своему серверу — шёл бы мимо туннеля. Пока комната поднимается, ядро не трогаем:
+     * пересборка посреди входа и есть то, от чего уходим.
+     *
+     * @param coreSelfOutside с чем собрано работающее ядро.
+     * @param selfOutsideNow что решает [selfOutsideTun] сейчас.
+     * @param roomBusy комнату поднимает сервис или присмотр, либо ядро комнаты стартует.
+     */
+    fun returnSelfToTun(coreSelfOutside: Boolean, selfOutsideNow: Boolean, roomBusy: Boolean): Boolean =
+        coreSelfOutside && !selfOutsideNow && !roomBusy
 }

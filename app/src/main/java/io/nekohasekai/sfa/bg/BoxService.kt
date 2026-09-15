@@ -162,6 +162,20 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @Volatile
     private var roomRaising = false
 
+    /**
+     * Туннель поднимают ради комнаты — просьба о ней придёт следом.
+     *
+     * Держится от подъёма туннеля до первой просьбы про комнату или гашения туннеля. Нужна
+     * одной вещи: ядро на подъёме собирается уже с приложением вне tun, как соберут его
+     * после входа в комнату ([TunnelFacts.selfOutsideTun]).
+     */
+    @Volatile
+    private var roomAhead = false
+
+    /** Работающее ядро собрано с приложением вне tun. */
+    @Volatile
+    private var coreSelfOutsideTun = false
+
     /** Когда последний раз ходили к серверу за свежим токеном комнаты. */
     private var tokenRefreshedAt = 0L
 
@@ -169,7 +183,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private val autoModeHost = object : AutoMode.Host {
         override fun suspendTunnel(reason: String): Boolean = this@BoxService.suspendTunnel(reason)
 
-        override fun resumeTunnel(reason: String): Boolean = this@BoxService.resumeTunnel(reason)
+        override fun resumeTunnel(reason: String, roomNext: Boolean): Boolean = this@BoxService.resumeTunnel(reason, roomNext)
 
         override fun tunnelLive(): Boolean = !tunnelSuspended
 
@@ -342,11 +356,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Ядро olcRTC не переживает собственный tun — выводим весь пакет наружу.
         //
         // Смотрим на саму комнату, а не на тумблер: тумблер стал аварийным выключателем
-        // и по умолчанию разрешает комнату, а вывод приложения из туннеля нужен ровно
-        // тогда, когда комната живёт. Пересборка ядра идёт в обе стороны (см.
-        // [setRoomWanted]), поэтому исключение появляется и снимается вместе с ней.
-        val roomLive = roomWanted || OlcRtcCore.state is OlcRtcCore.State.Ready
-        val selfOutsideTun = roomLive && service is VpnService
+        // и по умолчанию разрешает комнату, а вывод приложения из туннеля нужен тогда,
+        // когда комната живёт, поднимается или вот-вот понадобится. Раньше — только первые
+        // два случая, и ядро, поднятое ради комнаты, собиралось без вывода: пересборка
+        // после входа меняла список, и VPN-сеть пересоздавалась под вошедшим ядром
+        // ([TunnelFacts.selfOutsideTun]). Снимается вывод пересборкой, когда комната больше
+        // не нужна (см. [setRoomWanted]).
+        val selfOutsideTun = selfOutsideTunNow()
+        coreSelfOutsideTun = selfOutsideTun
 
         if (!Vendor.isPerAppProxyAvailable()) {
             // Устройство не умеет разделять трафик по приложениям — остаётся только
@@ -736,6 +753,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             Log.i(TAG, "туннель гасим: $reason")
             // Комната без туннеля бессмысленна: дома обход делает роутер.
             roomWanted = false
+            roomAhead = false
             stopOlcRtc()
             val pfd = fileDescriptor
             if (pfd != null) {
@@ -751,11 +769,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         return true
     }
 
-    /** @return false, если туннель и так был поднят. */
-    private fun resumeTunnel(reason: String): Boolean {
+    /**
+     * @param roomNext следом попросят комнату — ядро сразу собирается с приложением вне tun.
+     *   Иначе пересборка после входа в комнату меняет список приложений мимо сети, и Android
+     *   пересоздаёт VPN-сеть под уже вошедшим ядром olcRTC ([TunnelFacts.selfOutsideTun]).
+     * @return false, если туннель и так был поднят.
+     */
+    private fun resumeTunnel(reason: String, roomNext: Boolean): Boolean {
         synchronized(tunnelLock) {
             if (!tunnelSuspended) return false
-            Log.i(TAG, "туннель поднимаем: $reason")
+            Log.i(TAG, "туннель поднимаем: $reason" + if (roomNext) " (следом комната — приложение сразу вне tun)" else "")
+            roomAhead = roomNext
         }
         return try {
             // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно.
@@ -873,7 +897,37 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         return smenilsya
     }
 
+    /** Выводить ли приложение из tun, если собирать ядро прямо сейчас. */
+    private fun selfOutsideTunNow(): Boolean = TunnelFacts.selfOutsideTun(
+        vpn = service is VpnService,
+        roomWanted = roomWanted,
+        roomAhead = roomAhead,
+        roomReady = OlcRtcCore.state is OlcRtcCore.State.Ready,
+        roomSought = runCatching { AutoMode.roomNeeded() }.getOrDefault(false),
+    )
+
+    /**
+     * Комната погашена и не нужна, а ядро собрано с приложением вне tun — пересобрать и
+     * вернуть приложение в tun ([TunnelFacts.returnSelfToTun]). Звать под [tunnelLock].
+     *
+     * @return `null`, если пересобирать не нужно.
+     */
+    private fun returnSelfToTun(reason: String): AutoMode.RoomAck? {
+        val busy = roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting
+        if (!TunnelFacts.returnSelfToTun(coreSelfOutsideTun, selfOutsideTunNow(), busy)) return null
+        Log.i(TAG, "комната погашена и не нужна ($reason), а приложение вне tun — пересобираю ядро, возвращаю его в tun")
+        return runCatching {
+            restartCore()
+            AutoMode.RoomAck.Changed
+        }.getOrElse {
+            Log.w(TAG, "пересборка ядра без комнаты не удалась: ${it.message}")
+            AutoMode.RoomAck.Failed
+        }
+    }
+
     private fun setRoomWanted(wanted: Boolean, reason: String): AutoMode.RoomAck {
+        // Туннель ради комнаты уже поднят, дальше решает сама просьба.
+        roomAhead = false
         // Поднимать нечего, если параметров комнаты нет или человек нажал аварийный
         // выключатель. Гасить — можно всегда.
         if (wanted && !OlcRtcParams.roomAllowed) {
@@ -904,6 +958,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
             roomWanted = wanted
             if (wanted == up) {
+                // Комната не встала или погашена раньше, а ядро осталось с приложением вне tun.
+                if (!wanted) returnSelfToTun(reason)?.let { return it }
                 Log.i(TAG, "комната уже ${if (up) "поднята" else "погашена"} ($reason) — оставляю как есть")
                 return AutoMode.RoomAck.Unchanged
             }
