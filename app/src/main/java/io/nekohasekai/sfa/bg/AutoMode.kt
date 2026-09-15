@@ -964,6 +964,43 @@ object AutoMode {
         synchronized(lock) { lock.notifyAll() }
     }
 
+    /**
+     * Нужна ли комната прямо сейчас. Спрашивает присмотр, когда решает, поднимать ли её
+     * снова после неудачного подъёма.
+     *
+     * Без этого вопроса у присмотра два плохих выхода: либо после неудачи замирать (так и
+     * было — вернувшаяся нога не подхватывалась, пока приложение не перезапустят), либо
+     * поднимать комнату и там, где на ней никто не стоит, то есть держать чужой видеозвонок
+     * при живом основном канале.
+     *
+     * Читаем память (`_state`), а не только настройки: вопрос задаётся каждые пять секунд
+     * из потока присмотра. Настройку ручной комнаты — лишь когда автомат выключен.
+     */
+    fun roomNeeded(): Boolean {
+        if (!active) return false
+        val now = _state.value
+        val manualRoom = !now.auto && runCatching { Settings.autoModeManualRoom }.getOrDefault(false)
+        return roomNeededIn(now.auto, now.situation, manualRoom)
+    }
+
+    /**
+     * Та же таблица без Android: на комнате стоим или ищем путь (тогда комната — последняя
+     * надежда), а при ручном выборе — только если выбрана сама комната.
+     */
+    internal fun roomNeededIn(auto: Boolean, situation: Situation, manualRoom: Boolean): Boolean =
+        if (!auto) manualRoom else situation == Situation.Room || situation == Situation.Searching
+
+    /**
+     * Присмотр поднял комнату заново. Выход перед подъёмом увели на основной канал
+     * ([roomLost]), и вернуть его на комнату может только заход — будим его сейчас, а не
+     * через шаг ритма (в комнате это до трёх минут).
+     */
+    fun onRoomRaised(reason: String) {
+        if (!active) return
+        Log.i(TAG, "комнату подняли заново ($reason) — иду на заход, не дожидаясь ритма")
+        synchronized(lock) { lock.notifyAll() }
+    }
+
     /** Перечитывает раскладку выходов и входов из конфига, который сейчас в ядре. */
     private fun refreshLayout(reason: String) {
         val content = runCatching { host?.profileConfig() }.getOrNull() ?: return
