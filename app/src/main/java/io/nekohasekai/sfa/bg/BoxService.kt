@@ -464,8 +464,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // Сразу спрашиваем канал: «поднят» без прошедших байтов — это ещё не выход.
                 OlcRtcCore.probe(params.socksPort)
                 // Комната умирает молча — дальше за каналом следит присмотр и поднимает
-                // ядро сам, если байты перестали ходить.
-                OlcRtcWatchdog.start(protector, requireProtector = vpn != null)
+                // ядро сам, если байты перестали ходить. После неудачного подъёма он
+                // пробует снова, но только пока комната нужна: туннель не погашен, сервис
+                // не останавливают и автомат стоит на комнате или ищет путь.
+                OlcRtcWatchdog.start(
+                    protector,
+                    requireProtector = vpn != null,
+                    roomNeeded = { !tunnelSuspended && !serviceStopping && AutoMode.roomNeeded() },
+                    raisingElsewhere = { roomRaising },
+                )
             }
 
             else ->
@@ -893,8 +900,16 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
 
             if (wanted) {
-                Log.i(TAG, "комната нужна ($reason) — поднимаю ядро отдельным потоком")
+                // Сперва занимаем подъём, потом ещё раз смотрим на присмотр. Он делает то
+                // же в обратную сторону (свой флаг, потом наш), поэтому проверка выше и его
+                // старт не могут разминуться так, чтобы два подъёма пошли разом.
                 roomRaising = true
+                if (OlcRtcWatchdog.restarting) {
+                    roomRaising = false
+                    Log.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
+                    return AutoMode.RoomAck.Raising
+                }
+                Log.i(TAG, "комната нужна ($reason) — поднимаю ядро отдельным потоком")
                 // Реестр узнаёт про подъём сразу, а не когда автомат дойдёт до своей записи:
                 // на круге и в шторке это и есть «Поднимаю комнату».
                 RoomNote.raising()
