@@ -588,6 +588,26 @@ object AutoMode {
     @Volatile
     private var observationSilent = false
 
+    /**
+     * Этот заход про дом не узнал ничего: резолверы промолчали, и дом не подтвердился
+     * отпечатком сети ([HomeSign.byFingerprint]) вместе с прошедшим трафиком.
+     *
+     * Отдельно от [observationSilent]: молчание остаётся событием для журнала и реестра, а
+     * решения — броня вердикта ([holdsVerdict]), задвижка и быстрая перепроверка — идут по
+     * слепоте. Дом, узнанный по отпечатку и подтверждённый трафиком, — это знание, а не
+     * «не знаю», и держать на нём прежний вердикт или требовать полных подтверждений незачем.
+     */
+    @Volatile
+    private var observationBlind = false
+
+    /**
+     * Отпечаток сети последнего подтверждённого дома. Держится ещё и в настройках: память
+     * процесса о доме перезапуск стирает, а резолверы после него могут молчать минутами.
+     * Читаем в [start], не здесь — см. комментарий у [manualExit].
+     */
+    @Volatile
+    private var lastHomeKey: String? = null
+
     /** Отпечаток сети ([networkKey]), на которой сделан последний заход. */
     @Volatile
     private var observedNetworkKey: String? = null
@@ -784,6 +804,7 @@ object AutoMode {
             // Settings и manualExit всегда синхронны (каждый мутатор пишет в оба разом), так
             // что повторное чтение на втором start() в том же процессе ничего не меняет.
             manualExit = Settings.manualExitName.takeIf { it.isNotBlank() }
+            lastHomeKey = Settings.autoModeHomeKey.takeIf { it.isNotBlank() }
             layout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
                 ?: AutoModeExits.Layout.EMPTY
             gate.reset(initial)
@@ -792,6 +813,7 @@ object AutoMode {
             situationNetwork = null
             silentHoldAt = 0L
             observationSilent = false
+            observationBlind = false
             searchingRounds = 0
             selected = null
             // Сервис только что поднялся — обстановка по определению «только что изменилась»,
@@ -1200,7 +1222,14 @@ object AutoMode {
         // ждёт подключения ровно столько, сколько мы его задаём. Четыре запроса к
         // резолверу ради заранее известного ответа тут стоили до 2.5 секунд.
         if (!homeReachable(network)) return false
-        if (homeBypass(network) != HomeSign.Sign.Yes) return false
+        val sign = homeBypass(network)
+        if (sign == HomeSign.Sign.Yes) return homeCarriesTraffic(network) == true
+        // Резолверы молчат — дом ещё можно узнать по отпечатку сети, если он совпал с
+        // последним подтверждённым домом: память процесса перезапуск стёр, настройки — нет.
+        // Трафиком подтверждаем так же, как признак DNS.
+        val saved = runCatching { Settings.autoModeHomeKey }.getOrNull()?.takeIf { it.isNotBlank() }
+        if (!HomeSign.byFingerprint(sign, networkKey(network), saved)) return false
+        Log.i(TAG, "старт: резолверы молчат, но отпечаток сети совпал с последним домом — проверяю трафиком")
         return homeCarriesTraffic(network) == true
     }
 
@@ -1217,7 +1246,7 @@ object AutoMode {
             if (hurry != null) Log.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
             // Резолверы промолчали — перепроверяем скоро, но не бесконечно. Спешка серии и
             // набор подтверждений и так ближе, им эта перепроверка не нужна.
-            val blind = observationSilent
+            val blind = observationBlind
             if (!blind) silentRechecks = 0
             val recheck = if (idle || hurry != null || pendingSwitch) {
                 null
@@ -1364,7 +1393,7 @@ object AutoMode {
         // знаю». Задвижке такое наблюдение даже не показываем: набор подтверждений
         // означал бы, что молчание всё-таки считается доводом, просто медленнее.
         if (holdsVerdict(
-                silent = observationSilent,
+                silent = observationBlind,
                 observed = observed,
                 current = gate.current,
                 sameNetwork = observedNetworkKey != null && observedNetworkKey == situationNetwork,
@@ -1392,7 +1421,7 @@ object AutoMode {
             observed,
             trust = trustOnce,
             hurried = burst.active && !trustOnce,
-            blind = observationSilent,
+            blind = observationBlind,
         )
         pendingSwitch = gate.pending
         settled = burstClosable(changed = changed, pending = gate.pending, confident = observationConfident)
@@ -1425,6 +1454,7 @@ object AutoMode {
         // Каждый заход начинается зрячим, пока сводка DNS не скажет обратного: иначе
         // молчание одного захода тянулось бы в следующие.
         observationSilent = false
+        observationBlind = false
         val network = physicalNetwork() ?: run {
             observedNetworkKey = null
             observationNote = "сети нет вовсе"
@@ -1473,12 +1503,21 @@ object AutoMode {
         // включает VPN на вайфае» 28.08.2026.
         if (canBeHome) noteDnsSilence(network, observationSilent)
         if (dnsNow == HomeSign.Sign.Yes) rememberHomeSign(network)
+        // Резолверы молчат, но сеть узнаётся по отпечатку последнего подтверждённого дома:
+        // тот же транспорт и тот же набор резолверов с уникальным адресом IPv6 ULA. Память о
+        // признаке ([homeSignAge]) после переподключения и перезапуска пуста, а отпечаток
+        // живёт в настройках. Это только признак: дом объявит прошедший наружу трафик.
+        val byFingerprint = canBeHome && hint != NetworkMode.Whitelist &&
+            HomeSign.byFingerprint(dnsNow, observedNetworkKey, lastHomeKey)
+        if (byFingerprint) {
+            Log.i(TAG, "резолверы молчат, но отпечаток сети совпал с последним домом — признак дома держу, проверяю трафиком")
+        }
         // Одна слепая сводка признак не отменяет — отменяет его только опровержение делом.
         val dnsHome = HomeSign.stands(
             seenNow = dnsNow,
             ageMillis = homeSignAge(network),
             refuted = hint == NetworkMode.Whitelist,
-        )
+        ) || byFingerprint
         // Трафиком подтверждаем только то, что есть смысл подтверждать. Если подсказка
         // уже сказала «белый список», дом отменён при любых признаках DNS — и тратить
         // на него пробу незачем.
@@ -1509,8 +1548,9 @@ object AutoMode {
         observationConfident = when {
             // Дома не бывает в соте: тут узнавать нечего, и ждать нечего.
             !canBeHome -> true
-            // Резолверы промолчали — мы ничего не узнали.
-            dnsNow == HomeSign.Sign.Unknown -> false
+            // Резолверы промолчали — мы ничего не узнали. Кроме одного случая: сеть узнана по
+            // отпечатку дома, и трафик наружу прошёл — это знание, а не молчание.
+            dnsNow == HomeSign.Sign.Unknown && !(byFingerprint && carried == true) -> false
             // Признак есть, а замер трафика не состоялся (имя цели не резолвится на
             // недоделанной сети) — вердикт «не дома» держится на неизмеренном.
             dnsHome && carried == null && hint != NetworkMode.Whitelist -> false
@@ -1529,6 +1569,8 @@ object AutoMode {
         }
 
         val home = homeVerdict(dnsHome, carried, hint)
+        observationBlind = observationSilent && !(byFingerprint && home)
+        if (canBeHome) rememberHomeKey(HomeSign.nextHomeKey(lastHomeKey, observedNetworkKey, dnsNow, home))
         if (canBeHome && (dnsHome || home)) {
             // Признак дома был — значит есть что объяснить: почему домом это считается
             // или почему нет. Без признака писать нечего, там и так обычная сеть.
@@ -1623,6 +1665,7 @@ object AutoMode {
                 }
             }" +
             (if (dnsHome != (dnsNow == HomeSign.Sign.Yes)) " (в силе: $dnsHome)" else "") +
+            (if (byFingerprint) " (по отпечатку сети)" else "") +
             ", трафик ${
                 when (carried) {
                     true -> "проходит"
@@ -1754,7 +1797,8 @@ object AutoMode {
      * трогает рабочее состояние, а ответ резолвера трогает всё как раньше» должно
      * проверяться тестом, а не пересказом.
      *
-     * @param silent резолверы этого захода промолчали ([observationSilent]).
+     * @param silent заход ничего не узнал про дом: резолверы промолчали и отпечаток сети
+     *   дом не подтвердил ([observationBlind]).
      * @param observed что заход увидел.
      * @param current обстановка, на которой стоим.
      * @param sameNetwork отпечаток сети тот же, на котором обстановка была подтверждена.
@@ -2329,6 +2373,25 @@ object AutoMode {
     private fun rememberHomeSign(network: Network) {
         homeSignNetwork = networkKey(network)
         homeSignAt = SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * Запоминает отпечаток последнего подтверждённого дома — в памяти и в настройках.
+     * Пишем только на изменении: заход дома идёт раз в пять минут, а диск тут не нужен каждый раз.
+     */
+    private fun rememberHomeKey(value: String?) {
+        if (value == lastHomeKey) return
+        lastHomeKey = value
+        runCatching { Settings.autoModeHomeKey = value.orEmpty() }
+            .onFailure { Log.w(TAG, "отпечаток дома не записался: ${it.message}") }
+        Log.i(
+            TAG,
+            if (value == null) {
+                "отпечаток дома забыт: на этой сети резолвер ответил без подмен"
+            } else {
+                "отпечаток дома запомнен: $value"
+            },
+        )
     }
 
     /** Признак опровергнут делом или относится к другой сети — держаться за него не на чем. */

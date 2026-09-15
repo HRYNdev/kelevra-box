@@ -182,6 +182,12 @@ object Settings {
     // комнату, включил — поднялись «Нидерланды» с подписью «выбран вручную».
     var manualExitName by dataStore.string(SettingsKey.AUTO_MODE_MANUAL_EXIT) { "" }
 
+    // Отпечаток сети (транспорт и резолверы) последнего дома, подтверждённого резолвером и
+    // трафиком. Память процесса о доме слетает при перезапуске, а резолверы после
+    // переподключения к тому же вайфаю могут молчать минутами — см. HomeSign.byFingerprint.
+    // Пусто — такого дома не было.
+    var autoModeHomeKey by dataStore.string(SettingsKey.AUTO_MODE_HOME_KEY) { "" }
+
     // Пара (селектор, тег), которую последним поставил автомат — см. AutoModeSticky.
     // Пусто — пометки нет: либо автомат ничего не переключал, либо последним выбирал человек.
     var autoModeStickyGroup by dataStore.string(SettingsKey.AUTO_MODE_STICKY_GROUP) { "" }
