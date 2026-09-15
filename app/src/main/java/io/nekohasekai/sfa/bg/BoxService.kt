@@ -560,6 +560,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             result = rest.content
         }
 
+        // IPv6, который ушёл бы в комнату, — сразу отказ: у ноги комнаты IPv6 нет, и такие
+        // соединения получали сброс уже в её соксе. Идёт после белого списка, чтобы отказ
+        // встал и перед `final`, который тот уводит в селектор с комнатой.
+        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
+            val v6 = OlcRtcConfigPatch.rejectIpv6ToRoom(result, OlcRtcParams.socksPort)
+            OlcRtcConfigPatch.log(v6)
+            result = v6.content
+        }
+
         val layout = AutoModeExits.parse(result, OlcRtcParams.socksPort)
         val probe = ProbeInboundPatch.addProbeInbounds(result, layout.measurable)
         ProbeInboundPatch.log(probe)

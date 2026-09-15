@@ -431,6 +431,117 @@ object OlcRtcConfigPatch {
         )
     }
 
+    /** Любой адрес IPv6 назначения. Адреса IPv4 этой подсети не принадлежат. */
+    private const val ANY_IPV6 = "::/0"
+
+    /**
+     * Поля действия маршрута. Во вложенном правиле логического они запрещены: там только
+     * условия, действие стоит у внешнего правила.
+     */
+    private val ROUTE_ACTION_KEYS = setOf(
+        "action", "outbound", "override_address", "override_port", "network_strategy",
+        "network_type", "fallback_network_type", "fallback_delay", "udp_disable_domain_unmapping",
+        "udp_connect", "udp_timeout", "tls_fragment", "tls_fragment_fallback_delay", "tls_record_fragment",
+    )
+
+    /**
+     * IPv6, который ушёл бы в комнату, — сразу отказ, а не в её сокс.
+     *
+     * SOCKS комнаты адресов IPv6 не понимает ([onlyIpv4]), а у ноги комнаты IPv6 нет вовсе.
+     * Соединение к IPv6-адресу, уведённое в комнату, получает `connection reset by peer`, и
+     * так себя вели дата-центры Телеграма по IPv6: приложение долбило их повторами, а каждая
+     * попытка стоила сокс-рукопожатия и строки отказа в журнале. Честный отказ на маршруте
+     * даёт тот же итог без похода в комнату — и приложение сразу берёт IPv4.
+     *
+     * Отказ ставится ровно туда, где трафик ушёл бы в комнату, и больше никуда:
+     *  - перед каждым правилом, которое ведёт в комнату или группу с ней, — логическое «И» из
+     *    условий этого правила и «адрес назначения IPv6». Одним общим правилом выше всех
+     *    нельзя: оно поймало бы и IPv6, который ниже по списку честно идёт напрямую;
+     *  - если в комнату ведёт `final` — последним правилом: до `final` доходит только то,
+     *    что не поймали правила выше, в том числе прямые правила белого списка.
+     *
+     * Условие по адресу, а не по версии соединения: имя назначения (домен) ему не отвечает,
+     * и соединение по имени как шло в комнату, так и идёт — там его разрешит сама нога.
+     *
+     * Цена: правило не знает, куда смотрит селектор. Пока комната стоит, но селектор на
+     * основном канале, IPv6 в эти же правила тоже получит отказ. Так уже устроены [onlyIpv4]
+     * и [addQuicReject] — правка живёт, только пока комната поднята, а поднятая комната без
+     * выхода на неё держится секунды: гасят её тем же ходом, что уводят выход.
+     */
+    fun rejectIpv6ToRoom(content: String, socksPort: Int): Result =
+        runCatching { patchIpv6(content, socksPort) }.getOrElse {
+            Result(content, "отказ IPv6 в комнату не лёг (${it.javaClass.simpleName}), конфиг как есть", false)
+        }
+
+    private fun patchIpv6(content: String, socksPort: Int): Result {
+        val root = JSONObject(content)
+        val roomTags = roomTags(root, socksPort)
+        if (roomTags.isEmpty()) return Result(content, "выхода комнаты в конфиге нет, IPv6 не трогаем", false)
+        val route = root.optJSONObject("route") ?: return Result(content, "в конфиге нет route", false)
+        val rules = route.optJSONArray("rules") ?: JSONArray()
+
+        val patched = JSONArray()
+        var guarded = 0
+        for (i in 0 until rules.length()) {
+            val rule = rules.opt(i)
+            if (rule is JSONObject && rule.optString("outbound") in roomTags) {
+                val previous = if (patched.length() > 0) patched.optJSONObject(patched.length() - 1) else null
+                val guard = ipv6Guard(rule)
+                // Повторная правка не плодит второй отказ перед тем же правилом.
+                if (previous == null || !sameJson(previous, guard)) {
+                    patched.put(guard)
+                    guarded++
+                }
+            }
+            patched.put(rule)
+        }
+
+        var finalGuarded = false
+        if (route.optString("final") in roomTags) {
+            val last = if (patched.length() > 0) patched.optJSONObject(patched.length() - 1) else null
+            val tail = finalIpv6Reject()
+            if (last == null || !sameJson(last, tail)) {
+                patched.put(tail)
+                finalGuarded = true
+            }
+        }
+
+        if (guarded == 0 && !finalGuarded) {
+            return Result(content, "IPv6 в комнату: отказы уже стоят или в комнату ничего не ведёт", false)
+        }
+        route.put("rules", patched)
+        return Result(
+            root.toString(),
+            "IPv6 в комнату — отказ: перед правилами в комнату $guarded" +
+                if (finalGuarded) ", и последним перед final" else "",
+            true,
+        )
+    }
+
+    /** Условия правила без его действия — и «адрес назначения IPv6», всё через «И». */
+    private fun ipv6Guard(rule: JSONObject): JSONObject {
+        val condition = JSONObject()
+        for (key in rule.keys()) {
+            if (key !in ROUTE_ACTION_KEYS) condition.put(key, rule.get(key))
+        }
+        return JSONObject()
+            .put("type", "logical")
+            .put("mode", "and")
+            .put("rules", JSONArray().put(condition).put(JSONObject().put("ip_cidr", JSONArray().put(ANY_IPV6))))
+            .put("action", "reject")
+    }
+
+    private fun finalIpv6Reject(): JSONObject = JSONObject()
+        .put("ip_cidr", JSONArray().put(ANY_IPV6))
+        .put("action", "reject")
+
+    /**
+     * Сравнение по тексту, а не `similar`: в org.json из Android такого метода нет, и правка
+     * падала бы на телефоне, проходя тесты на JVM. Порядок ключей у обоих одинаковый — оба
+     * собраны этим же кодом или разобраны из его же вывода.
+     */
+    private fun sameJson(a: JSONObject, b: JSONObject): Boolean = a.toString() == b.toString()
+
     private fun hasPackageRule(rules: JSONArray): Boolean = (0 until rules.length()).any { i ->
         val list = rules.optJSONObject(i)?.optJSONArray("package_name") ?: return@any false
         (0 until list.length()).map { list.optString(it) } == PAKETY_RAZRESHYONNYE
