@@ -86,9 +86,11 @@ class ApkDownloader : Closeable {
         val cacheDir = File(Application.application.cacheDir, "updates")
         cacheDir.mkdirs()
         val apkFile = File(cacheDir, IshodUstanovki.imyaFayla(info?.versionCode ?: 0))
-        val partFile = File(cacheDir, apkFile.name + ".part")
-        // Файлы прошлых версий и недокачанные остатки больше не нужны.
-        cacheDir.listFiles()?.forEach { if (it.name != apkFile.name) it.delete() }
+        val partFile = File(cacheDir, IshodUstanovki.imyaChastichnogoFayla(info?.versionCode ?: 0))
+        // Файлы прошлых версий и протухшие остатки больше не нужны; чужой свежий .part
+        // может прямо сейчас писать другой воркер (гонка UpdateWorker/UpdatePovtorWork, #14).
+        IshodUstanovki.kUdaleniyu(cacheDir.listFiles()?.toList() ?: emptyList(), apkFile.name, System.currentTimeMillis())
+            .forEach { it.delete() }
 
         // Качаем во временный файл и переименовываем только после проверки: под постоянным
         // именем никогда не лежит недокачанное.

@@ -134,6 +134,34 @@ object IshodUstanovki {
     /** Файл привязан к версии: иначе после выхода новой версии ставился старый скачанный. */
     fun imyaFayla(versionCode: Int): String = "update-$versionCode.apk"
 
+    /** Уникальное имя временного файла на один вызов: два воркера одной версии не пишут в один файл. */
+    fun imyaChastichnogoFayla(versionCode: Int): String =
+        "${imyaFayla(versionCode)}.${java.util.UUID.randomUUID()}.part"
+
+    /**
+     * Файлы кэша обновлений, которые уборка перед скачиванием снесёт: всё, кроме готового
+     * файла [imyaGotovogo] и чужих свежих `.part` — младше [porogMs] мс с последней записи.
+     *
+     * Порог 5 минут: заметно дольше одной попытки скачивания на обычной сети (в
+     * ApkDownloader их всего 2 подряд), и заметно короче ближайшего повтора в лестнице
+     * (15 минут) — «свежий» .part не спутать со следующим циклом того же воркера.
+     *
+     * До этой правки уборка сносила ЛЮБОЙ файл, кроме готового apk, включая `.part`,
+     * который прямо сейчас пишет второй воркер: UpdateWorker и UpdatePovtorWork не
+     * сериализованы между собой (#14), скачанные байты терялись, rename падал с
+     * NoSuchFileException. Красный тест на старой версии этой функции — ApkKeshTest.
+     */
+    fun kUdaleniyu(
+        files: List<java.io.File>,
+        imyaGotovogo: String,
+        seychasMs: Long,
+        porogMs: Long = 5 * 60_000L,
+    ): List<java.io.File> =
+        files.filter { file ->
+            file.name != imyaGotovogo &&
+                !(file.name.endsWith(".part") && seychasMs - file.lastModified() < porogMs)
+        }
+
     /** «sha256:<64 hex>» из поля digest у файла релиза; всё прочее — null. */
     fun sha256IzDigest(digest: String?): String? =
         digest?.trim()?.let { SHA256_DIGEST.matchEntire(it) }?.groupValues?.get(1)?.lowercase()
