@@ -54,7 +54,7 @@ jobs:
           cache-dependency-path: sing-box/go.sum
 
       - name: Setup JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"   # build_libbox проверяет версию и падает на всём, кроме 17
