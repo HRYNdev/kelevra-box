@@ -134,7 +134,7 @@ jobs:
             gomod-olcrtc-
 
       - name: Setup JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17" # gomobile/gobind в апстриме проверяют 17; держим ту же связку
