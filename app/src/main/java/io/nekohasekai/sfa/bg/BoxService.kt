@@ -176,6 +176,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @Volatile
     private var coreSelfOutsideTun = false
 
+    /** Работающее ядро собрано под комнату: отказ QUIC, только IPv4, остальное в комнату. */
+    @Volatile
+    private var coreRoomConfig = false
+
     /** Когда последний раз ходили к серверу за свежим токеном комнаты. */
     private var tokenRefreshedAt = 0L
 
@@ -519,6 +523,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun effectiveConfig(content: String): String {
         var result = content
 
+        // Правки под комнату кладём, пока она нужна, а не только пока уже поднята: ядро
+        // обязано быть собрано под комнату ДО входа в неё (см. [TunnelFacts.coreConfigStale]).
+        // Решение запоминаем — по нему видно, надо ли пересобирать ядро перед входом и
+        // когда комната стала не нужна.
+        val roomInConfig = roomInConfig()
+        coreRoomConfig = roomInConfig
+
         val rules = RuleSetLocalPatch.useCached(result, RuleSetCache.cached())
         RuleSetLocalPatch.log(rules)
         RuleSetCache.report(rules)
@@ -548,14 +559,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         OlcRtcConfigPatch.log(stack)
         result = stack.content
 
-        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
+        if (roomInConfig) {
             val v4 = OlcRtcConfigPatch.onlyIpv4(result)
             OlcRtcConfigPatch.log(v4)
             result = v4.content
         }
 
 
-        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
+        if (roomInConfig) {
             val quic = OlcRtcConfigPatch.addQuicReject(result, OlcRtcParams.socksPort)
             OlcRtcConfigPatch.log(quic)
             result = quic.content
@@ -564,7 +575,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Под белым списком разрешённое оператором — напрямую, остальное — в комнату.
         // И решение, и сам список без сети: вердикт уже известен, домены вшиты в APK,
         // а ядро пересобирается и на пути нажатой кнопки.
-        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready &&
+        if (roomInConfig &&
             OlcRtcConfigPatch.wantsFinalViaRoom(
                 autoMode = Settings.autoModeEnabled,
                 manualRoom = Settings.autoModeManualRoom,
@@ -580,7 +591,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // IPv6, который ушёл бы в комнату, — сразу отказ: у ноги комнаты IPv6 нет, и такие
         // соединения получали сброс уже в её соксе. Идёт после белого списка, чтобы отказ
         // встал и перед `final`, который тот уводит в селектор с комнатой.
-        if (Settings.olcrtcEnabled && OlcRtcCore.state is OlcRtcCore.State.Ready) {
+        if (roomInConfig) {
             val v6 = OlcRtcConfigPatch.rejectIpv6ToRoom(result, OlcRtcParams.socksPort)
             OlcRtcConfigPatch.log(v6)
             result = v6.content
@@ -897,6 +908,16 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         return smenilsya
     }
 
+    /**
+     * Нужен ли конфиг под комнату, если собирать ядро прямо сейчас.
+     *
+     * Комната «нужна» — это просьба про неё ([roomWanted]), подъём туннеля ради неё
+     * ([roomAhead]) или уже поднятое ядро комнаты. Поиск пути сюда не входит: увести
+     * `final` в комнату, которой нет, значит закрыть дорогу и остаткам трафика.
+     */
+    private fun roomInConfig(): Boolean = Settings.olcrtcEnabled &&
+        (roomWanted || roomAhead || OlcRtcCore.state is OlcRtcCore.State.Ready)
+
     /** Выводить ли приложение из tun, если собирать ядро прямо сейчас. */
     private fun selfOutsideTunNow(): Boolean = TunnelFacts.selfOutsideTun(
         vpn = service is VpnService,
@@ -907,21 +928,54 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     )
 
     /**
-     * Комната погашена и не нужна, а ядро собрано с приложением вне tun — пересобрать и
-     * вернуть приложение в tun ([TunnelFacts.returnSelfToTun]). Звать под [tunnelLock].
+     * Ядро собрано не под то, что нужно сейчас (комната не встала или больше не нужна) —
+     * пересобрать ([TunnelFacts.coreConfigStale]). Звать под [tunnelLock].
      *
      * @return `null`, если пересобирать не нужно.
      */
-    private fun returnSelfToTun(reason: String): AutoMode.RoomAck? {
+    private fun resyncCore(reason: String): AutoMode.RoomAck? {
         val busy = roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting
-        if (!TunnelFacts.returnSelfToTun(coreSelfOutsideTun, selfOutsideTunNow(), busy)) return null
-        Log.i(TAG, "комната погашена и не нужна ($reason), а приложение вне tun — пересобираю ядро, возвращаю его в tun")
+        if (!TunnelFacts.coreConfigStale(coreRoomConfig, coreSelfOutsideTun, roomInConfig(), selfOutsideTunNow(), busy)) {
+            return null
+        }
+        Log.i(TAG, "ядро собрано не под то, что нужно сейчас ($reason) — пересобираю")
         return runCatching {
             restartCore()
             AutoMode.RoomAck.Changed
         }.getOrElse {
-            Log.w(TAG, "пересборка ядра без комнаты не удалась: ${it.message}")
+            Log.w(TAG, "пересборка ядра под текущее состояние не удалась: ${it.message}")
             AutoMode.RoomAck.Failed
+        }
+    }
+
+    /**
+     * Готовит ядро к входу в комнату: если работающее собрано не под неё, пересобирает.
+     * Звать под [tunnelLock].
+     *
+     * Это единственная пересборка на пути подъёма комнаты, и она идёт ДО входа — после
+     * входа пересборка рвёт уже собранную сессию ([TunnelFacts.coreConfigStale]).
+     *
+     * @return true, если ядро пересобрали.
+     */
+    private fun prepareCoreForRoom(reason: String): Boolean {
+        if (serviceStopping || tunnelSuspended) return false
+        if (!TunnelFacts.coreConfigStale(
+                coreRoom = coreRoomConfig,
+                coreSelfOutside = coreSelfOutsideTun,
+                wantRoom = roomInConfig(),
+                wantSelfOutside = selfOutsideTunNow(),
+                roomBusy = false,
+            )
+        ) {
+            return false
+        }
+        Log.i(TAG, "ядро собрано не под комнату ($reason) — пересобираю до входа")
+        return runCatching {
+            restartCore()
+            true
+        }.getOrElse {
+            Log.w(TAG, "пересборка ядра до входа не удалась: ${it.message}")
+            false
         }
     }
 
@@ -958,8 +1012,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
             roomWanted = wanted
             if (wanted == up) {
-                // Комната не встала или погашена раньше, а ядро осталось с приложением вне tun.
-                if (!wanted) returnSelfToTun(reason)?.let { return it }
+                // Комната не встала или погашена раньше, а ядро осталось собранным под неё.
+                if (!wanted) resyncCore(reason)?.let { return it }
                 Log.i(TAG, "комната уже ${if (up) "поднята" else "погашена"} ($reason) — оставляю как есть")
                 return AutoMode.RoomAck.Unchanged
             }
@@ -1004,6 +1058,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * минуты значило бы заморозить и гашение туннеля, и уход домой.
      */
     private fun raiseRoom(reason: String) {
+        // Ядро под комнату собираем ДО входа в неё. Пересборка закрывает прежний tun, и
+        // Android сносит VPN-сеть, а новую заводит заново; сделанная после входа, она
+        // попадает в собранную сессию — ядро комнаты видит смену сети, LiveKit
+        // перезапускает ICE, данные стоят десятки секунд (эмулятор, 2 входа из 6).
+        // Обычно пересобирать нечего: подъём туннеля ради комнаты уже собрал ядро так же.
+        val prepared = synchronized(tunnelLock) { prepareCoreForRoom(reason) }
+        // Пересборка сбросила выбор в селекторе — автомату это знать сразу.
+        if (prepared) AutoMode.onCoreRebuilt("ядро собрано под комнату ($reason)")
+
         startOlcRtcIfEnabled()
         // Носитель отверг токен — пробуем забрать свежий у сервера и подняться ещё раз.
         // Сам по себе повтор бесполезен: отвечает не сеть, а WbStream, и будет отвечать
@@ -1020,6 +1083,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 OlcRtcCore.state !is OlcRtcCore.State.Ready -> {
                     Log.w(TAG, "комната не встала ($reason): ${OlcRtcCore.lastError}")
                     roomWanted = false
+                    // Ядро осталось собранным под комнату, которой нет: `final` уводил бы
+                    // остатки трафика в её мёртвый сокс. Возвращаем к тому, что есть.
+                    resyncCore("комната не встала: $reason")
                     false
                 }
 
@@ -1040,13 +1106,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                     false
                 }
 
-                else -> runCatching {
-                    restartCore()
-                    true
-                }.getOrElse {
-                    Log.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
-                    false
-                }
+                // Ядро уже собрано под комнату — второй раз его не трогаем.
+                else -> true
             }
         }
         // Что бы ни вышло — реестр узнаёт об этом сразу, не дожидаясь круга автомата.
