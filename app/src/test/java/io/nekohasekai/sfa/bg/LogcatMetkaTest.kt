@@ -38,7 +38,10 @@ class LogcatMetkaTest {
         assertFalse(metka.uzhePisali(stroka("15:08:00.100", "раз")))
         assertFalse(metka.uzhePisali(stroka("15:08:01.250", "два")))
         assertFalse(metka.uzhePisali(stroka("15:08:01.250", "три")))
-        // Перезапуск с -T 15:08:01.250 отдаёт эту миллисекунду ещё раз, потом новое.
+        // Перезапуск — в drain() он всегда начинается именно с komanda(), она и есть
+        // сигнал границы; без него это просто повтор строк в той же сессии, не рестарт.
+        metka.komanda(4242)
+        // С -T 15:08:01.250 logcat отдаёт эту миллисекунду ещё раз, потом новое.
         assertTrue(metka.uzhePisali(stroka("15:08:01.250", "два")))
         assertTrue(metka.uzhePisali(stroka("15:08:01.250", "три")))
         assertFalse(metka.uzhePisali(stroka("15:08:01.250", "четыре")))
@@ -51,6 +54,16 @@ class LogcatMetkaTest {
         val metka = LogcatMetka()
         assertFalse(metka.uzhePisali(stroka("15:08:00.100", "проба")))
         assertFalse(metka.uzhePisali(stroka("15:08:05.100", "проба")))
+    }
+
+    @Test
+    fun odna_i_ta_zhe_stroka_dvazhdy_podryad_bez_perezapuska_obe_prohodyat() {
+        // Без перезапуска logcat две ОДИНАКОВЫЕ строки в одну и ту же миллисекунду —
+        // законное совпадение (например, два одинаковых по тексту события подряд), а
+        // не повтор буфера. Дедуп по СОДЕРЖИМОМУ вторую строку тут молча теряет.
+        val metka = LogcatMetka()
+        assertFalse(metka.uzhePisali(stroka("15:08:01.250", "тик")))
+        assertFalse(metka.uzhePisali(stroka("15:08:01.250", "тик")))
     }
 
     @Test
