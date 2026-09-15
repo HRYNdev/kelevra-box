@@ -41,6 +41,42 @@ def patch(path, replacements, must_exist=True):
     open(path, "w", encoding="utf-8").write(src)
 
 
+def patch_v_funkcii(path, replacements):
+    """Правка внутри тела названной функции: якорь = сигнатура + ОДНА строка.
+
+    Обычный patch() берёт якорем сплошной кусок от сигнатуры до места правки, и
+    любая вставка апстрима между ними рвёт наложение — при том что сама строка,
+    которую мы правим, на месте и правка всё ещё нужна. Замер 15.09.2026: на
+    v1.14.1 перед обходом в Match/matchWithOuterGroups появилось
+    `snapshot := snapshotRuleMatch(metadata)`, и патч перестал ложиться, хотя
+    `clear(r.setList)` в Close() и `range r.setList` в обходе — на месте, то
+    есть паника из боя 15.08 у апстрима не починена.
+
+    Поиск ограничен телом функции (до следующего `func `), чтобы промах не ушёл
+    незаметно в соседнюю функцию с такой же строкой: их тут три.
+    """
+    if not os.path.exists(path):
+        fail(f"нет файла {path}")
+    src = open(path, encoding="utf-8").read()
+    for podpis, old, new in replacements:
+        nachalo = src.find(podpis)
+        if nachalo < 0:
+            fail(f"в {os.path.basename(path)} нет функции:\n{podpis}")
+        konec = src.find("\nfunc ", nachalo + len(podpis))
+        if konec < 0:
+            konec = len(src)
+        if new.strip() and new in src[nachalo:konec]:
+            continue  # уже применено — смотрим ТЕЛО: правки-близнецы совпадают дословно
+        mesto = src.find(old, nachalo, konec)
+        if mesto < 0:
+            fail(
+                f"в {os.path.basename(path)}, в теле {podpis}"
+                f"\nне найдено место для правки:\n{old}"
+            )
+        src = src[:mesto] + new + src[mesto + len(old):]
+    open(path, "w", encoding="utf-8").write(src)
+
+
 def main():
     if len(sys.argv) < 2:
         fail("укажите путь к дереву sing-box")
@@ -155,17 +191,24 @@ def main():
                 "\t// освобождается сборщиком, как только пропадёт последняя ссылка.\n"
                 "\tr.setList = nil\n",
             ),
+        ],
+    )
+
+    # Сам обход правим по сигнатуре функции: между ней и циклом апстрим свои
+    # строки вставляет (см. patch_v_funkcii), а правится ровно строка цикла.
+    patch_v_funkcii(
+        os.path.join(core, "route", "rule", "rule_item_rule_set.go"),
+        [
             (
-                "func (r *RuleSetItem) Match(metadata *adapter.InboundContext) bool {\n"
+                "func (r *RuleSetItem) Match(metadata *adapter.InboundContext) bool {",
                 "\tfor _, ruleSet := range r.setList {\n",
-                "func (r *RuleSetItem) Match(metadata *adapter.InboundContext) bool {\n"
                 "\t// снимок: поле пересобирается Start/Close параллельно с обходом\n"
                 "\tsetList := r.setList\n"
                 "\tfor _, ruleSet := range setList {\n",
             ),
             (
-                "\touterDone := outerGroups.done()\n\tfor _, ruleSet := range r.setList {\n",
-                "\touterDone := outerGroups.done()\n"
+                "func (r *RuleSetItem) matchWithOuterGroups(",
+                "\tfor _, ruleSet := range r.setList {\n",
                 "\t// снимок: поле пересобирается Start/Close параллельно с обходом\n"
                 "\tsetList := r.setList\n"
                 "\tfor _, ruleSet := range setList {\n",
