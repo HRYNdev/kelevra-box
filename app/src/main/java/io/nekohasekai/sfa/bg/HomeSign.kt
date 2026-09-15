@@ -168,4 +168,67 @@ internal object HomeSign {
         // резолвера память стирать не имеет права, ответ «настоящие адреса» — имеет.
         else -> ageMillis in 0 until memoryMillis
     }
+
+    /**
+     * Годится ли отпечаток сети (транспорт и резолверы, как его строит `AutoMode.networkKey`),
+     * чтобы узнавать по нему дом без DNS.
+     *
+     * Память о признаке дома ([stands]) живёт 45 секунд и слетает при перезапуске, а резолверы
+     * после переподключения к тому же вайфаю могут молчать минутами — и автомат поднимал
+     * туннель у себя дома. Узнать сеть можно и без ответа резолвера, но только по примете,
+     * которой нет у чужих: `192.168.1.1` стоит у половины роутеров, а вот адрес IPv6 ULA
+     * (fc00::/7) роутер выбирает сам, случайно, и повторяется он разве что у соседа с тем же
+     * роутером и тем же случайным числом. Сота домом не бывает вовсе ([reachable]).
+     */
+    fun distinctKey(key: String?): Boolean {
+        if (key == null) return false
+        val transport = key.substringBefore('|', missingDelimiterValue = "")
+        if (transport != "wifi" && transport != "other") return false
+        return key.substringAfter('|', missingDelimiterValue = "").split(',').any(::isUla)
+    }
+
+    /** Адрес из уникального локального диапазона IPv6 (fc00::/7) — по первому слову адреса. */
+    fun isUla(address: String): Boolean {
+        val text = address.trim().substringBefore('%')
+        if (!text.contains(':')) return false
+        val first = text.substringBefore(':')
+        // «fd::1» — это 00fd::1, а не ULA: первое слово обязано быть полным.
+        if (first.length != 4) return false
+        val value = first.toIntOrNull(16) ?: return false
+        return value and 0xFE00 == 0xFC00
+    }
+
+    /**
+     * Стоит ли признак дома по отпечатку сети.
+     *
+     * Только когда резолверы промолчали: ответ резолвера важнее приметы, и «настоящие адреса»
+     * на домашнем отпечатке значат, что обход сняли. Дом этим не объявляется — как и признак
+     * DNS, отпечаток должен подтвердиться прошедшим наружу трафиком ([AutoMode.homeVerdict]),
+     * а подсказка «белый список» отменяет его так же.
+     *
+     * Та же SSID с другим набором резолверов — другой отпечаток, и домом она не считается:
+     * имени сети в отпечатке нет вовсе.
+     *
+     * @param key отпечаток сети сейчас.
+     * @param lastHomeKey отпечаток последнего подтверждённого дома — переживает перезапуск.
+     */
+    fun byFingerprint(seenNow: Sign, key: String?, lastHomeKey: String?): Boolean =
+        seenNow == Sign.Unknown && key != null && key == lastHomeKey && distinctKey(key)
+
+    /**
+     * Какой отпечаток помнить как последний подтверждённый дом после этого захода.
+     *
+     * Запоминаем только дом, подтверждённый резолвером и трафиком: дом по самому отпечатку
+     * себя не продлевает, иначе примета держалась бы на самой себе. Забываем, когда на той
+     * же сети резолвер ответил и подмен нет: обход на роутере сняли.
+     *
+     * @param home вердикт этого захода «дома».
+     * @return новый отпечаток; `null` — помнить нечего.
+     */
+    fun nextHomeKey(saved: String?, key: String?, seenNow: Sign, home: Boolean): String? = when {
+        key == null -> saved
+        home && seenNow == Sign.Yes -> if (distinctKey(key)) key else saved
+        seenNow == Sign.No && key == saved -> null
+        else -> saved
+    }
 }
