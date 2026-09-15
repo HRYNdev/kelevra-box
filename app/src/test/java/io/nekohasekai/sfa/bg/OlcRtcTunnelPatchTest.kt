@@ -87,27 +87,47 @@ class OlcRtcTunnelPatchTest {
     }
 
     @Test
-    fun `ядро 1_15 alpha — ключ stack снимается`() {
-        val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.15.0-alpha.3")
-        assertTrue(result.patched)
-        val tun = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0)
-        assertFalse("на своём стеке ключа stack быть не должно", tun.has("stack"))
-    }
-
-    @Test
-    fun `ядро 1_15_0 релиз — ключ stack снимается`() {
+    fun `ядро 1_15_0 релиз — ключ stack пока остаётся`() {
+        // Замер нарядом 0915-171106 на реальном sing-box v1.15.0-alpha.4: DECODE OK с
+        // ключом stack. experimental/deprecated/constants.go: OptionTunStack
+        // DeprecatedVersion="1.15.0", ScheduledVersion="1.17.0" — апстрим снимет ключ
+        // с 1.17.0, а не с 1.15.0.
         val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.15.0")
         assertTrue(result.patched)
         val tun = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0)
+        assertEquals("gvisor", tun.getString("stack"))
+    }
+
+    @Test
+    fun `ядро 1_16_3 — ключ stack пока остаётся`() {
+        val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.16.3")
+        assertTrue(result.patched)
+        val tun = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0)
+        assertEquals("gvisor", tun.getString("stack"))
+    }
+
+    @Test
+    fun `ядро 1_17_0 — ключ stack снимается`() {
+        val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.17.0")
+        assertTrue(result.patched)
+        val tun = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0)
+        assertFalse("апстрим сносит ключ с 1.17.0 (ScheduledVersion)", tun.has("stack"))
+    }
+
+    @Test
+    fun `ядро 1_18_0 — ключ stack снимается`() {
+        val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.18.0")
+        assertTrue(result.patched)
+        val tun = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0)
         assertFalse(tun.has("stack"))
     }
 
     @Test
-    fun `ядро 1_16_1 — ключ stack снимается`() {
-        val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.16.1")
+    fun `ядро 1_14_9 — стек ставится как раньше`() {
+        val result = OlcRtcConfigPatch.tunnelStack(config(stack = "mixed"), "1.14.9")
         assertTrue(result.patched)
         val tun = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0)
-        assertFalse(tun.has("stack"))
+        assertEquals("gvisor", tun.getString("stack"))
     }
 
     @Test
@@ -117,7 +137,7 @@ class OlcRtcTunnelPatchTest {
                 getJSONArray("inbounds").getJSONObject(0).remove("stack")
             }.toString()
         }
-        val result = OlcRtcConfigPatch.tunnelStack(content, "1.16.0")
+        val result = OlcRtcConfigPatch.tunnelStack(content, "1.17.0")
         assertFalse(result.patched)
     }
 
