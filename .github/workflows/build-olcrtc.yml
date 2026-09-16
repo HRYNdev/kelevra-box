@@ -191,9 +191,20 @@ jobs:
           VERSION=$(cd "$GITHUB_WORKSPACE/sing-box" && git describe --tags | sed 's/^v//')
           echo "версия ядра: $VERSION"
 
-          # теги 1:1 из cmd/internal/build_libbox/main.go (sharedTags); with_naive_outbound
+          # теги 1:1 из cmd/internal/build_libbox/main.go (sharedTags) ПЛЮС http2legacy;
+          # http2legacy наш, апстриму он не нужен: начиная с golang.org/x/net v0.57.0
+          # (тянется ядром v1.14.1) старая реализация http2/transport.go собирается
+          # только под `//go:build !(go1.27 && !http2legacy)`. Наш //go:linkname на
+          # http2.(*Transport).connPool в core-xhttp/v2rayxhttp/dialer.go держит
+          # DefaultDialerClient.Close() — принудительное закрытие ВСЕХ, а не только
+          # простаивающих, HTTP/2-соединений xhttp при обрыве стрима; публичного API
+          # для этого нет. Без тега на toolchain 1.27 линковка падает:
+          # relocation target golang.org/x/net/http2.(*Transport).connPool not defined
+          # (замерено 16.09.2026 на go1.27.0: без тега RC=1, с тегом RC=0). На Go 1.26,
+          # который ставится сейчас, тег ничего не меняет. Снимать — только вместе с linkname.
+          # with_naive_outbound
           # приезжает из матрицы: у legacy апстрим его выкидывает (filterTags).
-          TAGS="with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0,with_tailscale,ts_omit_logtail,ts_omit_ssh,ts_omit_drive,ts_omit_taildrop,ts_omit_webclient,ts_omit_doctor,ts_omit_capture,ts_omit_kube,ts_omit_aws,ts_omit_synology,ts_omit_bird${{ matrix.extra_tags }}"
+          TAGS="with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api,with_usbip,with_openvpn,with_openconnect,badlinkname,tfogo_checklinkname0,http2legacy,with_tailscale,ts_omit_logtail,ts_omit_ssh,ts_omit_drive,ts_omit_taildrop,ts_omit_webclient,ts_omit_doctor,ts_omit_capture,ts_omit_kube,ts_omit_aws,ts_omit_synology,ts_omit_bird${{ matrix.extra_tags }}"
           LDFLAGS="-X github.com/sagernet/sing-box/constant.Version=$VERSION -X runtime.godebugDefault=multipathtcp=0,tlssha1=1,tlsunsafeekm=1 -checklinkname=0 -s -w -buildid="
 
           set -x
