@@ -78,6 +78,9 @@ internal object TunnelFacts {
      * @param wantRoom нужен ли конфиг под комнату сейчас.
      * @param wantSelfOutside нужен ли вывод приложения сейчас (см. [selfOutsideTun]).
      * @param roomBusy комнату поднимает сервис или присмотр — посреди входа не трогаем.
+     * @param profileOutdated перечитывание конфига отложили, пока жила комната
+     *   ([reloadDeferred]): ядро исполняет прежний профиль, и первая безопасная пересборка
+     *   должна подхватить новый.
      */
     fun coreConfigStale(
         coreRoom: Boolean,
@@ -85,5 +88,43 @@ internal object TunnelFacts {
         wantRoom: Boolean,
         wantSelfOutside: Boolean,
         roomBusy: Boolean,
-    ): Boolean = !roomBusy && (coreRoom != wantRoom || coreSelfOutside != wantSelfOutside)
+        profileOutdated: Boolean = false,
+    ): Boolean = !roomBusy && (coreRoom != wantRoom || coreSelfOutside != wantSelfOutside || profileOutdated)
+
+    /**
+     * Отложить ли перечитывание конфига (`serviceReload`), а не пересобирать ядро сразу.
+     *
+     * Перечитывание — та же пересборка: прежний tun закрывается, Android заводит VPN-сеть
+     * заново ([coreConfigStale]). Посреди звонка это рвёт собранную сессию комнаты, а
+     * приходит оно не от человека: расписание [UpdateProfileWork], обновление подписки с
+     * главного экрана, кнопка обновления в профиле. Новый конфиг от ожидания не теряется —
+     * любая следующая пересборка читает файл заново, а выход из комнаты пересобирает ядро
+     * и так.
+     *
+     * Человек, нажавший «Перезапустить», выбравший другой профиль или переключивший
+     * системный прокси, ждёт, что оно применится сейчас, — его не откладываем: разрыв
+     * звонка тут цена, которую он выбрал сам.
+     *
+     * @param roomLive ядро комнаты работает на самом деле.
+     * @param roomBusy комнату поднимает сервис или присмотр, либо ядро комнаты стартует.
+     * @param byHuman перечитывание попросил человек (см. [reloadByHuman]).
+     */
+    fun reloadDeferred(roomLive: Boolean, roomBusy: Boolean, byHuman: Boolean): Boolean =
+        (roomLive || roomBusy) && !byHuman
+
+    /**
+     * Считать ли перечитывание просьбой человека.
+     *
+     * Команда `serviceReload` приходит к сервису через командный сервер libbox без
+     * аргументов, и кто её послал, ядру не видно. Поэтому экран ставит отметку перед
+     * вызовом, а сервис её забирает. Отметка живёт недолго: вызов мог не дойти (сервис
+     * выключен), и забытая отметка иначе пропустила бы следующее перечитывание по
+     * расписанию прямо в звонок.
+     *
+     * @param askedAt когда экран поставил отметку (elapsedRealtime), 0 — не ставил.
+     * @param now текущее elapsedRealtime.
+     * @param windowMillis сколько отметка действительна.
+     */
+    fun reloadByHuman(askedAt: Long, now: Long, windowMillis: Long): Boolean =
+        askedAt > 0 && now >= askedAt && now - askedAt <= windowMillis
 }
