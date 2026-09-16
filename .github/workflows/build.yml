@@ -10,7 +10,7 @@ on:
       core_ref:
         description: "Тег/ветка ядра"
         required: false
-        default: "v1.14.0-beta.4"
+        default: "v1.14.1"
       kelevra_build:
         description: "Номер сборки: пусто — номер прогона. Задать вручную, чтобы проверочная встала ПОВЕРХ боевой (Android не даёт понизить версию, а переустановка стёрла бы код доступа и настройки)"
         required: false
@@ -35,14 +35,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: sing-box-for-android/app/libs
-          key: libbox-xhttp2-${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          key: libbox-xhttp2-${{ github.event.inputs.core_ref || 'v1.14.1' }}
 
       - name: Checkout sing-box core
         if: steps.libbox-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
-          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          ref: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
           path: sing-box
           fetch-depth: 0   # нужны теги: build_libbox читает currentTag из git
 
