@@ -29,7 +29,7 @@ on:
       core_ref:
         description: "Тег/ветка ядра sing-box"
         required: false
-        default: "v1.14.0-beta.4"
+        default: "v1.14.1"
       olcrtc_ref:
         description: "Ветка/тег/SHA olcrtc (в НАШЕМ форке)"
         required: false
@@ -42,7 +42,7 @@ on:
 env:
   NDK_VERSION: "28.0.13004108"
   CORE_REPO: "SagerNet/sing-box"
-  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
   # Свой форк, а не апстрим: наши правки лежат в нём коммитами на ветке kelevra
   # (база 3339cd36 = апстрим от 11.08, из него собраны релизы kelevra90/92/93 в бою).
   # Чужой master уронил ночной прогрев 14.08,
@@ -53,7 +53,7 @@ env:
 jobs:
   # Ядро для обоих флейворов приложения: other -> libbox.aar, otherLegacy -> libbox-legacy.aar.
   # Различия между вариантами ровно те же, что у апстрима в cmd/internal/build_libbox/main.go
-  # (v1.14.0-beta.4): -androidapi и набор тегов без with_naive_outbound.
+  # (v1.14.1): -androidapi и набор тегов без with_naive_outbound.
   core:
     runs-on: ubuntu-latest
     strategy:

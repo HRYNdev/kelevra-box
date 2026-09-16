@@ -26,7 +26,6 @@ import (
 	"github.com/sagernet/sing-box/option"
 	qtls "github.com/sagernet/sing-quic"
 	"github.com/sagernet/sing/common"
-	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -347,7 +346,11 @@ func createHTTPClient(ctx context.Context, dest M.Socksaddr, dialer N.Dialer, op
 				if dErr != nil {
 					return nil, dErr
 				}
-				conn, dErr := qtls.DialEarly(ctx, bufio.NewUnbindPacketConn(udpConn), udpConn.RemoteAddr(), tlsConfig, cfg)
+				// sing-quic 0.7.0 сменил подпись: DialEarly(ctx, net.Conn, config, quicConfig)
+				// — принимает уже соединённый UDP-conn, отдельный адрес и обёртка
+				// PacketConn больше не нужны (апстрим зовёт так же:
+				// sing-quic/tuic/client.go:168).
+				conn, dErr := qtls.DialEarly(ctx, udpConn, tlsConfig, cfg)
 				if dErr != nil {
 					_ = udpConn.Close()
 					return nil, dErr

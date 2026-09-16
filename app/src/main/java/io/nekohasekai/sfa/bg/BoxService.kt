@@ -1442,6 +1442,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
     }
 
+    // libbox из ядра v1.14.1 добавил в платформенный интерфейс парный метод к
+    // sendNotification: ядро само просит снять уже показанное уведомление.
+    // Публикуем мы его через notify(typeID) — значит и снимать надо по typeID.
+    internal fun cancelNotification(identifier: String, typeID: Int) {
+        GlobalScope.launch(Dispatchers.Main) {
+            Application.notification.cancel(typeID)
+        }
+    }
+
     override fun triggerNativeCrash() {
         Thread {
             Thread.sleep(200)
