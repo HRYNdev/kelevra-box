@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
@@ -66,6 +67,22 @@ class BoxService(private val service: Service, private val platformInterface: Pl
          * ошибка, отказ. Список короткий нарочно — иначе повтором станет весь поток.
          */
         private val LOUD_CORE_WORDS = listOf("panic", "FATAL", "ERROR", "goroutine stack")
+
+        /** Сколько живёт отметка «перечитать попросил человек» ([TunnelFacts.reloadByHuman]). */
+        private const val RELOAD_BY_HUMAN_WINDOW_MILLIS = 10_000L
+
+        /** Когда экран поставил отметку «перечитать попросил человек» (elapsedRealtime), 0 — нет. */
+        @Volatile
+        private var reloadByHumanAt = 0L
+
+        /**
+         * Отметка перед `serviceReload`, который попросил сам человек: такое перечитывание
+         * идёт сразу и при живой комнате ([TunnelFacts.reloadDeferred]). Командный сервер
+         * libbox передаёт команду без аргументов, иначе сервису это не узнать.
+         */
+        fun markReloadByHuman() {
+            reloadByHumanAt = SystemClock.elapsedRealtime()
+        }
 
         fun start() {
             val intent =
@@ -179,6 +196,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     /** Работающее ядро собрано под комнату: отказ QUIC, только IPv4, остальное в комнату. */
     @Volatile
     private var coreRoomConfig = false
+
+    /**
+     * Перечитывание конфига отложено, пока жила комната: ядро исполняет прежний профиль.
+     * Снимается любой удачной пересборкой — она читает файл заново.
+     */
+    @Volatile
+    private var profileReloadPending = false
 
     /** Когда последний раз ходили к серверу за свежим токеном комнаты. */
     private var tokenRefreshedAt = 0L
@@ -302,6 +326,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 stopAndAlert(Alert.CreateService, e.message)
                 return
             }
+            profileReloadPending = false
             // Ядро уже поднялось с залипшим кэшем sing-box. Если залипший выбор — это
             // выбор автомата, а не человека, возвращаем селектор на default из свежего
             // конфига; дальше автомат заново решает по живой обстановке.
@@ -858,6 +883,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 applyPerAppProxy(content)
             },
         )
+        // Файл прочитан заново — отложенному перечитыванию применять больше нечего.
+        if (profileReloadPending) {
+            profileReloadPending = false
+            Log.i(TAG, "отложенный конфиг применён при пересборке ядра")
+        }
     }
 
     /**
@@ -935,7 +965,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     private fun resyncCore(reason: String): AutoMode.RoomAck? {
         val busy = roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting
-        if (!TunnelFacts.coreConfigStale(coreRoomConfig, coreSelfOutsideTun, roomInConfig(), selfOutsideTunNow(), busy)) {
+        if (!TunnelFacts.coreConfigStale(
+                coreRoomConfig, coreSelfOutsideTun, roomInConfig(), selfOutsideTunNow(), busy, profileReloadPending,
+            )
+        ) {
             return null
         }
         Log.i(TAG, "ядро собрано не под то, что нужно сейчас ($reason) — пересобираю")
@@ -965,6 +998,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 wantRoom = roomInConfig(),
                 wantSelfOutside = selfOutsideTunNow(),
                 roomBusy = false,
+                // Перечитывание отложили до выхода из комнаты, а вход ещё не начался —
+                // новый конфиг кладём сейчас, иначе он ждал бы конца уже следующего звонка.
+                profileOutdated = profileReloadPending,
             )
         ) {
             return false
@@ -1150,12 +1186,20 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     override fun serviceReload() {
+        // Отметку забираем сразу: она относится ровно к этому вызову.
+        val askedAt = reloadByHumanAt
+        reloadByHumanAt = 0L
+        val byHuman = TunnelFacts.reloadByHuman(askedAt, SystemClock.elapsedRealtime(), RELOAD_BY_HUMAN_WINDOW_MILLIS)
         runBlocking {
-            serviceReload0()
+            serviceReload0(byHuman)
         }
     }
 
-    suspend fun serviceReload0() {
+    /**
+     * @param byHuman перечитать попросил человек — применяем сразу и при живой комнате
+     *   ([TunnelFacts.reloadDeferred]).
+     */
+    suspend fun serviceReload0(byHuman: Boolean = false) {
         val selectedProfileId = Settings.selectedProfile
         if (selectedProfileId == -1L) {
             stopAndAlert(Alert.EmptyConfiguration)
@@ -1186,6 +1230,27 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             fillRuleSetsAtHome(content)
             return
         }
+        // Комната живая или входит: перечитывание — это пересборка, закрывающая прежний tun,
+        // и посреди звонка она рвёт собранную сессию (см. [TunnelFacts.coreConfigStale]).
+        // Расписание и обновление подписки ждут: при выходе из комнаты ядро пересобирается
+        // и так, а подъём комнаты заново кладёт новый конфиг ещё до входа.
+        val deferred = synchronized(tunnelLock) {
+            val roomLive = OlcRtcCore.isRunning()
+            val roomBusy = roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting
+            val defer = TunnelFacts.reloadDeferred(roomLive, roomBusy, byHuman)
+            if (defer) {
+                profileReloadPending = true
+                Log.i(
+                    TAG,
+                    "конфиг перечитан, но комната ${if (roomLive) "работает" else "поднимается"} — " +
+                        "ядро не пересобираю, применю при выходе из комнаты",
+                )
+            } else if (byHuman && (roomLive || roomBusy)) {
+                Log.i(TAG, "конфиг перечитать попросил человек — пересобираю ядро при живой комнате")
+            }
+            defer
+        }
+        if (deferred) return
         try {
             commandServer.startOrReloadService(
                 effectiveConfig(content),
@@ -1198,6 +1263,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             stopAndAlert(Alert.CreateService, e.message)
             return
         }
+        profileReloadPending = false
 
         if (commandServer.needWIFIState()) {
             val wifiPermission =
@@ -1223,7 +1289,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     override fun setSystemProxyEnabled(isEnabled: Boolean) {
-        serviceReload()
+        // Эту команду шлёт только переключатель на экране — это всегда человек.
+        runBlocking {
+            serviceReload0(byHuman = true)
+        }
     }
 
     @RequiresApi(Build.VERSION_CODES.M)

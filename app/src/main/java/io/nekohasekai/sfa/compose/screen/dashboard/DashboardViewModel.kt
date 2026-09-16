@@ -374,6 +374,8 @@ class DashboardViewModel :
                         sendGlobalEvent(UiEvent.RequestStartService)
                     } else {
                         // Just reload
+                        // Профиль сменил человек — ждать выхода из комнаты он не просил.
+                        BoxService.markReloadByHuman()
                         Libbox.newStandaloneCommandClient().serviceReload()
                     }
                 }
