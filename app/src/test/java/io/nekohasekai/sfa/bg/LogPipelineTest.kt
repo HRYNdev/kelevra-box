@@ -50,13 +50,7 @@ class LogPipelineTest {
 
     /** Что делает [LogUploadWork.runOnce] после удачной отправки: двигает отметки. */
     private fun remember(marks: MutableMap<String, Mark>, taken: List<LogUploadWork.Part>) {
-        taken.forEach { part ->
-            marks[part.label] = Mark(
-                size = part.offset + part.length,
-                modified = part.modified,
-                sent = part.offset + part.length,
-            )
-        }
+        LogUploadWork.zapomnit(marks, emptyMap(), taken)
     }
 
     // ------------------------------------------------------ 1. своя запись и потолок
