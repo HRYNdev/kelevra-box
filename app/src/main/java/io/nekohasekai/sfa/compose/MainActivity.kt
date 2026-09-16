@@ -446,6 +446,8 @@ class MainActivity :
                                 when (modeToShow) {
                                     UiEvent.ApplyServiceChange.Mode.Reload -> {
                                         withContext(Dispatchers.IO) {
+                                            // Человек нажал «Перезапустить» — применяем и при живой комнате.
+                                            BoxService.markReloadByHuman()
                                             Libbox.newStandaloneCommandClient().serviceReload()
                                         }
                                     }
