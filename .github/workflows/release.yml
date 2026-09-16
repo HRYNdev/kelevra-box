@@ -163,9 +163,18 @@ jobs:
           go-version-file: olcrtc/go.mod
           cache: false
 
+      # ЧИТАЕМ здесь, а ПИШЕМ ниже и только не с тега (шаг «Сохранить кеш Go-модулей») —
+      # ровно как у «Кеш ядра» выше. Защиту от кеша-сироты на теге завели 13.08.2026, но
+      # на ЭТОТ шаг её не распространили, и он продолжал писать. Замерено 16.09.2026:
+      # gomod-olcrtc-main-… 2.57 ГБ на ref refs/tags/v1.14.0-kelevra118, время последнего
+      # чтения равно времени записи секунда в секунду — ноль чтений. Прочитать его не может
+      # никто: область видимости кеша — свой ref, base PR или дефолтная ветка (dev), а теги
+      # не переиспользуются (15 релизов — 15 разных тегов). Хранилище репозитория при этом
+      # 11.57 ГБ при лимите 10 ГБ, то есть GitHub уже вытесняет по LRU живые кеши dev.
       - name: Кеш Go-модулей
+        id: gomod-cache
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/go/pkg/mod
@@ -295,6 +304,17 @@ jobs:
         with:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
           key: ${{ steps.core-cache.outputs.cache-primary-key }}
+
+      # Парный шаг к «Кеш Go-модулей»: пишем только с ветки и только если точного попадания
+      # не было (иначе GitHub откажет — ключ уже занят). На теге не пишем никогда.
+      - name: Сохранить кеш Go-модулей
+        if: steps.core-cache.outputs.cache-hit != 'true' && steps.gomod-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ steps.gomod-cache.outputs.cache-primary-key }}
 
       - name: Upload core
         uses: actions/upload-artifact@v4
