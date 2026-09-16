@@ -87,6 +87,28 @@ object ImenaSaytov {
     private val potolok = PotolokZaprosov(emkost = PACHKA_ZAPROSOV, popolnenieMs = 1000L / ZAPROSOV_V_SEKUNDU)
 
     /**
+     * Источник времени для всех трёх интервалов ниже — МОНОТОННЫЕ часы, не стенные.
+     *
+     * Почему. `System.currentTimeMillis()` умеет прыгать назад (буст с плейсхолдер-датой,
+     * потом NTP тянет время назад на телефоне — штатный случай, не экзотика). Откат
+     * замораживает [otkazyvaloS], [sprashivaliPoAdresu] и [potolok] на весь срок, пока
+     * стенное время не догонит старую отметку — от секунд до месяцев, если откат большой.
+     * Монотонные часы таким прыжкам не подвержены по контракту — тот же канон уже принят
+     * в соседнем `AutoMode.kt` для всех интервальных меток (`SystemClock.elapsedRealtime`).
+     *
+     * Почему здесь не `SystemClock.elapsedRealtime()` буквально. В голом JVM unit-тесте
+     * этого модуля (Robolectric не подключён, проверено — `testOptions.unitTests` его не
+     * включает) `SystemClock` бросает `RuntimeException("... not mocked")` при первом же
+     * вызове. `System.nanoTime()` — тот же монотонный контракт (не зависит от стенных
+     * часов и NTP-правок), но чистый JVM-примитив без обращения к android.os, поэтому
+     * работает в тесте так же, как на устройстве, без ловушки.
+     *
+     * Подмена — как у [PotolokZaprosov.vzyat]: время передаётся снаружи, поведение
+     * проверяется тестом без ожидания реальных 500мс/5с.
+     */
+    internal var chasy: () -> Long = { System.nanoTime() / 1_000_000L }
+
+    /**
      * Имя сайта по адресу, если ядро его называло. Пусто — значит не знаем, и врать
      * не будем: в журнал уйдёт один адрес, как раньше.
      */
@@ -105,7 +127,7 @@ object ImenaSaytov {
      */
     @Synchronized
     private fun obnovit(adres: String) {
-        val teper = System.currentTimeMillis()
+        val teper = chasy()
         if (teper - otkazyvaloS < NE_CHASHCHE_MS) return
         val posledniyRaz = sprashivaliPoAdresu[adres]
         if (posledniyRaz != null && teper - posledniyRaz < NE_CHASHCHE_MS) return
@@ -174,6 +196,7 @@ object ImenaSaytov {
         sprashivaliPoAdresu.clear()
         otkazyvaloS = 0L
         potolok.sbrosit()
+        chasy = { System.nanoTime() / 1_000_000L }
     }
 }
 
