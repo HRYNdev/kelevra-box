@@ -500,13 +500,6 @@ object AutoMode {
     private const val MANUAL_HOLD_MILLIS = 60 * 60_000L
 
     /**
-     * Насколько раньше срока можно проснуться, чтобы это ещё считалось «дождались».
-     * `Object.wait` возвращается не по секундомеру, и без зазора обычное пробуждение
-     * по таймеру иногда выглядело бы событием.
-     */
-    private const val WAKE_SLACK_MILLIS = 250L
-
-    /**
      * Сколько ответ узла считается свежим доводом.
      *
      * Узел принял соединение — белого списка вокруг нет, это единственный вердикт
@@ -526,6 +519,12 @@ object AutoMode {
     internal val BURST_STEPS = longArrayOf(1_000L, 3_000L, 8_000L, 20_000L)
 
     private val lock = Object()
+
+    /**
+     * Будильник цикла на том же мониторе. Все события будят цикл только через него:
+     * голый `notifyAll` терялся, если цикл был занят заходом, — см. [AutoModeAlarm].
+     */
+    private val alarm = AutoModeAlarm(lock)
 
     @Volatile
     private var active = false
@@ -853,6 +852,9 @@ object AutoMode {
             // бы «только что сделан» и не истекал бы никогда.
             holdAt = if (manualExit != null) SystemClock.elapsedRealtime() else 0L
             publish(Settings.autoModeEnabled, initial)
+            // Событие, недоеденное прошлым циклом (хотя бы побудка из [stopLocked]), новому
+            // не нужно: он и так начинает с захода.
+            alarm.reset()
             active = true
             thread = Thread(::loop, "automode").apply {
                 isDaemon = true
@@ -876,7 +878,7 @@ object AutoMode {
         active = false
         val t = thread
         thread = null
-        lock.notifyAll()
+        alarm.wake()
         t?.interrupt()
         t?.join(1_000)
         host = null
@@ -955,7 +957,7 @@ object AutoMode {
                 releaseManualHold(now)
             }
         }
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
     }
 
     /**
@@ -980,7 +982,7 @@ object AutoMode {
         // выглядело как «Не отвечает» при живом канале (11.08.2026: путь «Нидерланды»
         // отвечал за 336 мс через свежий вход, а «основной канал» молчал на старом).
         refreshLayout(reason)
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
     }
 
     /**
@@ -1005,7 +1007,7 @@ object AutoMode {
         runCatching { Zapisi.perehod("komnata_propala", reason) }
         selected = null
         choose(h, main, "комната пропала")
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
     }
 
     /**
@@ -1042,7 +1044,7 @@ object AutoMode {
     fun onRoomRaised(reason: String) {
         if (!active) return
         Log.i(TAG, "комнату подняли заново ($reason) — иду на заход, не дожидаясь ритма")
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
     }
 
     /** Перечитывает раскладку выходов и входов из конфига, который сейчас в ядре. */
@@ -1116,7 +1118,7 @@ object AutoMode {
         silentHoldAt = 0L
         mainFailures = 0
         networkChanged = true
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
     }
 
     /** Этой группой выхода правит автомат: переключать её надо через [chooseManually]. */
@@ -1184,7 +1186,7 @@ object AutoMode {
             "выход выбран руками: «$tag» (комната: ${Settings.autoModeManualRoom}) — " +
                 "держим до смены сети",
         )
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
         // Применять ли выбор в ядре немедленно. Для обычного выхода — да. Для комнаты —
         // только если она уже стоит: её ядро поднимается в своём потоке и на живом
         // телефоне это заняло 103 секунды (замер 12.08.2026). Пока socks комнаты не
@@ -2027,15 +2029,31 @@ object AutoMode {
         }
     }.also { if (situation != Situation.Searching && situation != Situation.Unknown) searchingRounds = 0 }
 
-    private fun waitNext(millis: Long) {
+    /**
+     * Сон до следующего захода. Событие, пришедшее пока шёл заход, не теряется: сон
+     * тогда не начинается вовсе ([AutoModeAlarm]).
+     *
+     * @return true — разбудило событие (или автомат гасят), false — дождались срока.
+     */
+    private fun wakeLoop() {
+        // Событие, которое породил сам заход (он поднял туннель — и ядро пересобралось,
+        // погасил комнату — и выход увели), заходу уже известно. Отметить его значило бы
+        // сразу же пойти на второй, холостой заход с полным набором проб. Раньше такой
+        // сигнал терялся сам собой — так и оставляем, но уже нарочно.
+        if (Thread.currentThread() === thread) return
+        alarm.wake()
+    }
+
+    private fun waitNext(millis: Long): Boolean {
         synchronized(lock) {
-            if (!active) return
-            try {
-                // wait(0) — это «ждать вечно», ровно то, что нужно при отсутствии сети.
-                lock.wait(if (millis == Long.MAX_VALUE) 0 else millis)
+            if (!active) return true
+            return try {
+                // Long.MAX_VALUE — «ждать вечно», ровно то, что нужно при отсутствии сети.
+                alarm.sleep(millis)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
                 active = false
+                true
             }
         }
     }
@@ -2644,7 +2662,7 @@ object AutoMode {
         if (current != Situation.Main && current != Situation.Room) return
         if (massovyeBudilAt != 0L && now - massovyeBudilAt < HINT_TTL_MILLIS) return
         massovyeBudilAt = now
-        synchronized(lock) { lock.notifyAll() }
+        wakeLoop()
     }
 
     private fun massovyeOtkazySvezhie(): Boolean =
@@ -3082,12 +3100,12 @@ object AutoMode {
         while (active && left > 0) {
             val slice = minOf(left, Random.nextLong(ROOM_PEEK_MIN_MILLIS, ROOM_PEEK_MAX_MILLIS + 1))
             val before = SystemClock.elapsedRealtime()
-            waitNext(slice)
+            val woken = waitNext(slice)
             val spent = SystemClock.elapsedRealtime() - before
             left -= spent
             if (!active) return
-            // Проснулись до срока — это не наш таймер, а событие.
-            if (spent < slice - WAKE_SLACK_MILLIS) return
+            // Разбудило событие, а не наш таймер.
+            if (woken) return
             if (left <= 0) return
             if (peekMain()) return
         }
@@ -3154,12 +3172,12 @@ object AutoMode {
                 Random.nextLong(HomeWatch.MIN_MILLIS, HomeWatch.MAX_MILLIS + 1),
             )
             val before = SystemClock.elapsedRealtime()
-            waitNext(slice)
+            val woken = waitNext(slice)
             val spent = SystemClock.elapsedRealtime() - before
             left -= spent
             if (!active) return
-            // Проснулись до срока — это не наш таймер, а событие.
-            if (spent < slice - WAKE_SLACK_MILLIS) return
+            // Разбудило событие, а не наш таймер.
+            if (woken) return
             if (left <= 0) return
             if (peekHome()) return
         }
