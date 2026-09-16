@@ -39,14 +39,23 @@ object ApkInstaller {
     /**
      * Остановка службы снимает признак «запущено человеком», а по нему служба поднимается
      * после замены пакета. Снимается он в самом конце остановки, позже исчезновения сокета,
-     * поэтому сначала дожидаемся снятия, потом возвращаем.
+     * поэтому сначала дожидаемся снятия, потом возвращаем — но не по будильнику: раньше
+     * после 30 попыток (3 с) значение ставилось вслепую, а если стоп снимал флаг позже —
+     * следом переписывал его обратно в false. Телефон после самообновления по ROOT/SHIZUKU
+     * оставался без VPN без единой строки объяснения. Теперь ждём подтверждения снятия
+     * сколько потребуется и возвращаем ровно то значение, что было ДО остановки (не
+     * жёсткую true — человек мог выключить автозапуск, пока служба ещё работала).
      */
-    private suspend fun vernutPriznakZapuska() {
-        for (i in 0 until 30) {
-            if (!Settings.startedByUser) break
-            delay(100)
+    internal suspend fun vernutPriznakZapuska(
+        byloVklyucheno: Boolean,
+        poluchitFlag: () -> Boolean = { Settings.startedByUser },
+        postavitFlag: (Boolean) -> Unit = { Settings.startedByUser = it },
+        zhdatShag: suspend () -> Unit = { delay(100) },
+    ) {
+        while (poluchitFlag()) {
+            zhdatShag()
         }
-        Settings.startedByUser = true
+        postavitFlag(byloVklyucheno)
     }
 
     fun getConfiguredMethod(): InstallMethod {
@@ -77,9 +86,10 @@ object ApkInstaller {
         // Root и Shizuku ставят мимо системного окна и роняют процесс посреди работы ядра,
         // поэтому здесь служба по-прежнему гасится, но признак запуска и сама служба
         // возвращаются.
+        val byloVklyucheno = Settings.startedByUser
         val bylaVklyuchena = stopServiceIfRunning()
         if (bylaVklyuchena) {
-            vernutPriznakZapuska()
+            vernutPriznakZapuska(byloVklyucheno)
         }
         try {
             when (method) {
