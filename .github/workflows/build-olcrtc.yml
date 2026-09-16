@@ -16,7 +16,7 @@ on:
       core_ref:
         description: "Тег/ветка ядра sing-box"
         required: false
-        default: "v1.14.0-beta.4"
+        default: "v1.14.1"
       olcrtc_repo:
         description: "Репозиторий olcrtc (наш форк или апстрим для пробы)"
         required: false
@@ -42,7 +42,7 @@ concurrency:
 
 env:
   NDK_VERSION: "28.0.13004108"
-  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+  CORE_REF: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
   CORE_REPO: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
   # По умолчанию наш форк с правками datachannel коммитами (см. release.yml, тот же разбор).
   # Пробу нового апстрима запускать руками: olcrtc_repo=openlibrecommunity/olcrtc, ref=master —
@@ -58,7 +58,7 @@ jobs:
     # Два флейвора приложения тянут разные .aar: other → libbox.aar, otherLegacy →
     # libbox-legacy.aar. Пока legacy собирался без olcrtc, на старых телефонах комнаты
     # не было вообще. Оба варианта собираются одной раскладкой шагов, различия ровно
-    # те же, что у апстрима в cmd/internal/build_libbox/main.go (v1.14.0-beta.4):
+    # те же, что у апстрима в cmd/internal/build_libbox/main.go (v1.14.1):
     # -androidapi 21 и набор тегов без with_naive_outbound.
     # fail-fast выключен намеренно: legacy может не собраться (API 21 старше того, что
     # ждёт olcrtc), и это не повод ронять рабочую основную сборку.
@@ -89,7 +89,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
-          ref: ${{ github.event.inputs.core_ref || 'v1.14.0-beta.4' }}
+          ref: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
           path: sing-box
           fetch-depth: 0 # нужны теги: версия ядра берётся из git describe
 
