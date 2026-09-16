@@ -18,12 +18,21 @@ func NewCongestionControl(name string, cwnd int, timeFunc func() time.Time) (fun
 		cwnd = 32
 	}
 	switch name {
+	// sing-quic 0.7.0 переписал и сам BBR: NewBbrSender и DefaultClock из
+	// congestion_meta2 удалены, остался NewBbrSenderWithProfile(размер, профиль)
+	// — без часов и без начального окна (так его зовёт и сам апстрим:
+	// sing-quic/tuic/congestion.go:37). Начальное окно там прибито к
+	// initialCongestionWindowPackets = 32 — ровно наш прежний дефолт, поэтому
+	// при cwnd 0 или 32 поведение то же, что было. Другое значение исполнить
+	// нечем: вместо тихой подмены окна отдаём отказ.
 	case "", "bbr":
+		if cwnd != 32 {
+			return nil, E.New("cwnd ", cwnd, " для bbr больше не задаётся: sing-quic 0.7.0 прибил начальное окно к 32 пакетам; убери cwnd или поставь 32")
+		}
 		return func(conn *quic.Conn) congestion.CongestionControl {
-			return congestion_meta2.NewBbrSender(
-				congestion_meta2.DefaultClock{TimeFunc: timeFunc},
+			return congestion_meta2.NewBbrSenderWithProfile(
 				congestion.ByteCount(conn.Config().InitialPacketSize),
-				congestion.ByteCount(cwnd)*congestion.ByteCount(conn.Config().InitialPacketSize),
+				congestion_meta2.ProfileStandard,
 			)
 		}, nil
 	// sing-quic 0.7.0 (его тянет ядро sing-box v1.14.1) удалил пакеты
