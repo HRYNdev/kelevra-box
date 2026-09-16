@@ -39,14 +39,27 @@ object ApkInstaller {
     /**
      * Остановка службы снимает признак «запущено человеком», а по нему служба поднимается
      * после замены пакета. Снимается он в самом конце остановки, позже исчезновения сокета,
-     * поэтому сначала дожидаемся снятия, потом возвращаем.
+     * поэтому сначала дожидаемся снятия, потом возвращаем — но не вслепую по истечении
+     * старого окна: раньше после 30 попыток (3 с) значение ставилось независимо от того,
+     * снялся ли флаг, и если стоп опаздывал — его запоздавшая запись false приходила уже
+     * ПОСЛЕ нашей true. Телефон после самообновления по ROOT/SHIZUKU оставался без VPN без
+     * единой строки объяснения. Теперь ждём подтверждения снятия и возвращаем ровно то
+     * значение, что было ДО остановки (не жёсткую true — человек мог выключить автозапуск,
+     * пока служба ещё работала). Ждём не вечно: окно расширено до 100 попыток (10 с), но
+     * потолок остаётся — если stop() упал посреди остановки и так и не снял флаг, всё равно
+     * возвращаем byloVklyucheno за конечное время, а не виснем навсегда молча.
      */
-    private suspend fun vernutPriznakZapuska() {
-        for (i in 0 until 30) {
-            if (!Settings.startedByUser) break
-            delay(100)
+    internal suspend fun vernutPriznakZapuska(
+        byloVklyucheno: Boolean,
+        poluchitFlag: () -> Boolean = { Settings.startedByUser },
+        postavitFlag: (Boolean) -> Unit = { Settings.startedByUser = it },
+        zhdatShag: suspend () -> Unit = { delay(100) },
+    ) {
+        for (i in 0 until 100) {
+            if (!poluchitFlag()) break
+            zhdatShag()
         }
-        Settings.startedByUser = true
+        postavitFlag(byloVklyucheno)
     }
 
     fun getConfiguredMethod(): InstallMethod {
@@ -77,9 +90,10 @@ object ApkInstaller {
         // Root и Shizuku ставят мимо системного окна и роняют процесс посреди работы ядра,
         // поэтому здесь служба по-прежнему гасится, но признак запуска и сама служба
         // возвращаются.
+        val byloVklyucheno = Settings.startedByUser
         val bylaVklyuchena = stopServiceIfRunning()
         if (bylaVklyuchena) {
-            vernutPriznakZapuska()
+            vernutPriznakZapuska(byloVklyucheno)
         }
         try {
             when (method) {
