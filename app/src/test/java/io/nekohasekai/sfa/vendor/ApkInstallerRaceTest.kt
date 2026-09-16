@@ -56,9 +56,12 @@ class ApkInstallerRaceTest {
     }
 
     @Test
-    fun `стоп опаздывает сильно за старое окно и результат не зависит от того как долго ждать`() {
-        val itog = stend(tikStopa = 500, byloVklyucheno = true)
-        assertTrue(itog)
+    fun `стоп опаздывает почти до нового потолка в 100 тиков и флаг всё равно возвращается верно`() {
+        // Окно расширено до 100 тиков (10 с) — приёмка потребовала конечный потолок вместо
+        // безлимитного ожидания (см. отказ по прошлой версии правки). 99-й тик — внутри
+        // нового окна, значит подтверждённое снятие обязано быть учтено, а не потеряно.
+        val itog = stend(tikStopa = 99, byloVklyucheno = true)
+        assertTrue("подтверждённое снятие внутри 10-секундного окна обязано вернуть true", itog)
     }
 
     @Test
@@ -67,5 +70,27 @@ class ApkInstallerRaceTest {
         // Возврат обязан вернуть именно false, а не жёсткую true.
         val itog = stend(tikStopa = 10, byloVklyucheno = false)
         assertTrue("false до остановки должно остаться false после", !itog)
+    }
+
+    @Test
+    fun `стоп упал и флаг не снимается никогда — возврат обязан завершиться за конечное время`() {
+        // BoxService.stop() рухнул посреди остановки и так и не дописал false. Ожидание
+        // без потолка виснет здесь навсегда (тик растёт бесконечно, flag не меняется) —
+        // именно это и было ценой прошлой правки, отклонённой приёмкой. Потолок обязан
+        // оборвать ожидание за конечное число шагов и вернуть byloVklyucheno.
+        var flag = true
+        var tikov = 0
+        var itog: Boolean? = null
+        runBlocking {
+            ApkInstaller.vernutPriznakZapuska(
+                byloVklyucheno = true,
+                poluchitFlag = { flag },
+                postavitFlag = { itog = it },
+                zhdatShag = { tikov++ },
+            )
+        }
+        assertTrue("возврат обязан произойти, а не повиснуть", itog != null)
+        assertTrue("byloVklyucheno должно вернуться за конечное число попыток", tikov in 1..1000)
+        assertTrue("если стоп так и не снял флаг, byloVklyucheno не подделывается", itog == true)
     }
 }
