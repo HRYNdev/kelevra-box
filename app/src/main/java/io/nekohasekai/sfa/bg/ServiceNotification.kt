@@ -18,9 +18,12 @@ import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.path.PathChip
 import io.nekohasekai.sfa.bg.path.PathRegistry
 import io.nekohasekai.sfa.bg.path.PathWords
 import io.nekohasekai.sfa.compose.MainActivity
+import io.nekohasekai.sfa.compose.screen.home.badgeOf
+import io.nekohasekai.sfa.compose.screen.home.isRoomExit
 import io.nekohasekai.sfa.constant.Action
 import io.nekohasekai.sfa.constant.Status
 import io.nekohasekai.sfa.database.Settings
@@ -92,6 +95,13 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
     @Volatile
     private var downlink = 0L
 
+    /**
+     * Что сейчас висит в капсуле у камеры. Держим, чтобы трогать её только на смене
+     * состояния: тики скорости идут раз в секунду, и капсула не должна от них мигать.
+     */
+    @Volatile
+    private var chip: PathChip.Chip = PathChip.Chip.NONE
+
     private val notificationBuilder by lazy {
         NotificationCompat.Builder(service, notificationChannel).setShowWhen(false).setOngoing(true)
             .setContentTitle(service.getString(R.string.app_name)).setOnlyAlertOnce(true)
@@ -136,6 +146,9 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
                 ),
             )
         }
+        // Статичный текст — значит подробное уведомление выключено или туннеля ещё нет:
+        // капсулу не просим, как и раньше.
+        applyChip(PathChip.Chip.NONE)
         service.startForeground(
             notificationId,
             notificationBuilder
@@ -278,9 +291,38 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
         render()
     }
 
+    /**
+     * Капсула по текущему состоянию. Та же обстановка, что и у [состояние], только
+     * сжатая до одного слова; решает чистая таблица [PathChip].
+     */
+    private fun капсула(): PathChip.Chip = PathChip.of(
+        snapshot = PathRegistry.snapshot.value,
+        chosen = AutoMode.standingOn(),
+        auto = AutoMode.state.value.auto,
+        tunnelLive = attached,
+        manualExit = Settings.manualExitName.takeIf { it.isNotBlank() },
+        codeOf = { name -> if (isRoomExit(name)) PathChip.ROOM else badgeOf(name) },
+    )
+
+    /**
+     * Просит систему поднять уведомление в капсулу (Android 16 Live Updates) или снять.
+     *
+     * Меняет построитель только когда капсула действительно сменилась. На Android ниже 16
+     * NotificationCompat кладёт просьбу в extras и больше ничего не делает, а короткий
+     * текст пропускает вовсе — поведение там прежнее.
+     */
+    private fun applyChip(next: PathChip.Chip) {
+        if (next == chip) return
+        chip = next
+        notificationBuilder
+            .setRequestPromotedOngoing(next.promote)
+            .setShortCriticalText(next.text)
+    }
+
     /** Собирает текст и кладёт его в шторку. Зовётся и по тику ядра, и по смене обстановки. */
     private fun render() {
         if (closed) return
+        applyChip(капсула())
         // нули в шторке выглядят как поломка: пока трафика нет, показываем состояние
         val content = if (uplink == 0L && downlink == 0L) {
             состояние()
