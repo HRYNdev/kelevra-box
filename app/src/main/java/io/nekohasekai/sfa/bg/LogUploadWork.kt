@@ -26,6 +26,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
+import java.util.zip.CRC32
 import java.util.zip.GZIPOutputStream
 
 /**
@@ -51,9 +52,10 @@ import java.util.zip.GZIPOutputStream
  *    установки»: сутки должны быть уже прожиты, иначе вечерние эпизоды уедут только
  *    завтра. Начальная задержка считается до ближайшего 23:30.
  *  - Один и тот же кусок не уходит дважды. По каждому файлу помним размер, отметку
- *    времени и сколько байт уже отправлено; в следующий раз берём только хвост.
- *    Ротация переносит содержимое в файл с другим именем — такой файл узнаётся по
- *    паре (размер, время) и пропускается целиком.
+ *    времени, отпечаток начала и сколько байт уже отправлено; в следующий раз берём
+ *    только хвост. Ротация переносит содержимое в файл с другим именем — такой файл
+ *    узнаётся по отпечатку начала, а не по имени, и досылается ровно с того места,
+ *    докуда ушёл под прежним именем (см. [uzheOtpravleno]).
  *  - Локально ничего не удаляется: ротация и своя, и внешняя уже работают сами.
  *  - Пустой архив не отправляется вовсе.
  *  - Больше 20 МБ не отправляем: части складываются от самых свежих к старым и
@@ -307,8 +309,76 @@ object LogUploadWork {
     /**
      * Что уже отправлено, по каждому файлу: сколько байт ушло и с какими размером и
      * отметкой времени файл был на тот момент.
+     *
+     * [dlinaOtpechatka] и [otpechatok] — CRC32 первых байт файла: по нему файл узнаётся
+     * после ротации под любым именем. Ноль в длине — отметка старого образца (до 16.09.2026)
+     * или отчёт о падении: такие сверяются по-старому, по имени и паре (размер, время).
      */
-    internal data class Mark(val size: Long, val modified: Long, val sent: Long)
+    internal data class Mark(
+        val size: Long,
+        val modified: Long,
+        val sent: Long,
+        val dlinaOtpechatka: Int = 0,
+        val otpechatok: Long = 0L,
+    )
+
+    /** Сколько первых байт файла идёт в отпечаток. Начало журнала — строка с миллисекундами, не повторяется. */
+    internal const val DLINA_OTPECHATKA = 4096
+
+    /**
+     * Сколько байт ЭТОГО файла уже ушло — по отметкам, а не по имени. Возвращает отметку,
+     * от которой считать хвост, или null — не уходило ничего.
+     *
+     * Зачем. Раньше смещение бралось по имени файла. Ротация журнала переименовывает
+     * `kelevra-app.log` в `.1`, а под именем `.1` лежала отметка ПРЕЖНЕГО `.1` — другого,
+     * давно отправленного файла. Хвост недосланного головного считался от чужой отметки
+     * и терялся: 16.09.2026 из посылки телефона выпал журнал приложения за 15:50–16:05 —
+     * `kelevra-app.log.1` в посылку не попал вовсе, а головной приехал с нуля. Тем же путём
+     * затиралась отметка давно отправленного хвоста, и `kelevra-core.log.2` уезжал
+     * повторно целиком (10-я и 13-я посылки того же дня).
+     *
+     * Как узнаём. Отпечаток — CRC32 первых байт: переименование его не меняет, дописка в
+     * конец тоже. Совпал отпечаток, и файл не короче отправленного — это тот самый файл,
+     * хвост берём от его отметки, под каким бы именем она ни лежала. Совпадений несколько
+     * (старая отметка под прежним именем и свежая под новым) — берём самую дальнюю.
+     * Файл пересоздан или усох ниже отметки — это уже другой файл, шлём с нуля.
+     *
+     * [crcNachala] считает CRC32 первых N байт файла; снаружи, чтобы функция оставалась
+     * чистой и проверялась без диска.
+     */
+    internal fun uzheOtpravleno(
+        label: String,
+        size: Long,
+        modified: Long,
+        marks: Map<String, Mark>,
+        crcNachala: (Int) -> Long,
+    ): Mark? {
+        val poOtpechatku = marks.values
+            .filter { it.dlinaOtpechatka > 0 && it.dlinaOtpechatka <= size && it.sent <= size }
+            .filter { crcNachala(it.dlinaOtpechatka) == it.otpechatok }
+            .maxByOrNull { it.sent }
+        if (poOtpechatku != null) return poOtpechatku
+        val svoya = marks[label]
+        // Под этим именем уже помнится файл с отпечатком, и он не совпал — файл другой.
+        if (svoya != null && svoya.dlinaOtpechatka > 0) return null
+        // Дальше — отметки старого образца, без отпечатка: переходный случай, один раз
+        // после обновления. Пара (размер, время) под любым именем — файл целиком ушёл.
+        val staraya = marks.values.firstOrNull {
+            it.dlinaOtpechatka == 0 && it.size == size && it.modified == modified
+        }
+        if (staraya != null) return Mark(size, modified, sent = size)
+        if (svoya != null && size >= svoya.sent && modified >= svoya.modified) return svoya
+        return null
+    }
+
+    /** CRC32 первых [dlina] байт файла; не прочитался — заведомо несовпадающее значение. */
+    private fun crcFaila(file: File, dlina: Int): Long = runCatching {
+        RandomAccessFile(file, "r").use { source ->
+            val buffer = ByteArray(dlina)
+            source.readFully(buffer)
+            CRC32().apply { update(buffer) }.value
+        }
+    }.getOrDefault(-1L)
 
     private fun loadMarks(): MutableMap<String, Mark> {
         val raw = Settings.logUploadMarks
@@ -322,6 +392,8 @@ object LogUploadWork {
                     size = item.optLong("size"),
                     modified = item.optLong("modified"),
                     sent = item.optLong("sent"),
+                    dlinaOtpechatka = item.optInt("dlina"),
+                    otpechatok = item.optLong("crc"),
                 )
             }
             marks
@@ -337,6 +409,10 @@ object LogUploadWork {
                     put("size", mark.size)
                     put("modified", mark.modified)
                     put("sent", mark.sent)
+                    if (mark.dlinaOtpechatka > 0) {
+                        put("dlina", mark.dlinaOtpechatka)
+                        put("crc", mark.otpechatok)
+                    }
                 },
             )
         }
@@ -357,18 +433,31 @@ object LogUploadWork {
         val offset: Long,
         val length: Long,
         val modified: Long,
+        val dlinaOtpechatka: Int = 0,
+        val otpechatok: Long = 0L,
     )
+
+    /**
+     * Итог сбора журналов: что слать ([parts]) и что уже ушло целиком ([uchteno], по
+     * ТЕКУЩИМ именам). Второе нужно, чтобы отметка давно отправленного файла переехала
+     * вслед за ним при ротации, а не затёрлась отметкой нового файла под прежним именем.
+     */
+    internal data class Sbor(val parts: List<Part>, val uchteno: Map<String, Mark>)
+
+    /** Что нового появилось с прошлой удачной отправки — см. [collectLogs]. */
+    internal fun collectParts(dirs: List<File>, marks: Map<String, Mark>): List<Part> =
+        collectLogs(dirs, marks).parts
 
     /**
      * Что нового появилось с прошлой удачной отправки, по всем источникам сразу.
      *
-     * Файл пропускается целиком, если пара (размер, отметка времени) уже встречалась
-     * под любым именем: ровно так выглядит ротация, когда содержимое automode.log
-     * переезжает в automode.log.1 — переименование отметку времени не меняет.
+     * Сколько уже ушло, решает [uzheOtpravleno] — по отпечатку начала файла, а не по имени:
+     * после ротации хвост бывшего головного досылается из `.1` (из `.2`, если ротаций было
+     * две), а целиком отправленное под новым именем повторно не уходит.
      */
-    internal fun collectParts(dirs: List<File>, marks: Map<String, Mark>): List<Part> {
-        val alreadySent = marks.values.map { it.size to it.modified }.toSet()
+    internal fun collectLogs(dirs: List<File>, marks: Map<String, Mark>): Sbor {
         val parts = mutableListOf<Part>()
+        val uchteno = mutableMapOf<String, Mark>()
         val usedLabels = mutableSetOf<String>()
         for (dir in dirs) {
             val files = runCatching { dir.listFiles() }.getOrNull()
@@ -382,16 +471,41 @@ object LogUploadWork {
                 }
                 val size = file.length()
                 val modified = file.lastModified()
-                if ((size to modified) in alreadySent) continue
-                val mark = marks[label]
+                val crcCache = mutableMapOf<Int, Long>()
+                val crc = { dlina: Int -> crcCache.getOrPut(dlina) { crcFaila(file, dlina) } }
                 // Файл усох или сменился целиком — прошлое смещение к нему уже не относится.
-                val offset = if (mark != null && size >= mark.sent && modified >= mark.modified) mark.sent else 0L
-                if (size - offset <= 0) continue
-                parts += Part(file, label, offset, size - offset, modified)
+                val offset = uzheOtpravleno(label, size, modified, marks, crc)?.sent ?: 0L
+                val dlina = minOf(size, DLINA_OTPECHATKA.toLong()).toInt()
+                if (size - offset <= 0) {
+                    uchteno[label] = Mark(size, modified, sent = size, dlina, crc(dlina))
+                    continue
+                }
+                parts += Part(file, label, offset, size - offset, modified, dlina, crc(dlina))
             }
         }
         // Самые свежие первыми: если упрёмся в потолок, обрежется старое, а не новое.
-        return parts.sortedByDescending { it.modified }
+        return Sbor(parts.sortedByDescending { it.modified }, uchteno)
+    }
+
+    /**
+     * Двигает отметки после удачной (или признанной безнадёжной) отправки.
+     *
+     * Сначала переносим под текущие имена отметки целиком ушедших файлов ([uchteno]),
+     * потом ставим отметки отправленных кусков. Порядок важен: при ротации имя `.1`
+     * переходит к новому файлу, и без переноса отметка прежнего `.1` пропала бы — а сам
+     * он, уже `.2`, уехал бы ещё раз.
+     */
+    internal fun zapomnit(marks: MutableMap<String, Mark>, uchteno: Map<String, Mark>, taken: List<Part>) {
+        marks.putAll(uchteno)
+        taken.forEach { part ->
+            marks[part.label] = Mark(
+                size = part.offset + part.length,
+                modified = part.modified,
+                sent = part.offset + part.length,
+                dlinaOtpechatka = part.dlinaOtpechatka,
+                otpechatok = part.otpechatok,
+            )
+        }
     }
 
     /**
@@ -519,8 +633,8 @@ object LogUploadWork {
         val marks = loadMarks()
         // Отчёты о падениях идут первыми: если посылка упрётся в потолок, обрежется
         // обычный журнал, а не разбор падения.
-        val parts = collectReports(reportRoots, marks) +
-            collectParts(sourceDirs(ownLogsDir, downloadLogsDir), marks)
+        val sbor = collectLogs(sourceDirs(ownLogsDir, downloadLogsDir), marks)
+        val parts = collectReports(reportRoots, marks) + sbor.parts
         if (parts.isEmpty()) {
             Log.i(TAG, "отправлять нечего: новых логов нет")
             return@withContext true
@@ -556,13 +670,7 @@ object LogUploadWork {
                     "хвост из ${taken.size} шт. отвергнут $STUCK_LIMIT раз подряд без изменений — " +
                         "считаю его безнадёжным и выбрасываю из очереди",
                 )
-                taken.forEach { part ->
-                    marks[part.label] = Mark(
-                        size = part.offset + part.length,
-                        modified = part.modified,
-                        sent = part.offset + part.length,
-                    )
-                }
+                zapomnit(marks, sbor.uchteno, taken)
                 saveMarks(marks)
                 clearStuckState()
                 // true — не «отправлено», а «разобрано»: WorkManager не должен
@@ -574,13 +682,7 @@ object LogUploadWork {
         clearStuckState()
 
         // Отметки двигаем только после успеха: сорванная отправка не должна съесть кусок.
-        taken.forEach { part ->
-            marks[part.label] = Mark(
-                size = part.offset + part.length,
-                modified = part.modified,
-                sent = part.offset + part.length,
-            )
-        }
+        zapomnit(marks, sbor.uchteno, taken)
         saveMarks(marks)
         Settings.logUploadLastOk = System.currentTimeMillis()
         Log.i(TAG, "логи отправлены")
