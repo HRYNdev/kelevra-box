@@ -30,3 +30,5 @@ with this application without prior consent.
 
 Under the license, that forks of the app are not allowed to be listed on F-Droid or other app stores
 under the original name.
+
+<!-- проверка PR-конвейера jarvis (naryad.py pr), 21.09.2026 — можно закрыть без мержа -->
