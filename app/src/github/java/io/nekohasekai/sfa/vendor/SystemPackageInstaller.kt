@@ -11,13 +11,31 @@ import android.content.pm.PackageInstaller as AndroidPackageInstaller
 
 object SystemPackageInstaller {
 
-    fun canSystemSilentInstall(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    fun canSystemSilentInstall(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hyperOsBlokiruetTihuyuUstanovku()
+
+    /**
+     * HyperOS/MIUI рубит тихий self-update (USER_ACTION_NOT_REQUIRED) ещё до системного окна:
+     * `PKMSImpl.assertCallerAndPackage: ... msg=Permission denied` → сессия падает кодом
+     * STATUS_FAILURE_ABORTED «INSTALL_FAILED_ABORTED: Permission denied», хотя
+     * REQUEST_INSTALL_PACKAGES выдано и install_non_market_apps=1 — это проверка установщика
+     * в прошивке, а не настройка телефона. На чистом AOSP тот же вызов ставится без окна.
+     * Источник с тем же логом и диагнозом: github.com/sofianeelhor/PKForge/issues/25.
+     */
+    private fun hyperOsBlokiruetTihuyuUstanovku(): Boolean {
+        val proizvoditel = Build.MANUFACTURER.lowercase()
+        val brend = Build.BRAND.lowercase()
+        return "xiaomi" in proizvoditel || "xiaomi" in brend || "redmi" in brend || "poco" in brend
+    }
 
     fun install(context: Context, apkFile: File) {
         val packageInstaller = context.packageManager.packageInstaller
         val params = AndroidPackageInstaller.SessionParams(AndroidPackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(context.packageName)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (canSystemSilentInstall()) {
+            // На Xiaomi/Redmi/POCO эту строку не ставим вовсе: без неё требование
+            // подтверждения остаётся системным умолчанием, и ответ придёт как
+            // STATUS_PENDING_USER_ACTION — его InstallResultReceiver уже открывает.
             params.setRequireUserAction(AndroidPackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
         }
 
