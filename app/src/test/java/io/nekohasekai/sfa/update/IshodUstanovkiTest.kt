@@ -40,6 +40,14 @@ class IshodUstanovkiTest {
     }
 
     @Test
+    fun `HyperOS Permission denied это не отмена человеком`() {
+        // Та же строка, что в status=3 на Redmi Note 14 Pro+ 28.09: HyperOS рубит тихий
+        // self-update своей проверкой установщика, а не человек жмёт «Отмена».
+        val msg = "INSTALL_FAILED_ABORTED: Permission denied"
+        assertEquals(OtkazUstanovki.DRUGOE, IshodUstanovki.razobrat(3, msg))
+    }
+
+    @Test
     fun `чужая подпись не повторяется никогда`() {
         val p = IshodUstanovki.razobrat(7, "INSTALL_FAILED_UPDATE_INCOMPATIBLE: signatures do not match")
         assertEquals(OtkazUstanovki.NESOVMESTIMO, p)
