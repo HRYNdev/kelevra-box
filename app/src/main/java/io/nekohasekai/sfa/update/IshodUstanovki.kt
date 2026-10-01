@@ -75,6 +75,11 @@ object IshodUstanovki {
                 "VERSION_DOWNGRADE" in text -> OtkazUstanovki.BITYY_FAYL
             "INSUFFICIENT_STORAGE" in text -> OtkazUstanovki.MESTO
             "UPDATE_INCOMPATIBLE" in text || "SIGNATURE" in text -> OtkazUstanovki.NESOVMESTIMO
+            // HyperOS/MIUI рубит тихий self-update кодом ABORTED и текстом "Permission denied"
+            // ещё до системного окна — человек ничего не отменял, это проверка прошивки
+            // (PKMSImpl.assertCallerAndPackage). Ставить сюда DRUGOE: сетевая лестница
+            // повторов, а не «только человек снимет», как у настоящей отмены.
+            status == STATUS_FAILURE_ABORTED && "PERMISSION DENIED" in text -> OtkazUstanovki.DRUGOE
             status == STATUS_FAILURE_BLOCKED -> OtkazUstanovki.PROVERKA
             status == STATUS_FAILURE_INVALID -> OtkazUstanovki.BITYY_FAYL
             status == STATUS_FAILURE_STORAGE -> OtkazUstanovki.MESTO
