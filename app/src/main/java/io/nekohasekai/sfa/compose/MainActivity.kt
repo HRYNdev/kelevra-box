@@ -1188,9 +1188,10 @@ class MainActivity :
 
         // Вкладки описаны один раз и рисуются в обеих ориентациях: снизу на телефоне,
         // сбоку на широком экране. Порядок совпадает с mainNavigationScreens.
+        val mainTabsHasUpdate by UpdateState.hasUpdate
         val mainTabs = listOf(
             KTab(stringResource(R.string.title_dashboard), Icons.Outlined.RadioButtonChecked),
-            KTab(stringResource(R.string.title_settings), Icons.Outlined.Settings),
+            KTab(stringResource(R.string.title_settings), Icons.Outlined.Settings, dot = mainTabsHasUpdate),
         )
         val selectedTab = if (currentRootRoute == Screen.Settings.route) 1 else 0
         val onSelectTab: (Int) -> Unit = { index ->
