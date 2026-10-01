@@ -33,6 +33,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -389,8 +391,8 @@ fun KButton(
     }
 }
 
-/** Вкладка нижней панели. */
-data class KTab(val title: String, val icon: ImageVector)
+/** Вкладка нижней панели. dot — точка «есть обновление», как у NavigationRail. */
+data class KTab(val title: String, val icon: ImageVector, val dot: Boolean = false)
 
 /** Нижняя панель на две вкладки: сеть и настройки. */
 @Composable
@@ -417,12 +419,23 @@ fun KTabBar(tabs: List<KTab>, selected: Int, onSelect: (Int) -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Icon(
-                        imageVector = tab.icon,
-                        contentDescription = tab.title,
-                        tint = if (active) colors.Accent else colors.Dim2,
-                        modifier = Modifier.size(21.dp),
-                    )
+                    if (tab.dot) {
+                        BadgedBox(badge = { Badge(containerColor = colors.Accent) }) {
+                            Icon(
+                                imageVector = tab.icon,
+                                contentDescription = tab.title,
+                                tint = if (active) colors.Accent else colors.Dim2,
+                                modifier = Modifier.size(21.dp),
+                            )
+                        }
+                    } else {
+                        Icon(
+                            imageVector = tab.icon,
+                            contentDescription = tab.title,
+                            tint = if (active) colors.Accent else colors.Dim2,
+                            modifier = Modifier.size(21.dp),
+                        )
+                    }
                     Spacer(Modifier.height(5.dp))
                     Text(
                         text = tab.title,
