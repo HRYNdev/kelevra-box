@@ -8,6 +8,8 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -66,7 +68,9 @@ private fun schemeOf(c: KColors) =
  */
 @Composable
 fun SFATheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    val colors = if (darkTheme) KDark else KLight
+    // Поверх встроенной палитры — цвета, присланные сервером (см. [Vid]). Не прислал — как было.
+    val vid by Vid.blok.collectAsState()
+    val colors = Vid.nalozhit(if (darkTheme) KDark else KLight, vid)
     val colorScheme = schemeOf(colors)
 
     val view = LocalView.current

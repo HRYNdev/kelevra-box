@@ -224,6 +224,10 @@ object Settings {
     var deviceTrafficTotal by dataStore.long(SettingsKey.DEVICE_TRAFFIC_TOTAL) { 0L }
     var deviceTrafficSeen by dataStore.long(SettingsKey.DEVICE_TRAFFIC_SEEN) { 0L }
 
+    // Внешний вид с сервера — последний годный блок как есть (JSON). Пусто — встроенный.
+    // Нужен, чтобы вид держался при старте без сети (см. compose.theme.Vid).
+    var vidServer by dataStore.string(SettingsKey.VID_SERVER) { "" }
+
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }

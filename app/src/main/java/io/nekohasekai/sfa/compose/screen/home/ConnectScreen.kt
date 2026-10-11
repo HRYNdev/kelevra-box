@@ -399,7 +399,7 @@ private fun humanError(e: Throwable, context: Context): String {
 /** Скачивает настройки по коду и делает подключение активным. */
 private suspend fun importByCode(code: String) {
     val url = Kelevra.normalizeSubscription(code)
-    val content = HTTPClient().use { it.getString(url) }
+    val content = HTTPClient().use { it.getString(Kelevra.adresSeti(url)) }
     Libbox.checkConfig(content)
 
     val typed =
