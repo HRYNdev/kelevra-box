@@ -58,7 +58,7 @@ fun UpdateAvailableDialog(updateInfo: UpdateInfo, onDismiss: () -> Unit, onUpdat
                     fontFamily = RobotoMono,
                     fontSize = 11.sp,
                     letterSpacing = 1.4.sp,
-                    color = K.Border,
+                    color = K.Dim,
                 )
             }
         },
