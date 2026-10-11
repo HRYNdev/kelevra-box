@@ -1,12 +1,12 @@
 package io.nekohasekai.sfa.bg
 
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import io.nekohasekai.sfa.Application
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.util.concurrent.TimeUnit
 
 /**
  * Второй носитель комнаты: OpenFlux через Яндекс Телемост.
@@ -77,7 +77,18 @@ object TelemostCore {
     /** Есть ли клиент OpenFlux в этой сборке. */
     val isAvailable: Boolean get() = binary() != null
 
-    fun isRunning(): Boolean = process?.isAlive == true
+    fun isRunning(): Boolean = process?.let(::alive) == true
+
+    /**
+     * Process.isAlive/waitFor(timeout)/destroyForcibly появились только в API 26, а minSdk 24:
+     * на Android 7 они падают NoSuchMethodError. exitValue() есть везде и бросает, пока процесс жив.
+     */
+    private fun alive(p: Process): Boolean = try {
+        p.exitValue()
+        false
+    } catch (_: IllegalThreadStateException) {
+        true
+    }
 
     /**
      * Поднимает клиента и ждёт, пока хотя бы одна полоса найдёт выход и SOCKS начнёт
@@ -135,7 +146,7 @@ object TelemostCore {
         val startedAt = SystemClock.elapsedRealtime()
         val deadline = startedAt + readyTimeoutMillis
         while (SystemClock.elapsedRealtime() < deadline) {
-            if (!p.isAlive) {
+            if (!alive(p)) {
                 process = null
                 return "ядро Телемоста вышло (код ${runCatching { p.exitValue() }.getOrDefault(-1)}): $lastLine"
             }
@@ -155,10 +166,12 @@ object TelemostCore {
         process = null
         Log.i(TAG, "остановка")
         p.destroy()
-        val done = runCatching { p.waitFor(STOP_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS) }.getOrDefault(false)
-        if (!done) {
+        val until = SystemClock.elapsedRealtime() + STOP_TIMEOUT_MILLIS
+        while (alive(p) && SystemClock.elapsedRealtime() < until) Thread.sleep(50)
+        if (alive(p)) {
             Log.w(TAG, "не вышел за $STOP_TIMEOUT_MILLIS мс, добиваю")
-            p.destroyForcibly()
+            // до API 26 destroy() в libcore Android и так шлёт SIGKILL
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) p.destroyForcibly()
         }
         pairedLanes = 0
     }
