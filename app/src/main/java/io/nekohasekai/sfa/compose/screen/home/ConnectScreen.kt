@@ -285,7 +285,7 @@ private fun ColumnScope.StepPermission(onNext: () -> Unit) {
     StepHeader(
         icon = Icons.Outlined.Shield,
         title = "Разрешения",
-        text = "Android запросит разрешение на уведомления и на защищённое соединение. " +
+        text = "Android запросит разрешение на уведомления и на подключение к сети Kelevra. " +
             "Оба запроса нужно подтвердить.",
     )
 
