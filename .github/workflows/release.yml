@@ -427,6 +427,26 @@ jobs:
             echo "тега нет, номер сборки из прогона: $GITHUB_RUN_NUMBER"
           fi
 
+      # Носитель комнаты «Телемост»: клиент OpenFlux живёт в APK отдельным исполняемым
+      # libopenflux.so (в git не лежит). Без этого шага релиз соберётся молча без Телемоста,
+      # и сервер, выдав носитель telemost, получит «в этой сборке комнаты нет».
+      # Публикуется только arm64 APK — собираем ровно его ABI.
+      - name: Setup Go (OpenFlux)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.7"
+          cache: false
+
+      - name: Install NDK (OpenFlux)
+        run: sdkmanager --install "ndk;$NDK_VERSION"
+
+      - name: Build OpenFlux
+        working-directory: sing-box-for-android
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          ABIS="arm64-v8a" bash core-openflux/sobrat.sh
+          test -s app/src/main/jniLibs/arm64-v8a/libopenflux.so
+
       - name: Build APK
         working-directory: sing-box-for-android
         run: |
@@ -462,6 +482,14 @@ jobs:
             grep -qa "$c" /tmp/dexcheck/*.dex || { echo "ОШИБКА: в APK нет класса $c — ядро собрано без olcrtc"; exit 1; }
             echo "класс в APK: $c"
           done
+
+      - name: Проверка что Телемост в APK
+        working-directory: sing-box-for-android
+        run: |
+          APK=$(find app/build/outputs/apk -name '*arm64*.apk' | head -1)
+          test -n "$APK" || { echo "APK не найден"; exit 1; }
+          unzip -l "$APK" | grep -q 'lib/arm64-v8a/libopenflux.so' || { echo "ОШИБКА: в APK нет libopenflux.so — релиз без Телемоста"; exit 1; }
+          echo "libopenflux.so в APK: есть"
 
       - name: Метаданные версии
         run: |
