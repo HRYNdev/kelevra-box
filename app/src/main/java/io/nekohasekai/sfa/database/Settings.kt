@@ -165,6 +165,13 @@ object Settings {
     var olcrtcSrvVp8Fps by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_FPS) { 0 }
     var olcrtcSrvVp8BatchSize by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_BATCH_SIZE) { 0 }
 
+    // Носитель комнаты (тот же блок olcrtc в /info): пусто — olcRTC, "telemost" — OpenFlux.
+    var olcrtcSrvNositel by dataStore.string(SettingsKey.OLCRTC_SRV_NOSITEL) { "" }
+    var olcrtcSrvTelemostUrl by dataStore.string(SettingsKey.OLCRTC_SRV_TELEMOST_URL) { "" }
+    var olcrtcSrvTelemostKey by dataStore.string(SettingsKey.OLCRTC_SRV_TELEMOST_KEY) { "" }
+    var olcrtcSrvTelemostStripes by dataStore.int(SettingsKey.OLCRTC_SRV_TELEMOST_STRIPES) { 0 }
+    var olcrtcSrvTelemostStripesMax by dataStore.int(SettingsKey.OLCRTC_SRV_TELEMOST_STRIPES_MAX) { 0 }
+
     var olcrtcDeviceId by dataStore.string(SettingsKey.OLCRTC_DEVICE_ID) { "" }
 
     // Выход выбирается сам. Человеку это ничего не запрещает: он выбирает выход руками,
@@ -223,6 +230,10 @@ object Settings {
     // не отличает, поэтому итог копит само устройство — см. DeviceTraffic.
     var deviceTrafficTotal by dataStore.long(SettingsKey.DEVICE_TRAFFIC_TOTAL) { 0L }
     var deviceTrafficSeen by dataStore.long(SettingsKey.DEVICE_TRAFFIC_SEEN) { 0L }
+
+    // Внешний вид с сервера — последний годный блок как есть (JSON). Пусто — встроенный.
+    // Нужен, чтобы вид держался при старте без сети (см. compose.theme.Vid).
+    var vidServer by dataStore.string(SettingsKey.VID_SERVER) { "" }
 
     var cachedUpdateInfo by dataStore.string(SettingsKey.CACHED_UPDATE_INFO) { "" }
     var cachedApkPath by dataStore.string(SettingsKey.CACHED_APK_PATH) { "" }

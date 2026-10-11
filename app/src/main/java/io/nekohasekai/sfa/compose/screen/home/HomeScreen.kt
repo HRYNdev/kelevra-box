@@ -55,6 +55,7 @@ import io.nekohasekai.sfa.compose.theme.KHint
 import io.nekohasekai.sfa.compose.theme.KRowItem
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
+import io.nekohasekai.sfa.compose.theme.Vid
 import io.nekohasekai.sfa.constant.Status
 import kotlinx.coroutines.delay
 import androidx.compose.foundation.BorderStroke
@@ -140,6 +141,8 @@ fun HomeScreen(
     // Сводку держит общий объект: её же обновляет кнопка в расширенных, и карточка
     // должна показать новое сразу, без перезахода в приложение.
     val subscription by SubscriptionRefresh.info.collectAsState()
+    // Тексты и флаги с сервера (см. [Vid]): не прислал — встроенные слова и поведение.
+    val vid by Vid.blok.collectAsState()
     // Какой ответ на жалобу уже прочитан. В памяти экрана — чтобы карточка исчезла по
     // нажатию сразу, на диске — чтобы не появилась снова после перезахода.
     var replySeen by remember { mutableStateOf(Settings.complaintReplySeen) }
@@ -264,7 +267,7 @@ fun HomeScreen(
         KDial(
             state = state,
             title = when {
-                !hasProfile -> "Подключить"
+                !hasProfile -> vid.tekst("podklyuchit", "Подключить")
                 busy && serviceStatus == Status.Starting -> "Подключаюсь"
                 busy -> "Отключаюсь"
                 home -> "Дома"
@@ -277,8 +280,8 @@ fun HomeScreen(
                 linkDead -> "Связи нет"
                 manualDead -> "Не отвечает"
                 measuring -> "Проверяю связь"
-                running -> "Подключено"
-                else -> "Отключено"
+                running -> vid.tekst("podklyucheno", "Подключено")
+                else -> vid.tekst("otklyucheno", "Отключено")
             },
             badge = if (running && !home && !broken) badgeOf(activeOutbound) else null,
             place = place,
@@ -310,7 +313,7 @@ fun HomeScreen(
                 measuring -> "проверяю, идут ли данные"
                 manualHold -> "выход выбран вами, автомат вернётся при смене сети"
                 running -> "нажмите, чтобы выключить"
-                else -> "нажмите, чтобы включить"
+                else -> vid.tekst("podskazka_vklyuchit", "нажмите, чтобы включить")
             },
         )
 
@@ -322,7 +325,7 @@ fun HomeScreen(
             if (hasProfile) {
                 KCard(onClick = { showExits = true }) {
                     KRowItem(
-                        label = "Выход",
+                        label = vid.tekst("kartochka_vyhod", "Выход"),
                         title = when {
                             home -> "Не нужен"
                             // Имя выбранного выхода знает только работающее ядро, поэтому
@@ -382,7 +385,8 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.height(KDim.Gap))
             }
-            if (sub != null) {
+            // Флаг с сервера: карточку подписки можно убрать с главного экрана.
+            if (sub != null && vid.funkciya("kartochka_podpiski", true)) {
                 // Карточка говорит ровно одно: подписка жива и до каких пор. Кто ею
                 // пользуется и с какого телефона — подробность, и живёт она за нажатием:
                 // имя и прочие подробности показываем только при заходе во вкладку
@@ -390,7 +394,7 @@ fun HomeScreen(
                 KCard(onClick = { showSubscription = true }) {
                     // имя аккаунта из панели человеку ничего не говорит: показываем состояние
                     KRowItem(
-                        label = "Подписка",
+                        label = vid.tekst("kartochka_podpiska", "Подписка"),
                         title = if (sub.active) "Активна" else "Приостановлена",
                         subtitle = sub.note,
                         chevron = true,

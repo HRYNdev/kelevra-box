@@ -281,7 +281,7 @@ class ProfileImportHandler(private val context: Context) {
             typedProfile.path = configFile.path
 
             // конфиг тянем сразу: профиль без него бесполезен
-            val content = HTTPClient().use { it.getString(url) }
+            val content = HTTPClient().use { it.getString(io.nekohasekai.sfa.Kelevra.adresSeti(url)) }
             Libbox.checkConfig(content)
             configFile.writeText(content)
 

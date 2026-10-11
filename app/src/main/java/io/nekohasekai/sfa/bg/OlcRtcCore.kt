@@ -93,7 +93,16 @@ object OlcRtcCore {
         val dnsServer: String = "",
         val socksUser: String = "",
         val socksPass: String = "",
-    )
+        /** Чем везти комнату: "" — olcRTC, [TelemostCore.NOSITEL] — OpenFlux через Телемост. */
+        val nositel: String = "",
+        val telemostUrl: String = "",
+        /** Общий секрет пары с выходом Телемоста; пусто — без шифрования. */
+        val telemostKey: String = "",
+        val telemostStripes: Int = TelemostCore.DEFAULT_STRIPES,
+        val telemostStripesMax: Int = TelemostCore.DEFAULT_STRIPES_MAX,
+    ) {
+        val telemost: Boolean get() = nositel == TelemostCore.NOSITEL
+    }
 
     sealed interface State {
         /** Ядро не поднимали. */
@@ -163,8 +172,8 @@ object OlcRtcCore {
         }
     }
 
-    /** Есть ли ядро olcrtc в этой сборке. */
-    val isAvailable: Boolean get() = mobileClass != null
+    /** Есть ли в этой сборке хоть один носитель комнаты (olcRTC или Телемост). */
+    val isAvailable: Boolean get() = mobileClass != null || TelemostCore.isAvailable
 
     /**
      * Поднимает ядро и дожидается готовности.
@@ -221,6 +230,9 @@ object OlcRtcCore {
         attempt: Int,
         attempts: Int,
     ): State {
+        if (params.telemost) return startTelemostOnce(params, attempt, attempts)
+        // Сменили носитель с Телемоста на olcRTC — его процесс держит тот же порт SOCKS.
+        if (TelemostCore.isRunning()) TelemostCore.stop()
         val mobile = mobileClass
         if (mobile == null) {
             return failed("ядро собрано без olcRTC (нет $CLASS_MOBILE)")
@@ -312,11 +324,57 @@ object OlcRtcCore {
     }
 
     /**
+     * Подъём носителя «Телемост»: отдельный процесс OpenFlux с тем же SOCKS на петле.
+     *
+     * protect(fd) здесь не нужен и невозможен (чужой процесс): от петли через свой tun
+     * держит вывод приложения из tun на время комнаты, см. [TelemostCore].
+     */
+    private fun startTelemostOnce(params: Params, attempt: Int, attempts: Int): State {
+        val why = when {
+            !TelemostCore.isAvailable -> "ядро собрано без Телемоста (нет клиента OpenFlux)"
+            params.telemostUrl.isBlank() -> "не задана ссылка Телемоста"
+            params.socksPort !in 1..65535 -> "порт SOCKS вне диапазона: ${params.socksPort}"
+            else -> null
+        }
+        if (why != null) return failed(why, unavailable = !TelemostCore.isAvailable)
+
+        // Ядро olcRTC могло остаться от прошлого носителя — оно на том же порту.
+        mobileClass?.let { mobile -> if (invokeIsRunning(mobile)) runCatching { invokeStop(mobile) } }
+
+        state = State.Starting
+        lastError = null
+        Log.i(TAG, "старт носителя Телемост (попытка $attempt из $attempts)")
+        val reason = try {
+            TelemostCore.start(
+                url = params.telemostUrl,
+                key = params.telemostKey,
+                socksPort = params.socksPort,
+                stripes = params.telemostStripes,
+                stripesMax = params.telemostStripesMax,
+            )
+        } catch (t: Throwable) {
+            runCatching { TelemostCore.stop() }
+            reasonOf(t)
+        }
+        if (reason != null) return failed(reason, unavailable = false)
+        state = State.Ready
+        health = Health.Unknown
+        Log.i(TAG, "Телемост готов: SOCKS5 на $SOCKS_LISTEN_HOST:${params.socksPort}")
+        return State.Ready
+    }
+
+    /**
      * Гасит ядро. Внутренний Stop блокируется до выхода клиентской горутины,
      * поэтому ждём его в отдельном потоке с потолком по времени: подвесить
      * остановку сервиса важнее, чем дождаться чистого выхода.
      */
     fun stop() {
+        if (TelemostCore.isRunning()) {
+            health = Health.Unknown
+            healthCheckedAt = 0L
+            TelemostCore.stop()
+            state = State.Idle
+        }
         val mobile = mobileClass ?: return
         health = Health.Unknown
         healthCheckedAt = 0L
@@ -338,6 +396,7 @@ object OlcRtcCore {
     }
 
     fun isRunning(): Boolean {
+        if (TelemostCore.isRunning()) return true
         val mobile = mobileClass ?: return false
         return invokeIsRunning(mobile)
     }
@@ -354,6 +413,7 @@ object OlcRtcCore {
     fun probe(socksPort: Int): Health {
         val mobile = mobileClass
         val result = when {
+            TelemostCore.isRunning() -> runProbe(socksPort)
             mobile == null -> Health.Dead("ядра olcRTC в сборке нет")
             !invokeIsRunning(mobile) -> Health.Dead("ядро не запущено")
             else -> runProbe(socksPort)
@@ -394,8 +454,8 @@ object OlcRtcCore {
         else -> null
     }
 
-    private fun failed(reason: String): State {
-        val newState = if (mobileClass == null) State.Unavailable else State.Failed(reason)
+    private fun failed(reason: String, unavailable: Boolean = mobileClass == null): State {
+        val newState = if (unavailable) State.Unavailable else State.Failed(reason)
         state = newState
         lastError = reason
         Log.w(TAG, "olcRTC не поднят: $reason")

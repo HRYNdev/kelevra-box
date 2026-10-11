@@ -79,6 +79,13 @@ object SettingsKey {
     const val OLCRTC_SRV_VP8_FPS = "olcrtc_srv_vp8_fps"
     const val OLCRTC_SRV_VP8_BATCH_SIZE = "olcrtc_srv_vp8_batch_size"
 
+    // Носитель комнаты с сервера: "" — olcRTC как раньше, "telemost" — OpenFlux через Телемост.
+    const val OLCRTC_SRV_NOSITEL = "olcrtc_srv_nositel"
+    const val OLCRTC_SRV_TELEMOST_URL = "olcrtc_srv_telemost_url"
+    const val OLCRTC_SRV_TELEMOST_KEY = "olcrtc_srv_telemost_key"
+    const val OLCRTC_SRV_TELEMOST_STRIPES = "olcrtc_srv_telemost_stripes"
+    const val OLCRTC_SRV_TELEMOST_STRIPES_MAX = "olcrtc_srv_telemost_stripes_max"
+
     /** Своё имя устройства в комнате: сервер его не раздаёт, а совпадать они не должны. */
     const val OLCRTC_DEVICE_ID = "olcrtc_device_id"
 
@@ -130,6 +137,9 @@ object SettingsKey {
      */
     const val DEVICE_TRAFFIC_TOTAL = "device_traffic_total"
     const val DEVICE_TRAFFIC_SEEN = "device_traffic_seen"
+
+    /** Последний годный внешний вид от сервера (см. compose.theme.Vid). */
+    const val VID_SERVER = "vid_server"
 
 
     // cache

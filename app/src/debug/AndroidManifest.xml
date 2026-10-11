@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Только debug-сборка: открытый http до локального стенда сервера
+  (адрес кладётся в files/debug-server-url.txt, см. Kelevra.adresSeti).
+  В выпускную сборку не попадает.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

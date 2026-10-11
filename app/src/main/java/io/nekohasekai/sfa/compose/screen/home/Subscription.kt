@@ -59,6 +59,11 @@ data class SubscriptionInfo(
      * вслепую и в одном экземпляре.
      */
     val devices: List<SubscriptionDevice> = emptyList(),
+    /**
+     * Внешний вид с сервера — поле `vid` как есть (разбирает [io.nekohasekai.sfa.compose.theme.Vid]).
+     * null — сервер блока не прислал: старый сервер или вид снят.
+     */
+    val vid: Any? = null,
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -161,7 +166,7 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         val remote = Kelevra.configUrl(subCode)
 
         // Своё устройство называем: по нему сервер найдёт ответ на нашу же жалобу.
-        val conn = URL("$remote/info?device=${Kelevra.deviceId}").openConnection() as HttpURLConnection
+        val conn = URL(Kelevra.adresSeti("$remote/info?device=${Kelevra.deviceId}")).openConnection() as HttpURLConnection
         conn.requestMethod = "GET"
         conn.connectTimeout = 10000
         conn.readTimeout = 10000
@@ -196,6 +201,7 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
             olcrtc = json.optJSONObject("olcrtc"),
             sendLogNow = json.optBoolean("send_log_now"),
+            vid = json.opt("vid"),
             reply = json.optJSONObject("reply")?.let { answer ->
                 val body = answer.optString("text")
                 if (body.isBlank()) null else ComplaintReply(

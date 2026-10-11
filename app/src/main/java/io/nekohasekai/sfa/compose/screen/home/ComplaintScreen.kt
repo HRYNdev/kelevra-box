@@ -219,7 +219,7 @@ private fun sendComplaint(
         put("outbound", activeOutbound ?: "")
     }.toString()
 
-    val conn = URL("https://${Kelevra.SUBSCRIPTION_HOST}/report").openConnection() as HttpURLConnection
+    val conn = URL(Kelevra.adresSeti("https://${Kelevra.SUBSCRIPTION_HOST}/report")).openConnection() as HttpURLConnection
     conn.requestMethod = "POST"
     conn.connectTimeout = 15000
     conn.readTimeout = 15000
