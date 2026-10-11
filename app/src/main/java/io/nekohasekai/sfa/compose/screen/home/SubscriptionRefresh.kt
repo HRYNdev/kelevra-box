@@ -137,6 +137,8 @@ object SubscriptionRefresh {
             // Сеть не ответила — старые параметры комнаты остаются; ответила без блока
             // olcrtc — стираем, чтобы не держать протухшую комнату.
             OlcRtcParams.applyServer(loaded.olcrtc)
+            // Внешний вид: ответ пришёл без блока — снят, с блоком — применяем и помним.
+            io.nekohasekai.sfa.compose.theme.Vid.izSvodki(loaded.vid)
             _info.value = loaded
             // Сервер попросил журнал, не дожидаясь ночи — отдаём сразу. Метку своей
             // просьбы он снимает по факту приёма файла, поэтому повторить её он сможет,
@@ -165,7 +167,7 @@ object SubscriptionRefresh {
 
             val content = try {
                 Log.i(TAG, "обновление подписки: запрашиваю настройки у сервера")
-                val text = HTTPClient().use { it.getString(profile.typed.remoteURL) }
+                val text = HTTPClient().use { it.getString(Kelevra.adresSeti(profile.typed.remoteURL)) }
                 Libbox.checkConfig(text)
                 text
             } catch (e: Exception) {

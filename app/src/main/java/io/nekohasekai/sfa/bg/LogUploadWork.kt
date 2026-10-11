@@ -595,7 +595,7 @@ object LogUploadWork {
 
     /** Отправка. Успех — только когда сервер ответил {"ok":true}. */
     private fun upload(archive: ByteArray): ИсходОтправки {
-        val conn = URL("https://${Kelevra.SUBSCRIPTION_HOST}/logs").openConnection() as HttpURLConnection
+        val conn = URL(Kelevra.adresSeti("https://${Kelevra.SUBSCRIPTION_HOST}/logs")).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 20000

@@ -131,6 +131,9 @@ object SettingsKey {
     const val DEVICE_TRAFFIC_TOTAL = "device_traffic_total"
     const val DEVICE_TRAFFIC_SEEN = "device_traffic_seen"
 
+    /** Последний годный внешний вид от сервера (см. compose.theme.Vid). */
+    const val VID_SERVER = "vid_server"
+
 
     // cache
     const val STARTED_BY_USER = "started_by_user"
