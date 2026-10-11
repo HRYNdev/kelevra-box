@@ -21,3 +21,6 @@ kelevra-version.json
 
 # личный код доступа: в репозиторий не кладём
 desktop/code.txt
+
+# клиент OpenFlux собирается скриптом core-openflux/sobrat.sh, бинарь в репозиторий не кладём
+/app/src/main/jniLibs/*/libopenflux.so
