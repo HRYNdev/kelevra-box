@@ -9,7 +9,6 @@ import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.R
@@ -38,24 +37,20 @@ val K: KColors
     @ReadOnlyComposable
     get() = LocalKColors.current
 
-// Шрифты переменные: без явных настроек начертания Android рисует все веса
-// одинаково тонкими — заголовок выглядит бледным. Задаём вес осью wght.
-private fun mont(weight: Int) =
-    Font(
-        R.font.montserrat,
-        FontWeight(weight),
-        variationSettings = FontVariation.Settings(FontVariation.weight(weight)),
-    )
-
-val Montserrat = FontFamily(mont(300), mont(400), mont(500), mont(600), mont(700))
-
-val RobotoMono = FontFamily(
-    Font(
-        R.font.roboto_mono,
-        FontWeight.Medium,
-        variationSettings = FontVariation.Settings(FontVariation.weight(500)),
-    ),
+// Шрифты статичные: свой файл на каждый вес. Раньше был один переменный файл и вес
+// задавался осью wght, но у переменного Montserrat вес по умолчанию 100 (Thin), и
+// прошивка, которая ось не применяет (HyperOS у Вики, 11.10.2026), рисовала весь
+// текст волосяным — светлая тема «сливалась». Файлы нарезаны из того же переменного
+// fontTools-инстансером, глифы те же.
+val Montserrat = FontFamily(
+    Font(R.font.montserrat_300, FontWeight.Light),
+    Font(R.font.montserrat_400, FontWeight.Normal),
+    Font(R.font.montserrat_500, FontWeight.Medium),
+    Font(R.font.montserrat_600, FontWeight.SemiBold),
+    Font(R.font.montserrat_700, FontWeight.Bold),
 )
+
+val RobotoMono = FontFamily(Font(R.font.roboto_mono_500, FontWeight.Medium))
 
 val KelevraTypography = Typography(
     displayLarge = TextStyle(

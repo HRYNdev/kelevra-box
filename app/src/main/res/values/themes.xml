@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
 
     <style name="AppTheme" parent="AppTheme.Base" />
 
@@ -11,6 +11,9 @@
     -->
     <style name="AppTheme.Base" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="bottomSheetDialogTheme">@style/BottomSheetDialogTheme</item>
+        <!-- Светлая и тёмная у нас свои. Прошивкам (HyperOS: ForceDarkHelper в журналах
+             Вики, 11.10.2026) перекрашивать приложение по-своему не даём. -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
 
         <item name="colorPrimary">@color/k_accent</item>
         <item name="colorOnPrimary">@color/k_accent_ink</item>
@@ -49,6 +52,7 @@
         <item name="android:colorBackgroundCacheHint">@null</item>
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowAnimationStyle">@android:style/Animation</item>
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
     </style>
 
     <style name="BottomSheetDialogTheme" parent="Theme.Material3.DayNight.BottomSheetDialog">

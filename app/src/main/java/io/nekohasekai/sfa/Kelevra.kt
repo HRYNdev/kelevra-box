@@ -143,6 +143,23 @@ object Kelevra {
         return code?.takeIf { it.isNotBlank() && it != CONFIG_SUFFIX.trim('/') }
     }
 
+    /**
+     * Куда на самом деле уходит запрос к своему серверу. В выпускной сборке — ровно [url].
+     *
+     * Только в debug адрес сервера можно подменить файлом `files/debug-server-url.txt`
+     * (кладётся через `run-as`, например `http://10.0.2.2:8765`): так то, что раздаёт
+     * сервер, проверяется на локальном стенде, не трогая боевой. Путь и код остаются
+     * прежними, в профиле хранится настоящий адрес.
+     */
+    fun adresSeti(url: String): String {
+        if (!BuildConfig.DEBUG) return url
+        val podmena = runCatching {
+            java.io.File(Application.application.filesDir, "debug-server-url.txt").readText().trim().trimEnd('/')
+        }.getOrNull()
+        if (podmena.isNullOrEmpty()) return url
+        return url.replace("https://$SUBSCRIPTION_HOST", podmena)
+    }
+
     /** Адрес конфига у своего сборщика. */
     fun configUrl(code: String): String = "https://$SUBSCRIPTION_HOST/k/$code"
 

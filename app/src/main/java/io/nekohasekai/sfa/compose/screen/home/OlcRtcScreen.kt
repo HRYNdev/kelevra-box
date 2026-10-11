@@ -230,6 +230,10 @@ private fun tokenText(): String = when (OlcRtcParams.wbTokenSource) {
 /** Короткая сводка того, с чем реально пойдём в комнату. Секретов нет: ключ — только факт. */
 private fun roomSummary(): String {
     val params = OlcRtcParams.resolve()
+    if (params.telemost) {
+        val key = if (params.telemostKey.isBlank()) "без шифрования" else "шифрование есть"
+        return "Телемост · полос ${params.telemostStripes}–${params.telemostStripesMax} · порт ${params.socksPort} · $key"
+    }
     if (params.roomId.isBlank()) return "не задана"
     val room = if (params.roomId.length > 8) params.roomId.take(8) + "…" else params.roomId
     val key = if (params.keyHex.isBlank()) "ключа нет" else "ключ есть"

@@ -64,10 +64,21 @@ object OlcRtcParams {
         return generated
     }
 
-    /** Есть ли вообще с чем стартовать: комната и ключ. */
+    /**
+     * Носитель комнаты выбирает сервер (поле `nositel` в блоке olcrtc): пусто — olcRTC,
+     * как было всегда; `telemost` — OpenFlux через Телемост. Ручного переопределения у
+     * носителя нет: служебные поля экрана — про olcRTC.
+     */
+    val telemost: Boolean get() = Settings.olcrtcSrvNositel == TelemostCore.NOSITEL
+
+    /** Есть ли вообще с чем стартовать: комната и ключ (у Телемоста — ссылка). */
     val hasRoom: Boolean
-        get() = (Settings.olcrtcRoomId.ifBlank { Settings.olcrtcSrvRoomId }).isNotBlank() &&
-            (Settings.olcrtcKeyHex.ifBlank { Settings.olcrtcSrvKeyHex }).isNotBlank()
+        get() = if (telemost) {
+            Settings.olcrtcSrvTelemostUrl.isNotBlank()
+        } else {
+            (Settings.olcrtcRoomId.ifBlank { Settings.olcrtcSrvRoomId }).isNotBlank() &&
+                (Settings.olcrtcKeyHex.ifBlank { Settings.olcrtcSrvKeyHex }).isNotBlank()
+        }
 
     /** Отдал ли сервер блок olcrtc в последний раз, когда мы его читали. */
     val serverOffers: Boolean get() = Settings.olcrtcSrvAvailable
@@ -82,6 +93,7 @@ object OlcRtcParams {
     /** Откуда приехали параметры — для честной подписи на экране. */
     val source: Source
         get() {
+            if (telemost) return Source.Server
             val sources = listOf(
                 pick(Settings.olcrtcCarrier, Settings.olcrtcSrvCarrier, DEFAULT_CARRIER).second,
                 pick(Settings.olcrtcRoomId, Settings.olcrtcSrvRoomId, "").second,
@@ -125,6 +137,11 @@ object OlcRtcParams {
         vp8Fps = pick(Settings.olcrtcVp8Fps, Settings.olcrtcSrvVp8Fps, DEFAULT_VP8_FPS).first,
         vp8BatchSize = pick(Settings.olcrtcVp8BatchSize, Settings.olcrtcSrvVp8BatchSize, DEFAULT_VP8_BATCH).first,
         dnsServer = physicalDns(),
+        nositel = Settings.olcrtcSrvNositel,
+        telemostUrl = Settings.olcrtcSrvTelemostUrl,
+        telemostKey = Settings.olcrtcSrvTelemostKey,
+        telemostStripes = Settings.olcrtcSrvTelemostStripes.takeIf { it > 0 } ?: TelemostCore.DEFAULT_STRIPES,
+        telemostStripesMax = Settings.olcrtcSrvTelemostStripesMax.takeIf { it > 0 } ?: TelemostCore.DEFAULT_STRIPES_MAX,
     )
 
     /**
@@ -199,6 +216,7 @@ object OlcRtcParams {
                 Settings.olcrtcSrvSocksPort = 0
                 Settings.olcrtcSrvVp8Fps = 0
                 Settings.olcrtcSrvVp8BatchSize = 0
+                applyTelemost(null)
             }
             return
         }
@@ -223,6 +241,33 @@ object OlcRtcParams {
         Settings.olcrtcSrvSocksPort = json.optInt("socks_port")
         Settings.olcrtcSrvVp8Fps = vp8?.optInt("fps") ?: 0
         Settings.olcrtcSrvVp8BatchSize = vp8?.optInt("batch_size") ?: 0
+        applyTelemost(json)
         Settings.olcrtcSrvAvailable = true
+    }
+
+    /**
+     * Носитель и его параметры. Блок без `nositel` — olcRTC, как у всех старых серверов;
+     * поля Телемоста тогда стираются, чтобы не поднять его по протухшей ссылке.
+     */
+    private fun applyTelemost(json: JSONObject?) {
+        val nositel = json?.optString("nositel").orEmpty()
+        val tm = json?.optJSONObject("telemost")
+        val was = Settings.olcrtcSrvNositel
+        if (nositel == TelemostCore.NOSITEL && tm != null && tm.optString("url").isNotBlank()) {
+            Settings.olcrtcSrvNositel = nositel
+            Settings.olcrtcSrvTelemostUrl = tm.optString("url")
+            Settings.olcrtcSrvTelemostKey = tm.optString("key")
+            Settings.olcrtcSrvTelemostStripes = tm.optInt("stripes")
+            Settings.olcrtcSrvTelemostStripesMax = tm.optInt("stripes_max")
+        } else {
+            Settings.olcrtcSrvNositel = ""
+            Settings.olcrtcSrvTelemostUrl = ""
+            Settings.olcrtcSrvTelemostKey = ""
+            Settings.olcrtcSrvTelemostStripes = 0
+            Settings.olcrtcSrvTelemostStripesMax = 0
+        }
+        if (was != Settings.olcrtcSrvNositel) {
+            Log.i(TAG, "носитель комнаты: ${was.ifBlank { "olcrtc" }} -> ${Settings.olcrtcSrvNositel.ifBlank { "olcrtc" }}")
+        }
     }
 }
