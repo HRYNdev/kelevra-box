@@ -165,6 +165,13 @@ object Settings {
     var olcrtcSrvVp8Fps by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_FPS) { 0 }
     var olcrtcSrvVp8BatchSize by dataStore.int(SettingsKey.OLCRTC_SRV_VP8_BATCH_SIZE) { 0 }
 
+    // Носитель комнаты (тот же блок olcrtc в /info): пусто — olcRTC, "telemost" — OpenFlux.
+    var olcrtcSrvNositel by dataStore.string(SettingsKey.OLCRTC_SRV_NOSITEL) { "" }
+    var olcrtcSrvTelemostUrl by dataStore.string(SettingsKey.OLCRTC_SRV_TELEMOST_URL) { "" }
+    var olcrtcSrvTelemostKey by dataStore.string(SettingsKey.OLCRTC_SRV_TELEMOST_KEY) { "" }
+    var olcrtcSrvTelemostStripes by dataStore.int(SettingsKey.OLCRTC_SRV_TELEMOST_STRIPES) { 0 }
+    var olcrtcSrvTelemostStripesMax by dataStore.int(SettingsKey.OLCRTC_SRV_TELEMOST_STRIPES_MAX) { 0 }
+
     var olcrtcDeviceId by dataStore.string(SettingsKey.OLCRTC_DEVICE_ID) { "" }
 
     // Выход выбирается сам. Человеку это ничего не запрещает: он выбирает выход руками,
