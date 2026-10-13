@@ -78,8 +78,9 @@ object RuleSetCache {
             .filter { file ->
                 looksLikeAnyRuleSet(file).also { ok ->
                     if (!ok) {
+                        val size = file.length()
                         file.delete()
-                        Log.w(TAG, "набор «${file.name.removeSuffix(SUFFIX)}» в кэше испорчен (${file.length()} б) — выкинул")
+                        Log.w(TAG, "набор «${file.name.removeSuffix(SUFFIX)}» в кэше испорчен ($size б) — выкинул")
                     }
                 }
             }
