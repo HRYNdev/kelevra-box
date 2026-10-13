@@ -86,6 +86,7 @@ class UpdateWorker(private val appContext: Context, params: WorkerParameters) : 
                 Log.d(TAG, "Update installed successfully")
             } else {
                 Log.d(TAG, "Silent install not available, update will be shown on next app launch")
+                UpdatePovtorWork.uvedomitONovoy(appContext, updateInfo)
             }
 
             Result.success()

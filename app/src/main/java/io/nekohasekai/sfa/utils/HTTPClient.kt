@@ -36,7 +36,7 @@ class HTTPClient : Closeable {
         request.setURL(url)
         // Панель ведёт учёт устройств по этим заголовкам. Без них наш клиент для неё
         // безымянный, и ограничение по числу устройств не работает в принципе.
-        if (url.contains(Kelevra.SUBSCRIPTION_HOST)) {
+        if (Kelevra.isOwnUrl(url)) {
             request.setHeader("x-hwid", Kelevra.deviceId)
             request.setHeader("x-device-os", "Android")
             request.setHeader("x-ver-os", Build.VERSION.RELEASE ?: "")

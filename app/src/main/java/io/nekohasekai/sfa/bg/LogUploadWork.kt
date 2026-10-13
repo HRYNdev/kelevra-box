@@ -17,6 +17,7 @@ import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -594,8 +595,8 @@ object LogUploadWork {
     }
 
     /** Отправка. Успех — только когда сервер ответил {"ok":true}. */
-    private fun upload(archive: ByteArray): ИсходОтправки {
-        val conn = URL(Kelevra.adresSeti("https://${Kelevra.SUBSCRIPTION_HOST}/logs")).openConnection() as HttpURLConnection
+    private fun upload(archive: ByteArray, host: String, deviceKey: String?): ИсходОтправки {
+        val conn = URL(Kelevra.adresSeti("https://$host/logs")).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 20000
@@ -605,6 +606,7 @@ object LogUploadWork {
             conn.setRequestProperty("Content-Type", "application/gzip")
             conn.setRequestProperty("User-Agent", "kelevra")
             Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
+            if (deviceKey != null) conn.setRequestProperty("X-Device-Key", deviceKey)
             conn.outputStream.use { it.write(archive) }
             val code = conn.responseCode
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
@@ -630,6 +632,14 @@ object LogUploadWork {
      *  - false — не получилось, имеет смысл повторить.
      */
     internal suspend fun runOnce(): Boolean = withContext(Dispatchers.IO) {
+        // Замок: часовая работа, otpravitSeychas и povtorPozzhe не должны слать одну посылку разом.
+        // Вторая дожидается первой и, прочитав уже сдвинутые отметки, находит только новое.
+        zamokOtpravki.withLock { runOnceLocked() }
+    }
+
+    private val zamokOtpravki = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun runOnceLocked(): Boolean {
         val marks = loadMarks()
         // Отчёты о падениях идут первыми: если посылка упрётся в потолок, обрежется
         // обычный журнал, а не разбор падения.
@@ -637,28 +647,28 @@ object LogUploadWork {
         val parts = collectReports(reportRoots, marks) + sbor.parts
         if (parts.isEmpty()) {
             Log.i(TAG, "отправлять нечего: новых логов нет")
-            return@withContext true
+            return true
         }
 
         val (archive, taken) = buildArchive(parts)
         if (archive.isEmpty() || taken.isEmpty()) {
             Log.i(TAG, "архив пустой, отправка отменена")
-            return@withContext true
+            return true
         }
 
         Log.i(TAG, "отправляю логи: ${taken.size} шт., ${archive.size / 1024} КБ сжатыми")
-        val popytka = runCatching { upload(archive) }
+        val popytka = runCatching { upload(archive, Kelevra.currentHost(), Kelevra.currentDeviceKey()) }
             .onFailure { Log.w(TAG, "отправка логов сорвалась", Kelevra.maskThrowable(it)) }
         // Исключение из upload() = до сервера ВООБЩЕ не доехали (нет сети, DNS, таймаут):
         // о хвосте это не говорит ничего, судить его нельзя. Уходим как раньше, счётчик
         // безнадёжности не трогаем — иначе телефон без сети 7 часов (бэкофф 1ч+2ч+4ч при
         // неизменном хвосте) выбросил бы совершенно целые логи.
-        if (popytka.isFailure) return@withContext false
+        if (popytka.isFailure) return false
         val ishod = popytka.getOrDefault(ИсходОтправки.ВременныйСбой)
         // Пятисотый ответ значит «серверу сейчас плохо», а не «архив негодный»: он
         // приходит при нехватке места под журналы и при сбое записи. Уходим как при
         // отсутствии сети, счётчик безнадёжности не трогаем.
-        if (ishod == ИсходОтправки.ВременныйСбой) return@withContext false
+        if (ishod == ИсходОтправки.ВременныйСбой) return false
         if (ishod == ИсходОтправки.Отвергнуто) {
             // Сюда доходит только РЕАЛЬНЫЙ ответ сервера с отказом. Протокол не говорит,
             // отказ временный или архив навсегда битый (см. STUCK_LIMIT) — единственный
@@ -675,9 +685,9 @@ object LogUploadWork {
                 clearStuckState()
                 // true — не «отправлено», а «разобрано»: WorkManager не должен
                 // долбить в этот же битый хвост ещё сутки, блокируя новые логи.
-                return@withContext true
+                return true
             }
-            return@withContext false
+            return false
         }
         clearStuckState()
 
@@ -686,7 +696,7 @@ object LogUploadWork {
         saveMarks(marks)
         Settings.logUploadLastOk = System.currentTimeMillis()
         Log.i(TAG, "логи отправлены")
-        true
+        return true
     }
 
     class UploadTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {

@@ -162,8 +162,8 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         if (profile.typed.type != TypedProfile.Type.Remote) return@runCatching null
         // сводка живёт только у своего сборщика, поэтому адрес профиля приводим к нему:
         // старые профили ведут на панель, и по ним раньше не читалось ничего
-        val subCode = Kelevra.subscriptionCode(profile.typed.remoteURL) ?: return@runCatching null
-        val remote = Kelevra.configUrl(subCode)
+        // Профиль устройства (/u/<ключ>) остаётся в своей форме, общий (/k/<код>) приводится к /k/.
+        val remote = io.nekohasekai.sfa.SubscriptionLink.baseUrl(profile.typed.remoteURL) ?: return@runCatching null
 
         // Своё устройство называем: по нему сервер найдёт ответ на нашу же жалобу.
         val conn = URL(Kelevra.adresSeti("$remote/info?device=${Kelevra.deviceId}")).openConnection() as HttpURLConnection
@@ -181,6 +181,10 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         if (code !in 200..299) return@runCatching null
 
         val json = JSONObject(text)
+        // Двери сети: пригодятся при следующем входе по коду, если справочник не загрузится.
+        json.optJSONArray("dveri")?.let { arr ->
+            io.nekohasekai.sfa.Aktivatsiya.zapomnitDveri((0 until arr.length()).map { arr.optString(it) })
+        }
         SubscriptionInfo(
             name = json.optString("name"),
             active = json.optBoolean("active"),

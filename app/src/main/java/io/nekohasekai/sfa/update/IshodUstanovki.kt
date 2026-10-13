@@ -63,6 +63,10 @@ object IshodUstanovki {
     /** Отказ, который снимает только человек у телефона: напоминание раз в сутки, пока версия не встанет. */
     const val NAPOMINANIE_MINUT = 1440L
 
+    /** Уведомление «Доступно обновление» не чаще раза в сутки. Часы ушли назад: показывать можно. */
+    fun mozhnoUvedomit(seychasMs: Long, poslednoeMs: Long): Boolean =
+        poslednoeMs <= 0L || seychasMs < poslednoeMs || seychasMs - poslednoeMs >= NAPOMINANIE_MINUT * 60_000L
+
     private val SHA256_DIGEST = Regex("""^sha256:([0-9a-fA-F]{64})$""")
 
     fun razobrat(status: Int, soobshchenie: String?): OtkazUstanovki {

@@ -184,7 +184,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
                     error = null
                     scope.launch {
                         val result = withContext(Dispatchers.IO) {
-                            sendComplaint(text, serviceRunning, activeOutbound)
+                            sendComplaint(text, serviceRunning, activeOutbound, Kelevra.currentHost(), Kelevra.currentDeviceKey())
                         }
                         sending = false
                         result.fold(
@@ -206,6 +206,8 @@ private fun sendComplaint(
     text: String,
     serviceRunning: Boolean,
     activeOutbound: String?,
+    host: String,
+    deviceKey: String?,
 ): Result<String> = runCatching {
     val body = JSONObject().apply {
         put("text", text)
@@ -219,13 +221,14 @@ private fun sendComplaint(
         put("outbound", activeOutbound ?: "")
     }.toString()
 
-    val conn = URL(Kelevra.adresSeti("https://${Kelevra.SUBSCRIPTION_HOST}/report")).openConnection() as HttpURLConnection
+    val conn = URL(Kelevra.adresSeti("https://$host/report")).openConnection() as HttpURLConnection
     conn.requestMethod = "POST"
     conn.connectTimeout = 15000
     conn.readTimeout = 15000
     conn.doOutput = true
     conn.setRequestProperty("Content-Type", "application/json")
     Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
+    if (deviceKey != null) conn.setRequestProperty("X-Device-Key", deviceKey)
     conn.outputStream.use { it.write(body.toByteArray()) }
     val code = conn.responseCode
     val response = (if (code in 200..299) conn.inputStream else conn.errorStream)
