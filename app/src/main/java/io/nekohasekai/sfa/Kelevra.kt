@@ -8,7 +8,7 @@ package io.nekohasekai.sfa
  * остальное достраиваем сами.
  */
 object Kelevra {
-    const val SUBSCRIPTION_HOST = "subkv.chickenkiller.com"
+    const val SUBSCRIPTION_HOST = SubscriptionLink.DEFAULT_HOST
 
     private const val CONFIG_SUFFIX = "/singbox"
 
@@ -19,8 +19,24 @@ object Kelevra {
      */
     val deviceId: String by lazy {
         val prefs = Application.application.getSharedPreferences("kelevra", android.content.Context.MODE_PRIVATE)
-        prefs.getString("device_id", null) ?: java.util.UUID.randomUUID().toString().also {
+        // Уже сохранённый id остаётся: иначе обновление размножит устройства. Новая установка берёт
+        // id от ANDROID_ID, который переживает переустановку приложения.
+        prefs.getString("device_id", null) ?: novyjDeviceId().also {
             prefs.edit().putString("device_id", it).apply()
+        }
+    }
+
+    private fun novyjDeviceId(): String {
+        val android = runCatching {
+            android.provider.Settings.Secure.getString(
+                Application.application.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID,
+            )
+        }.getOrNull()
+        return if (android.isNullOrBlank()) {
+            java.util.UUID.randomUUID().toString()
+        } else {
+            Priglashenie.idIzAndroidId(android)
         }
     }
 
@@ -134,14 +150,33 @@ object Kelevra {
      * Нужен, потому что профили, заведённые до своего сборщика, ведут на панель:
      * такой конфиг приезжает без комнаты, а сводка /info по нему не читается вовсе.
      */
-    fun subscriptionCode(url: String): String? {
-        val cleaned = url.trim().trimEnd('/')
-        if (!cleaned.contains(SUBSCRIPTION_HOST)) return null
-        val parts = cleaned.substringAfter(SUBSCRIPTION_HOST).split('/').filter { it.isNotBlank() }
-        // /k/<код> и /s/<код> — свои формы, у остальных код идёт первым сегментом
-        val code = if (parts.firstOrNull() in setOf("k", "s")) parts.getOrNull(1) else parts.firstOrNull()
-        return code?.takeIf { it.isNotBlank() && it != CONFIG_SUFFIX.trim('/') }
-    }
+    fun subscriptionCode(url: String): String? = SubscriptionLink.parse(url)?.code
+
+    /** Наш ли адрес: тогда к запросу добавляются заголовки устройства. */
+    fun fromDeepLink(link: String): String? = SubscriptionLink.fromDeepLink(link)
+
+    fun isOwnUrl(url: String): Boolean = SubscriptionLink.isOwn(url)
+
+    /** Ключ устройства выбранного профиля (профиль на /u/<ключ>); у профиля по общему коду его нет. */
+    suspend fun currentDeviceKey(): String? = runCatching {
+        val id = io.nekohasekai.sfa.database.Settings.selectedProfile
+        if (id == -1L) return@runCatching null
+        val profile = io.nekohasekai.sfa.database.ProfileManager.get(id) ?: return@runCatching null
+        SubscriptionLink.parse(profile.typed.remoteURL)?.takeIf { it.kind == 'u' }?.code
+    }.getOrNull()
+
+    /** Хост сервера из ссылки профиля (у каждого профиля свой); не наша ссылка — subkv. */
+    fun subscriptionHost(url: String): String = SubscriptionLink.hostOf(url)
+
+    /**
+     * Хост сервера выбранного профиля. Профиля нет (жалоба до подключения) — subkv.
+     */
+    suspend fun currentHost(): String = runCatching {
+        val id = io.nekohasekai.sfa.database.Settings.selectedProfile
+        if (id == -1L) return@runCatching SUBSCRIPTION_HOST
+        val profile = io.nekohasekai.sfa.database.ProfileManager.get(id) ?: return@runCatching SUBSCRIPTION_HOST
+        SubscriptionLink.hostOf(profile.typed.remoteURL)
+    }.getOrDefault(SUBSCRIPTION_HOST)
 
     /**
      * Куда на самом деле уходит запрос к своему серверу. В выпускной сборке — ровно [url].
@@ -157,11 +192,11 @@ object Kelevra {
             java.io.File(Application.application.filesDir, "debug-server-url.txt").readText().trim().trimEnd('/')
         }.getOrNull()
         if (podmena.isNullOrEmpty()) return url
-        return url.replace("https://$SUBSCRIPTION_HOST", podmena)
+        return SubscriptionLink.withBase(url, podmena)
     }
 
     /** Адрес конфига у своего сборщика. */
-    fun configUrl(code: String): String = "https://$SUBSCRIPTION_HOST/k/$code"
+    fun configUrl(code: String, host: String = SUBSCRIPTION_HOST): String = SubscriptionLink.configUrl(code, host)
 
     /**
      * Маскирует код доступа в произвольном тексте: адрес вида
@@ -170,12 +205,7 @@ object Kelevra {
      * исключения код должен попадать не целиком — домен и длина остаются,
      * чтобы диагностика не потерялась.
      */
-    fun maskCode(text: String): String =
-        Regex("(?i)${Regex.escape(SUBSCRIPTION_HOST)}/(?:k/|s/)?([A-Za-z0-9_-]+)").replace(text) { m ->
-            val code = m.groupValues[1]
-            val tail = if (code.length > 2) code.takeLast(2) else code
-            "$SUBSCRIPTION_HOST/***$tail (${code.length} симв.)"
-        }
+    fun maskCode(text: String): String = SubscriptionLink.maskCode(text)
 
     /**
      * Копия исключения с замаскированным сообщением, но с тем же местом падения:
@@ -199,14 +229,5 @@ object Kelevra {
      * «legacy DNS fakeip options are deprecated ... removed in sing-box 1.14.0»,
      * профиль не создавался.
      */
-    fun normalizeSubscription(input: String): String {
-        val raw = input.trim()
-        if (raw.isEmpty()) return raw
-        // короткий код -> свой сборщик конфигов
-        if (!raw.contains("://")) {
-            return configUrl(raw.trim('/'))
-        }
-        val cleaned = raw.trimEnd('/')
-        return subscriptionCode(cleaned)?.let(::configUrl) ?: cleaned
-    }
+    fun normalizeSubscription(input: String): String = SubscriptionLink.normalize(input)
 }

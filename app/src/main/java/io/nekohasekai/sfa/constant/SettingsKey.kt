@@ -114,6 +114,7 @@ object SettingsKey {
 
     /** Когда логи ушли в последний раз успешно (миллисекунды). 0 — ни разу. */
     const val LOG_UPLOAD_LAST_OK = "log_upload_last_ok"
+    const val UPDATE_NOTIFIED_AT = "update_notified_at"
 
     /** Что уже отправлено: размеры, отметки времени и смещения по каждому файлу (JSON). */
     const val LOG_UPLOAD_MARKS = "log_upload_marks"

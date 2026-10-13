@@ -84,6 +84,43 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
             NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID)
         }
 
+        /**
+         * Уведомление «Доступно обновление» для тех, кто не открывает приложение: звать при находке
+         * новой версии. Не чаще раза в сутки; уведомления выключены или версия уже стоит: ничего.
+         */
+        fun uvedomitONovoy(context: Context, info: UpdateInfo) {
+            if (info.versionCode <= BuildConfig.VERSION_CODE) return
+            val seychas = System.currentTimeMillis()
+            if (!IshodUstanovki.mozhnoUvedomit(seychas, Settings.updateNotifiedAt)) return
+            if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                manager.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, "Обновления приложения", NotificationManager.IMPORTANCE_DEFAULT),
+                )
+            }
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                NOTIFICATION_ID,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or ServiceNotification.flags,
+            )
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_menu)
+                .setContentTitle("Доступно обновление")
+                .setContentText("Версия ${info.versionName}")
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_REMINDER)
+            runCatching {
+                NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
+                Settings.updateNotifiedAt = seychas
+            }.onFailure { Log.w(TAG, "уведомление об обновлении не показано: ${it.message}") }
+        }
+
         private fun napomnit(context: Context, info: UpdateInfo) {
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
                 Log.i(TAG, "напоминание об обновлении не показано: уведомления выключены")

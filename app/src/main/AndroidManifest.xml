@@ -93,6 +93,19 @@
 
             </intent-filter>
 
+            <!-- Приглашение: kelevra://import?url=<urlencoded https://хост/k/код>. Работает с любым хостом сети. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data
+                    android:host="import"
+                    android:scheme="kelevra" />
+
+            </intent-filter>
+
             <!-- Ссылка подписки открывается сразу в приложении, без выбора браузера.
                  Работает при наличии /.well-known/assetlinks.json на домене. -->
             <intent-filter android:autoVerify="true">

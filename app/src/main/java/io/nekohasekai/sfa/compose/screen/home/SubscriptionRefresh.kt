@@ -236,11 +236,12 @@ object SubscriptionRefresh {
      */
     private suspend fun migrateToOwnBuilder(profile: Profile) {
         val code = Kelevra.subscriptionCode(profile.typed.remoteURL) ?: return
-        val fresh = Kelevra.configUrl(code)
+        val host = Kelevra.subscriptionHost(profile.typed.remoteURL)
+        val fresh = io.nekohasekai.sfa.SubscriptionLink.baseUrl(profile.typed.remoteURL) ?: return
         if (profile.typed.remoteURL.trimEnd('/') == fresh) return
         // Адрес содержит код доступа человека — в лог целиком его не пишем,
         // только домен и длину кода: этого хватает, чтобы понять, что перевод случился.
-        Log.i(TAG, "подписка переведена на свой сборщик: ${Kelevra.SUBSCRIPTION_HOST} (код ${code.length} симв.)")
+        Log.i(TAG, "подписка переведена на свой сборщик: $host (код ${code.length} симв.)")
         profile.typed.remoteURL = fresh
         ProfileManager.update(profile)
     }

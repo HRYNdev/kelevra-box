@@ -510,8 +510,11 @@ jobs:
           path: |
             sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
             kelevra-version.json
+            sing-box-for-android/dveri.json
           if-no-files-found: error
 
+      # dveri.json — справочник серверов для входа по коду (docs/PRIGLASHENIE.md в kelevra-server);
+      # сменился адрес сервера — файл в последнем релизе меняется `gh release upload --clobber`, без сборки.
       # публикуется только пуш тега: ручной запуск — прогон конвейера без релиза
       - name: Публикация релиза
         if: startsWith(github.ref, 'refs/tags/')
@@ -520,5 +523,6 @@ jobs:
           files: |
             sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
             kelevra-version.json
+            sing-box-for-android/dveri.json
           prerelease: false
           generate_release_notes: true
