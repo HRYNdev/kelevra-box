@@ -284,6 +284,33 @@ class MainActivity :
             }
             return
         }
+        // Приглашение с кодом: kelevra://import?kod=K7QM-2XRT-9PLA. Код подставляется в поле ввода.
+        if (uri.scheme == "kelevra" && uri.host == "import") {
+            val kod = io.nekohasekai.sfa.Priglashenie.kodIzSsylki(uri.toString())
+            if (kod != null) {
+                io.nekohasekai.sfa.Aktivatsiya.ozhidayushchijKod = kod
+                pendingNavigationRoute.value = "connect"
+                return
+            }
+        }
+        // Глубокая ссылка со страницы-приглашения: kelevra://import?url=<https://хост/k/код>.
+        // Тот же диалог добавления подписки, что и у тапа по ссылке subkv.
+        if (uri.scheme == "kelevra" && uri.host == "import") {
+            val url = Kelevra.fromDeepLink(uri.toString())
+            if (url == null) {
+                pendingIntentErrorMessage = "Ссылка приглашения не читается"
+                return
+            }
+            try {
+                val link = Libbox.generateRemoteProfileImportLink("Kelevra", url)
+                val profile = Libbox.parseRemoteProfileImportLink(link)
+                pendingImportProfile = Triple(profile.name, profile.host, profile.url)
+                showImportProfileDialog = true
+            } catch (e: Exception) {
+                pendingIntentErrorMessage = e.message ?: "Ссылка приглашения не читается"
+            }
+            return
+        }
         if (uri.scheme == "sing-box" && uri.host == "import-remote-profile") {
             try {
                 val profile = Libbox.parseRemoteProfileImportLink(uri.toString())

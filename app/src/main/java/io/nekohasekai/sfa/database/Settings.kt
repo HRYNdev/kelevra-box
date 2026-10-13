@@ -207,6 +207,9 @@ object Settings {
     // Суточная отправка журнала разработчику. Выключателя нет: сеть доверенная,
     // и журнал с телефона — единственное, чем разбираются жалобы вроде «само включается».
     var logUploadLastOk by dataStore.long(SettingsKey.LOG_UPLOAD_LAST_OK) { 0L }
+
+    /** Когда в шторку последний раз выводилось «Доступно обновление»; не чаще раза в сутки. */
+    var updateNotifiedAt by dataStore.long(SettingsKey.UPDATE_NOTIFIED_AT) { 0L }
     var logUploadMarks by dataStore.string(SettingsKey.LOG_UPLOAD_MARKS) { "" }
     var logUploadRetrySince by dataStore.long(SettingsKey.LOG_UPLOAD_RETRY_SINCE) { 0L }
 

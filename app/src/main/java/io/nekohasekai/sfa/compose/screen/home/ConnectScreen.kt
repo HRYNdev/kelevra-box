@@ -44,7 +44,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.libbox.Libbox
+import io.nekohasekai.sfa.Aktivatsiya
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.KodPole
+import io.nekohasekai.sfa.Priglashenie
+import io.nekohasekai.sfa.SubscriptionLink
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.base.GlobalEventBus
 import io.nekohasekai.sfa.compose.base.UiEvent
@@ -81,9 +85,16 @@ fun ConnectScreen(
     val scope = rememberCoroutineScope()
 
     var step by remember { mutableIntStateOf(1) }
-    var input by remember { mutableStateOf("") }
+    // Код из приглашения kelevra://import?kod= подставляется один раз.
+    var input by remember {
+        mutableStateOf(
+            Aktivatsiya.ozhidayushchijKod?.also { Aktivatsiya.ozhidayushchijKod = null }
+                ?.let { KodPole.syroe(it) } ?: "",
+        )
+    }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var limit by remember { mutableStateOf<String?>(null) }
 
     fun connect() {
         if (input.isBlank() || busy) return
@@ -97,6 +108,10 @@ fun ConnectScreen(
             result.fold(
                 onSuccess = { step = 2 },
                 onFailure = {
+                    if (it is LimitUstroystv) {
+                        limit = it.tekst
+                        return@fold
+                    }
                     // Адрес, который запрашивали, содержит код доступа целиком —
                     // в лог он маскированным идёт, не как есть.
                     android.util.Log.w("KelevraConnect", "подключение по коду не удалось", Kelevra.maskThrowable(it))
@@ -117,12 +132,21 @@ fun ConnectScreen(
         StepDots(step)
 
         when (step) {
-            1 -> StepCode(
+            1 -> if (limit != null) {
+                StepLimit(
+                    tekst = limit.orEmpty(),
+                    onAnother = { limit = null; input = ""; error = null },
+                    onBack = onBack,
+                )
+            } else StepCode(
                 input = input,
                 busy = busy,
                 error = error,
-                onInput = { input = it; error = null },
-                onPaste = { input = clipboardText(context) ?: input },
+                onInput = {
+                    input = KodPole.syroe(it)
+                    error = null
+                },
+                onPaste = { input = clipboardText(context)?.let { KodPole.vstavka(it) } ?: input },
                 onNext = { connect() },
                 onBack = onBack,
             )
@@ -177,15 +201,17 @@ private fun StepHeader(icon: ImageVector, title: String, text: String) {
         color = colors.Text,
         textAlign = TextAlign.Center,
     )
-    Spacer(Modifier.height(10.dp))
-    Text(
-        text = text,
-        fontFamily = Montserrat,
-        fontSize = 14.sp,
-        color = colors.Dim,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth(),
-    )
+    if (text.isNotEmpty()) {
+        Spacer(Modifier.height(10.dp))
+        Text(
+            text = text,
+            fontFamily = Montserrat,
+            fontSize = 14.sp,
+            color = colors.Dim,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -201,8 +227,8 @@ private fun ColumnScope.StepCode(
     val colors = K
     StepHeader(
         icon = Icons.Outlined.Lock,
-        title = "Введите код",
-        text = "Код вводится один раз. Дальнейшая настройка произойдёт автоматически.",
+        title = "Вход по коду",
+        text = "",
     )
 
     Spacer(Modifier.height(26.dp))
@@ -220,7 +246,7 @@ private fun ColumnScope.StepCode(
     ) {
         if (input.isEmpty()) {
             Text(
-                text = "код доступа",
+                text = "Код доступа",
                 fontFamily = RobotoMono,
                 fontSize = 15.sp,
                 color = colors.Dim2,
@@ -231,6 +257,7 @@ private fun ColumnScope.StepCode(
             onValueChange = onInput,
             singleLine = true,
             enabled = !busy,
+            visualTransformation = KodPole.transformation,
             cursorBrush = SolidColor(colors.Accent),
             textStyle = TextStyle(
                 fontFamily = RobotoMono,
@@ -239,7 +266,10 @@ private fun ColumnScope.StepCode(
                 color = colors.Text,
                 textAlign = TextAlign.Center,
             ),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+            keyboardOptions = KeyboardOptions(
+                capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Characters,
+                imeAction = ImeAction.Go,
+            ),
             keyboardActions = KeyboardActions(onGo = { onNext() }),
             modifier = Modifier.fillMaxWidth(),
         )
@@ -274,6 +304,21 @@ private fun ColumnScope.StepCode(
     } else {
         KButton(text = "Продолжить", onClick = onNext, enabled = input.isNotBlank())
     }
+    Spacer(Modifier.height(8.dp))
+    KButton(text = "Назад", onClick = onBack, ghost = true)
+    Spacer(Modifier.height(20.dp))
+}
+
+/** Экран отказа: у кода заведено столько устройств, сколько разрешено. */
+@Composable
+private fun ColumnScope.StepLimit(tekst: String, onAnother: () -> Unit, onBack: () -> Unit) {
+    StepHeader(
+        icon = Icons.Outlined.Lock,
+        title = tekst,
+        text = "",
+    )
+    Spacer(Modifier.weight(1f))
+    KButton(text = "Ввести другой код", onClick = onAnother)
     Spacer(Modifier.height(8.dp))
     KButton(text = "Назад", onClick = onBack, ghost = true)
     Spacer(Modifier.height(20.dp))
@@ -378,29 +423,70 @@ private fun humanError(e: Throwable, context: Context): String {
     val text = (e.message ?: "").lowercase()
     // Сначала спрашиваем систему, а не исключение. Конфиг качает ядро (libbox), и наружу
     // оно отдаёт свою ошибку от Go: ни UnknownHostException, ни знакомых слов в тексте там
-    // нет. Проверено в эмуляторе 07.08.2026 с выключенными вайфаем и мобильной сетью —
-    // человек видел «Проверьте код», хотя код был верный, а интернета не было вовсе.
-    if (!hasNetwork(context)) return "Нет связи. Проверьте интернет и повторите."
+    // нет. Проверено в эмуляторе 07.08.2026 с выключенными вайфаем и мобильной сетью:
+    // код был верный, а интернета не было вовсе.
+    if (!hasNetwork(context)) return "Нет связи с интернетом"
+    if (e is KodNeNajden) return "Код не найден"
     val net = generateSequence(e) { it.cause }.any {
         it is java.net.UnknownHostException ||
             it is java.net.ConnectException ||
             it is java.net.SocketTimeoutException ||
             it is java.net.NoRouteToHostException
     }
-    if (net) return "Нет связи. Проверьте интернет и повторите."
+    if (net) return "Нет связи с интернетом"
     return when {
+        e is java.io.IOException && e !is java.net.ProtocolException -> "Нет связи с сервером"
         "unable to resolve host" in text || "failed to connect" in text || "timeout" in text ->
-            "Нет связи с сервером. Проверьте подключение и повторите."
-        "404" in text || "not found" in text -> "Код не найден. Проверьте правильность ввода."
-        else -> "Не удалось подключиться. Проверьте код и подключение."
+            "Нет связи с сервером"
+        "404" in text || "not found" in text -> "Код не найден"
+        else -> "Подключение не выполнено"
     }
 }
 
-/** Скачивает настройки по коду и делает подключение активным. */
-private suspend fun importByCode(code: String) {
-    val url = Kelevra.normalizeSubscription(code)
+class LimitUstroystv(val tekst: String) : Exception(tekst)
+
+class KodNeNajden : Exception("код не найден")
+
+/**
+ * Вход по коду: ищет дверь, активирует устройство и делает профиль активным. Ссылка и QR идут
+ * прежним путём. Повторный ввод обновляет уже существующий профиль, а не заводит второй.
+ */
+private suspend fun importByCode(vvod: String) {
+    val varianty = Priglashenie.varianty(vvod)
+    if (varianty.isEmpty()) {
+        zagruzitProfil(Kelevra.normalizeSubscription(vvod), emptyList())
+        return
+    }
+    val (itog, kod) = Aktivatsiya.voyti(vvod)
+    when (itog) {
+        is Priglashenie.Itog.Novyj ->
+            zagruzitProfil(SubscriptionLink.baseUrl(itog.profil) ?: itog.profil, varianty)
+        is Priglashenie.Itog.Staryj ->
+            zagruzitProfil(SubscriptionLink.configUrl(kod, itog.dver), varianty)
+        is Priglashenie.Itog.Limit -> throw LimitUstroystv(itog.tekst)
+        Priglashenie.Itog.NeNajden -> throw KodNeNajden()
+        Priglashenie.Itog.NetSvyazi -> throw java.io.IOException("двери не ответили")
+    }
+}
+
+/** Скачивает настройки по адресу профиля; профиль этого кода уже есть: обновляется он. */
+private suspend fun zagruzitProfil(url: String, vvedennyeKody: List<String>) {
     val content = HTTPClient().use { it.getString(Kelevra.adresSeti(url)) }
     Libbox.checkConfig(content)
+
+    val imeyushijsya = ProfileManager.list().firstOrNull {
+        it.typed.type == TypedProfile.Type.Remote && Priglashenie.totZhe(url, it.typed.remoteURL, vvedennyeKody)
+    }
+    if (imeyushijsya != null && imeyushijsya.typed.path.isNotBlank()) {
+        File(imeyushijsya.typed.path).apply { parentFile?.mkdirs() }.writeText(content)
+        imeyushijsya.typed.remoteURL = url
+        imeyushijsya.typed.lastUpdated = Date()
+        ProfileManager.update(imeyushijsya)
+        io.nekohasekai.sfa.database.Settings.selectedProfile = imeyushijsya.id
+        io.nekohasekai.sfa.bg.UpdateProfileWork.reconfigureUpdater()
+        perezagruzitServis()
+        return
+    }
 
     val typed =
         TypedProfile().apply {
@@ -420,4 +506,18 @@ private suspend fun importByCode(code: String) {
 
     ProfileManager.create(profile, andSelect = true)
     io.nekohasekai.sfa.bg.UpdateProfileWork.reconfigureUpdater()
+    perezagruzitServis()
+}
+
+/**
+ * Повторная активация выдаёт новый ключ устройства, старый умирает: запущенное ядро надо
+ * пересобрать с новым профилем (как после UpdateProfileWork). Не запущено — команда молча не уйдёт.
+ */
+private suspend fun perezagruzitServis() {
+    withContext(Dispatchers.IO) {
+        runCatching {
+            io.nekohasekai.sfa.bg.BoxService.markReloadByHuman()
+            Libbox.newStandaloneCommandClient().serviceReload()
+        }
+    }
 }

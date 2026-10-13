@@ -414,7 +414,13 @@ fun HomeScreen(
             containerColor = colors.Surface,
             contentColor = colors.Text,
         ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {
+            // Прокрутка: при 5+ устройствах или выходах низ списка иначе обрезается шторкой.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = KDim.Pad, vertical = 4.dp),
+            ) {
                 Text(
                     text = "Выбор выхода",
                     fontFamily = Montserrat,
@@ -490,7 +496,13 @@ fun HomeScreen(
             containerColor = colors.Surface,
             contentColor = colors.Text,
         ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = KDim.Pad, vertical = 4.dp)) {
+            // Прокрутка: при 5+ устройствах или выходах низ списка иначе обрезается шторкой.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = KDim.Pad, vertical = 4.dp),
+            ) {
                 Text(
                     text = "Подписка",
                     fontFamily = Montserrat,
