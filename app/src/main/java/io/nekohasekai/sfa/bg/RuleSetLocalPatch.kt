@@ -40,6 +40,9 @@ import org.json.JSONObject
 object RuleSetLocalPatch {
     private const val TAG = "RuleSetPatch"
 
+    /** Потолок повторов старта на битых наборах: больше наборов, чем есть, не выкинуть. */
+    const val MAX_SETS = 64
+
     /** Удалённый набор, каким его прислал сервер: по этому списку работает докачка. */
     data class Remote(val tag: String, val url: String, val format: String)
 
