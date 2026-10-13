@@ -5,9 +5,11 @@ import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.utils.HTTPClient
 import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 
 /**
  * Свой кэш наборов правил.
@@ -60,14 +62,58 @@ object RuleSetCache {
     private val dir: File
         get() = File(Application.application.filesDir, "rule-sets").also { it.mkdirs() }
 
-    /** Тег набора → файл в кэше. Только то, что реально лежит на диске и непусто. */
+    /**
+     * Тег набора → файл в кэше. Только то, что реально лежит на диске, непусто и
+     * начинается как набор.
+     *
+     * Одной длины мало: 13.10.2026 один из телефонов жёстко перезагрузился, пока набор
+     * докачивался, и файл остался непустым, но испорченным. Ядро падало на нём при каждом
+     * старте, а докачка его не трогала — по времени он считался свежим ещё сутки.
+     * Непохожий на набор файл выкидываем: тогда набор уходит в ядро удалённым, как
+     * прислал сервер, а докачка заберёт его заново.
+     */
     fun cached(): Map<String, File> = runCatching {
         dir.listFiles().orEmpty()
             .filter { it.isFile && it.length() > 0 && it.name.endsWith(SUFFIX) }
+            .filter { file ->
+                looksLikeAnyRuleSet(file).also { ok ->
+                    if (!ok) {
+                        file.delete()
+                        Log.w(TAG, "набор «${file.name.removeSuffix(SUFFIX)}» в кэше испорчен (${file.length()} б) — выкинул")
+                    }
+                }
+            }
             .associateBy { it.name.removeSuffix(SUFFIX) }
     }.getOrElse {
         Log.w(TAG, "кэш наборов не прочитался: ${it.message}")
         emptyMap()
+    }
+
+    /** Ядро называет набор, на котором споткнулось, только номером в конфиге. */
+    private val BROKEN_SET = Regex("""parse rule-set\[(\d+)]""")
+
+    /**
+     * Тег набора, на котором ядро упало при старте, — если это наш файл из кэша.
+     *
+     * Заголовок проверяет не всё: файл может начинаться верно и быть обрезан дальше.
+     * Тогда судит ядро — по номеру из его ошибки находим набор в том самом конфиге,
+     * который ему отдали. Чужие наборы (удалённые, не из кэша) не наши: `null`.
+     */
+    fun brokenCachedTag(config: String, error: String?): String? {
+        val index = error?.let { BROKEN_SET.find(it) }?.groupValues?.get(1)?.toIntOrNull() ?: return null
+        return runCatching {
+            val set = JSONObject(config).optJSONObject("route")?.optJSONArray("rule_set")?.optJSONObject(index)
+                ?: return null
+            if (set.optString("type") != "local") return null
+            if (File(set.optString("path")).parentFile?.absolutePath != dir.absolutePath) return null
+            set.optString("tag").ifBlank { null }
+        }.getOrNull()
+    }
+
+    /** Выкинуть набор из кэша. `true` — файла больше нет. */
+    fun drop(tag: String): Boolean {
+        val file = File(dir, tag + SUFFIX)
+        return !file.exists() || file.delete()
     }
 
     /** Итог наложенной правки — отсюда берётся строка для человека. */
@@ -146,6 +192,10 @@ object RuleSetCache {
                 Log.w(TAG, "набор «${remote.tag}» скачался непохожим на набор (${tmp.length()} б) — не берём")
                 return false
             }
+            // Сначала содержимое на диск, потом имя. Без этого переименование могло дойти
+            // до флеша раньше данных, и жёсткая перезагрузка оставляла под именем набора
+            // мусор (13.10.2026).
+            FileOutputStream(tmp, true).use { it.fd.sync() }
             // БЕЗ target.delete() перед переименованием: rename на одной файловой
             // системе атомарен и старый файл заменяет сам, а delete открывал окно, в
             // котором набора нет вовсе — под работающим ядром, которое следит за папкой.
@@ -161,6 +211,10 @@ object RuleSetCache {
             false
         }
     }
+
+    /** Формат файла в кэше не записан: годится любой из двух видов набора. */
+    private fun looksLikeAnyRuleSet(file: File): Boolean =
+        looksLikeRuleSet(file, "binary") || looksLikeRuleSet(file, "source")
 
     private fun looksLikeRuleSet(file: File, format: String): Boolean {
         if (!file.isFile || file.length() < 4) return false

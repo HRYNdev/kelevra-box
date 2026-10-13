@@ -315,13 +315,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
 
             try {
-                commandServer.startOrReloadService(
-                    effectiveConfig(content),
-                    OverrideOptions().apply {
-                        autoRedirect = Settings.autoRedirect
-                        applyPerAppProxy(content)
-                    },
-                )
+                startCore(content)
             } catch (e: Exception) {
                 stopAndAlert(Alert.CreateService, e.message)
                 return
@@ -379,6 +373,37 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * Для sing-box это безопасно: его исходящие и так идут через protected-сокеты
      * (`autoDetectInterfaceControl`), а не через таблицу маршрутов tun.
      */
+    /**
+     * Старт или пересборка ядра — единственная дверь для всех трёх путей.
+     *
+     * Битый набор в своём кэше не должен запирать ядро: 13.10.2026 на одном из телефонов файл набора
+     * испортился при жёсткой перезагрузке, и ядро падало на нём при каждом старте, пока
+     * набор не протух — сутки. Ядро называет такой набор номером ([RuleSetCache.brokenCachedTag]);
+     * выкидываем файл и стартуем снова — набор уйдёт удалённым, ядро дотянет его само.
+     * Больше одного захода на набор не бывает: выкинутого файла в кэше уже нет.
+     */
+    private fun startCore(content: String) {
+        var dropped = 0
+        while (true) {
+            val config = effectiveConfig(content)
+            try {
+                commandServer.startOrReloadService(
+                    config,
+                    OverrideOptions().apply {
+                        autoRedirect = Settings.autoRedirect
+                        applyPerAppProxy(content)
+                    },
+                )
+                return
+            } catch (e: Exception) {
+                val tag = RuleSetCache.brokenCachedTag(config, e.message)
+                if (tag == null || dropped >= RuleSetLocalPatch.MAX_SETS || !RuleSetCache.drop(tag)) throw e
+                dropped++
+                Log.w(TAG, "ядро споткнулось о набор «$tag» из кэша — выкинул его, стартую заново")
+            }
+        }
+    }
+
     private fun OverrideOptions.applyPerAppProxy(content: String) {
         val self = Application.application.packageName
 
@@ -876,13 +901,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             Log.i(TAG, "пересборка ядра: прежний tun отпущен (закрыт: $closed)")
         }
         fileDescriptor = null
-        commandServer.startOrReloadService(
-            effectiveConfig(content),
-            OverrideOptions().apply {
-                autoRedirect = Settings.autoRedirect
-                applyPerAppProxy(content)
-            },
-        )
+        startCore(content)
         // Файл прочитан заново — отложенному перечитыванию применять больше нечего.
         if (profileReloadPending) {
             profileReloadPending = false
@@ -1252,13 +1271,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
         if (deferred) return
         try {
-            commandServer.startOrReloadService(
-                effectiveConfig(content),
-                OverrideOptions().apply {
-                    autoRedirect = Settings.autoRedirect
-                    applyPerAppProxy(content)
-                },
-            )
+            startCore(content)
         } catch (e: Exception) {
             stopAndAlert(Alert.CreateService, e.message)
             return
