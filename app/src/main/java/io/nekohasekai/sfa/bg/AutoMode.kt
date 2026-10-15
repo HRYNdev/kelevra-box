@@ -1158,7 +1158,8 @@ object AutoMode {
         // делают чаще всего до включения сети: тогда layout.room пуст, сравнивать не с чем,
         // и выбранная комната записывалась как обычный выход. Ниже, в round(), выбор ещё
         // раз уточняется по раскладке, когда она появится.
-        val room = layout.room?.let { tag == it } ?: looksLikeRoom(tag)
+        // Выход WB Chat комнатой для автомата не считается, хоть и зовётся «Комната WB».
+        val room = if (WbChatParams.isWbExit(tag)) false else layout.room?.let { tag == it } ?: looksLikeRoom(tag)
         Settings.autoModeManualRoom = room
         // Человек выбрал комнату — значит аварийный выключатель, если он был нажат,
         // он снимает этим же действием. Без этого выбор комнаты молча давал обычный

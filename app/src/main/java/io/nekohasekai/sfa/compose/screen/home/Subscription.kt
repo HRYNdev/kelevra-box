@@ -26,6 +26,8 @@ data class SubscriptionInfo(
     val bypassPackages: List<String> = emptyList(),
     /** параметры комнаты olcRTC, если сеть их раздаёт; токен внутри — только владельцу кода */
     val olcrtc: JSONObject? = null,
+    /** второй носитель комнаты — WB Chat, отдельный выход; блока нет = WB Chat этому устройству не включён */
+    val wbchat: JSONObject? = null,
     /** ответ на жалобу, отправленную с этого устройства; null — отвечать нечего */
     val reply: ComplaintReply? = null,
     /**
@@ -204,6 +206,7 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             devices = parseDevices(json),
             // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
             olcrtc = json.optJSONObject("olcrtc"),
+            wbchat = json.optJSONObject("wbchat"),
             sendLogNow = json.optBoolean("send_log_now"),
             vid = json.opt("vid"),
             reply = json.optJSONObject("reply")?.let { answer ->
