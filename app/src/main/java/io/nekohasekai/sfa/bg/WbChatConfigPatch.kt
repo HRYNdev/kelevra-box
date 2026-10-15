@@ -36,7 +36,10 @@ object WbChatConfigPatch {
      * ядро sing-box пересобирается, рвёт всё, что шло через tun, и звонок WB Chat падает
      * (realtime reset через 10 с после выбора). Вне tun пересборка его не касается.
      */
-    val TUN_EXCLUDE = listOf("176.101.92.0/23", "185.62.202.0/24", "2a03:720::/32")
+    val TUN_EXCLUDE = listOf("176.101.92.0/23", "185.62.202.0/24", "2a03:720::/32", "77.88.8.8/32")
+
+    /** Резолвер ядра WB Chat (OPENFLUX_DNS): Яндекс DNS, мимо tun — в [TUN_EXCLUDE]. */
+    const val DNS = "77.88.8.8:53"
 
     /** Правила-действия, которые обязаны идти раньше маршрутных: распознавание и перехват DNS. */
     private val LEADING_ACTIONS = setOf("sniff", "hijack-dns", "resolve")

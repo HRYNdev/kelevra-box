@@ -151,6 +151,11 @@ object WbChatCore {
 
         val builder = ProcessBuilder(args).directory(dir).redirectErrorStream(true)
         if (params.bond > 0) builder.environment()["WBCHAT_BOND"] = params.bond.toString()
+        // Ядро само резолвит имя цели и шлёт выходу только IPv4. Системный DNS телефона
+        // идёт через наш sing-box и отдаёт fakeip 198.18.x — для выхода это пустой адрес,
+        // по имени не открывалось ничего (замер 15.10: спидтест). Свой резолвер мимо tun
+        // ([WbChatConfigPatch.TUN_EXCLUDE]) отдаёт настоящие адреса.
+        builder.environment()["OPENFLUX_DNS"] = WbChatConfigPatch.DNS
 
         val p: Process
         synchronized(lock) {
