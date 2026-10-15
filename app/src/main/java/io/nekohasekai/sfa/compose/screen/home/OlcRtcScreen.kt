@@ -35,6 +35,9 @@ import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.OlcRtcCore
 import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.bg.OlcRtcWatchdog
+import io.nekohasekai.sfa.bg.WbChatCore
+import io.nekohasekai.sfa.bg.WbChatParams
+import io.nekohasekai.sfa.bg.WbChatWatchdog
 import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDim
@@ -80,9 +83,11 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     // её результату поднимает ядро. Два параллельных SOCKS-запроса дали бы лишний трафик
     // через комнату и сбили бы присмотру счёт отказов. Здесь только чтение.
     var status by remember { mutableStateOf(currentStatus()) }
+    var wbStatus by remember { mutableStateOf(wbChatStatus()) }
     LaunchedEffect(enabled) {
         while (true) {
             status = currentStatus()
+            wbStatus = wbChatStatus()
             delay(1_000)
         }
     }
@@ -119,6 +124,12 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 )
                 KDivider()
                 KRowItem(title = stringResource(R.string.room_state), subtitle = status)
+                // Второй носитель — отдельный выход со своим ядром. Строка есть, только
+                // когда сеть его этому устройству раздаёт (или ядро ещё не погасло).
+                wbStatus?.let {
+                    KDivider()
+                    KRowItem(title = "WB Chat", subtitle = it)
+                }
             }
 
             KGroupTitle(stringResource(R.string.room_params))
@@ -209,6 +220,14 @@ private fun currentStatus(): String {
     val watchdog = OlcRtcWatchdog.note.takeIf { it.isNotBlank() }
         ?: if (OlcRtcWatchdog.restarts > 0) "подъёмов за сессию: ${OlcRtcWatchdog.restarts}" else null
     return if (watchdog == null) base else "$base · $watchdog"
+}
+
+/** Строка состояния WB Chat; `null` — сеть этот выход не раздаёт и ядро не работает. */
+private fun wbChatStatus(): String? {
+    if (!WbChatParams.available && WbChatCore.state is WbChatCore.State.Idle) return null
+    val base = WbChatCore.statusText()
+    val restarts = WbChatWatchdog.restarts
+    return if (restarts > 0) "$base · перезапусков: $restarts" else base
 }
 
 private fun sourceText(): String = when (OlcRtcParams.source) {

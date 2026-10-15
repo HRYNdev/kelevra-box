@@ -427,7 +427,7 @@ jobs:
             echo "тега нет, номер сборки из прогона: $GITHUB_RUN_NUMBER"
           fi
 
-      # Носитель комнаты «Телемост»: клиент OpenFlux живёт в APK отдельным исполняемым
+      # Носители комнаты «Телемост» и «WB Chat»: клиент OpenFlux живёт в APK отдельным исполняемым
       # libopenflux.so (в git не лежит). Без этого шага релиз соберётся молча без Телемоста,
       # и сервер, выдав носитель telemost, получит «в этой сборке комнаты нет».
       # Публикуется только arm64 APK — собираем ровно его ABI.
@@ -442,7 +442,15 @@ jobs:
 
       - name: Build OpenFlux
         working-directory: sing-box-for-android
+        env:
+          # Форк с носителем WB Chat приватный: ключ только на чтение к одному репозиторию.
+          OPENFLUX_WBCHAT_DEPLOY_KEY: ${{ secrets.OPENFLUX_WBCHAT_DEPLOY_KEY }}
         run: |
+          test -n "$OPENFLUX_WBCHAT_DEPLOY_KEY" || { echo "нет секрета OPENFLUX_WBCHAT_DEPLOY_KEY"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OPENFLUX_WBCHAT_DEPLOY_KEY" > ~/.ssh/openflux_wbchat && chmod 600 ~/.ssh/openflux_wbchat
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/openflux_wbchat -o IdentitiesOnly=yes"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           ABIS="arm64-v8a" bash core-openflux/sobrat.sh
           test -s app/src/main/jniLibs/arm64-v8a/libopenflux.so
