@@ -1005,11 +1005,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
     /**
      * Присмотр за ядром WB Chat: держит его, пока служба поднята, туннель не погашен и
-     * сервер дал параметры. Без связи с автоматом и с комнатой — см. [WbChatWatchdog].
+     * выход WB выбран руками ([wbInConfig]). Не выбран — ядро погашено: звонок WB с
+     * 16 каналами иначе висел фоном при любом выходе (замер 15.10: «Комната WB · готов»
+     * при выбранных Нидерландах), жёг мобильный трафик и при смене сети сбивал звонок
+     * другого ядра того же аккаунта.
      */
     private fun startWbChat() {
         runCatching {
-            WbChatWatchdog.start(wanted = { !serviceStopping && !tunnelSuspended && WbChatParams.available })
+            WbChatWatchdog.start(wanted = { !serviceStopping && !tunnelSuspended && wbInConfig() })
         }.onFailure { Log.w(TAG, "WB Chat: присмотр не запустился: ${it.message}") }
     }
 
