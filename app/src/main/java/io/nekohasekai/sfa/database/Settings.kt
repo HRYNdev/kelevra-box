@@ -174,6 +174,17 @@ object Settings {
 
     var olcrtcDeviceId by dataStore.string(SettingsKey.OLCRTC_DEVICE_ID) { "" }
 
+    // WB Chat — свой выход со своим ядром (WbChatCore), пишется только из WbChatParams.applyServer.
+    var wbchatAvailable by dataStore.boolean(SettingsKey.WBCHAT_AVAILABLE) { false }
+    var wbchatSocksPort by dataStore.int(SettingsKey.WBCHAT_SOCKS_PORT) { 0 }
+    var wbchatPeer by dataStore.string(SettingsKey.WBCHAT_PEER) { "" }
+    var wbchatToken by dataStore.string(SettingsKey.WBCHAT_TOKEN) { "" }
+    var wbchatCookies by dataStore.string(SettingsKey.WBCHAT_COOKIES) { "" }
+    var wbchatKey by dataStore.string(SettingsKey.WBCHAT_KEY) { "" }
+    var wbchatBond by dataStore.int(SettingsKey.WBCHAT_BOND) { 0 }
+    var wbchatTag by dataStore.string(SettingsKey.WBCHAT_TAG) { "" }
+
+
     // Выход выбирается сам. Человеку это ничего не запрещает: он выбирает выход руками,
     // и тем самым автомат выключается — до тех пор, пока не выберет «Автоматически».
     var autoModeEnabled by dataStore.boolean(SettingsKey.AUTO_MODE_ENABLED) { true }

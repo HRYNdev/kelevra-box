@@ -86,6 +86,17 @@ object SettingsKey {
     const val OLCRTC_SRV_TELEMOST_STRIPES = "olcrtc_srv_telemost_stripes"
     const val OLCRTC_SRV_TELEMOST_STRIPES_MAX = "olcrtc_srv_telemost_stripes_max"
 
+    // Второй носитель комнаты — WB Chat (блок `wbchat` верхнего уровня в /info). Отдельный выход
+    // рядом с Телемостом, не вместо него. Нет блока — всё стирается.
+    const val WBCHAT_AVAILABLE = "wbchat_available"
+    const val WBCHAT_SOCKS_PORT = "wbchat_socks_port"
+    const val WBCHAT_PEER = "wbchat_peer"
+    const val WBCHAT_TOKEN = "wbchat_token"
+    const val WBCHAT_COOKIES = "wbchat_cookies"
+    const val WBCHAT_KEY = "wbchat_key"
+    const val WBCHAT_BOND = "wbchat_bond"
+    const val WBCHAT_TAG = "wbchat_tag"
+
     /** Своё имя устройства в комнате: сервер его не раздаёт, а совпадать они не должны. */
     const val OLCRTC_DEVICE_ID = "olcrtc_device_id"
 

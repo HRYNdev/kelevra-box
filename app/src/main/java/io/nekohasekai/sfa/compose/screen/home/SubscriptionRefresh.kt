@@ -137,6 +137,8 @@ object SubscriptionRefresh {
             // Сеть не ответила — старые параметры комнаты остаются; ответила без блока
             // olcrtc — стираем, чтобы не держать протухшую комнату.
             OlcRtcParams.applyServer(loaded.olcrtc)
+            // WB Chat — свой блок верхнего уровня, по тому же правилу: нет блока — стёрто.
+            io.nekohasekai.sfa.bg.WbChatParams.applyServer(loaded.wbchat)
             // Внешний вид: ответ пришёл без блока — снят, с блоком — применяем и помним.
             io.nekohasekai.sfa.compose.theme.Vid.izSvodki(loaded.vid)
             _info.value = loaded
