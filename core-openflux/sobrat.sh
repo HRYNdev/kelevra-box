@@ -3,7 +3,7 @@
 #
 # Собирается из нашего форка HRYNdev/openflux-wbchat (приватный): это v0.5.1 + провайдер wbchat,
 # Телемост в нём не тронут, поэтому с выходом v0.5.1 на 211 он совместим. Только по фиксированной
-# точке: тег wbchat-4, коммит ниже сверяется после клона. GPL-3.0 (как и sing-box), апстрим —
+# точке: тег wbchat-5, коммит ниже сверяется после клона. GPL-3.0 (как и sing-box), апстрим —
 # https://github.com/p1neappleXpress/OpenFlux/tree/v0.5.1.
 # Доступ: в CI — ключ только на чтение (секрет OPENFLUX_WBCHAT_DEPLOY_KEY, ssh); локально —
 # OPENFLUX_REPO=https://github.com/HRYNdev/openflux-wbchat.git (учётка gh) или путь к клону.
@@ -18,8 +18,8 @@
 set -euo pipefail
 
 REPO=${OPENFLUX_REPO:-git@github.com:HRYNdev/openflux-wbchat.git}
-TAG=wbchat-4
-COMMIT=41a731fba67afd2a268d51246e20a69cd7bf8b55
+TAG=wbchat-5
+COMMIT=b8c7b588d29315cddcaa3154f42e6f72d04c204c
 ABIS=${ABIS:-"arm64-v8a x86_64 armeabi-v7a"}
 GO=${GO:-go}
 NDK=${ANDROID_NDK_HOME:?ANDROID_NDK_HOME не задан}
