@@ -8,6 +8,7 @@ import io.nekohasekai.sfa.bg.AutoModeExits
 import io.nekohasekai.sfa.bg.AutoModeSticky
 import io.nekohasekai.sfa.bg.BoxService
 import io.nekohasekai.sfa.bg.OlcRtcParams
+import io.nekohasekai.sfa.bg.WbChatParams
 import io.nekohasekai.sfa.compose.base.BaseViewModel
 import io.nekohasekai.sfa.compose.base.UiEvent
 import io.nekohasekai.sfa.compose.model.toList
@@ -275,11 +276,17 @@ class DashboardViewModel :
      */
     private fun exitsFromConfig(): ConfigExits = runCatching {
         val profile = runBlocking { ProfileManager.get(Settings.selectedProfile) } ?: return@runCatching ConfigExits()
-        val layout = AutoModeExits.parse(File(profile.typed.path).readText(), OlcRtcParams.socksPort)
+        val content = File(profile.typed.path).readText()
+        val layout = AutoModeExits.parse(content, OlcRtcParams.socksPort)
         val roomChosen = Settings.autoModeManualRoom
+        // Выход WB Chat — отдельный socks-выход селектора; раскладка автомата его не знает.
+        // Без него запасной список (до первых групп от ядра) показывал только два выхода,
+        // и «Комната WB» пропадала из выбора на первые секунды после включения (16.10).
+        val wbTag = Settings.wbchatTag.takeIf { WbChatParams.available && it.isNotBlank() && "\"$it\"" in content }
         val rows = listOfNotNull(
             layout.main?.let { Triple(it, 0, !roomChosen) },
             layout.room?.let { Triple(it, 0, roomChosen) },
+            wbTag?.let { Triple(it, 0, Settings.manualExitName == it) },
         )
         ConfigExits(rows = rows, chooser = layout.chooser)
     }.getOrElse { ConfigExits() }
