@@ -30,6 +30,14 @@ object WbChatConfigPatch {
     /** TURN WB Chat (176.101.92.167:3478) и его соседи. */
     val SUBNETS = listOf("176.101.92.0/23")
 
+    /**
+     * Мимо tun целиком (route_exclude_address, Android 13+): TURN и сигналинг WB (chat.wb.ru —
+     * 185.62.202.0/24 и 2a03:720::/32, AS57073). Замер 15.10 на телефоне владельца: при выборе выхода
+     * ядро sing-box пересобирается, рвёт всё, что шло через tun, и звонок WB Chat падает
+     * (realtime reset через 10 с после выбора). Вне tun пересборка его не касается.
+     */
+    val TUN_EXCLUDE = listOf("176.101.92.0/23", "185.62.202.0/24", "2a03:720::/32")
+
     /** Правила-действия, которые обязаны идти раньше маршрутных: распознавание и перехват DNS. */
     private val LEADING_ACTIONS = setOf("sniff", "hijack-dns", "resolve")
 
@@ -70,7 +78,23 @@ object WbChatConfigPatch {
         }
         if (insertAt >= rules.length()) patched.put(rule)
         route.put("rules", patched)
-        return Result(root.toString(), "свой трафик ядра WB Chat (wb.ru, TURN) — в «$direct», правило на позиции $insertAt", true)
+        val excluded = excludeFromTun(root)
+        return Result(root.toString(), "свой трафик ядра WB Chat (wb.ru, TURN) — в «$direct», правило на позиции $insertAt; мимо tun: $excluded", true)
+    }
+
+    /** Добавляет [TUN_EXCLUDE] в route_exclude_address каждого tun-входа; возвращает, сколько tun правлено. */
+    private fun excludeFromTun(root: JSONObject): Int {
+        val inbounds = root.optJSONArray("inbounds") ?: return 0
+        var n = 0
+        for (i in 0 until inbounds.length()) {
+            val tun = inbounds.optJSONObject(i)?.takeIf { it.optString("type") == "tun" } ?: continue
+            val list = tun.optJSONArray("route_exclude_address") ?: JSONArray()
+            val have = (0 until list.length()).map { list.optString(it) }.toSet()
+            TUN_EXCLUDE.filter { it !in have }.forEach { list.put(it) }
+            tun.put("route_exclude_address", list)
+            n++
+        }
+        return n
     }
 
     /**

@@ -64,6 +64,18 @@ class WbChatPatchTest {
     }
 
     @Test
+    fun wbRangesLeaveTheTun() {
+        val withTun = JSONObject(config()).put(
+            "inbounds",
+            org.json.JSONArray().put(JSONObject("""{"type": "tun", "tag": "tun-in", "route_exclude_address": ["10.0.0.0/8"]}""")),
+        ).toString()
+        val result = WbChatConfigPatch.directForSelf(withTun, pkg)
+        val excl = JSONObject(result.content).getJSONArray("inbounds").getJSONObject(0).getJSONArray("route_exclude_address")
+        val list = (0 until excl.length()).map { excl.getString(it) }
+        assertEquals(listOf("10.0.0.0/8") + WbChatConfigPatch.TUN_EXCLUDE, list)
+    }
+
+    @Test
     fun directRuleIsNotDuplicated() {
         val once = WbChatConfigPatch.directForSelf(config(), pkg)
         val twice = WbChatConfigPatch.directForSelf(once.content, pkg)
