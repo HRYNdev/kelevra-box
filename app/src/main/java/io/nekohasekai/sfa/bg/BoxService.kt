@@ -197,6 +197,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @Volatile
     private var coreRoomConfig = false
 
+    /** Работающее ядро собрано под выбранный руками выход WB Chat: отказ QUIC и IPv6 в его сокс. */
+    @Volatile
+    private var coreWbConfig = false
+
     /**
      * Перечитывание конфига отложено, пока жила комната: ядро исполняет прежний профиль.
      * Снимается любой удачной пересборкой — она читает файл заново.
@@ -295,6 +299,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // уже не наполнить — в урезанной сети. Ядра здесь нет, поэтому список
                 // наборов читаем прямо из профиля.
                 fillRuleSetsAtHome(content)
+                // Дома туннеля нет — присмотр WB Chat ждёт его подъёма и сам поднимет ядро.
+                startWbChat()
                 return
             }
 
@@ -352,6 +358,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             notification.start(coreLive = true)
             AutoMode.start(autoModeHost)
+            // После подъёма tun, не до: ядро WB Chat ходит через tun (см. WbChatConfigPatch),
+            // и появившийся позже tun сменил бы ему исходящий порт посреди звонка.
+            startWbChat()
         } catch (e: Exception) {
             stopAndAlert(Alert.StartService, e.message)
             return
@@ -644,6 +653,28 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         if (roomInConfig) {
             val v6 = OlcRtcConfigPatch.rejectIpv6ToRoom(result, OlcRtcParams.socksPort)
             OlcRtcConfigPatch.log(v6)
+            result = v6.content
+        }
+
+        // WB Chat — отдельный выход со своим ядром. Ядро живёт всё время, пока служба поднята,
+        // и его собственный трафик не должен уйти в собственный сокс ([WbChatConfigPatch]).
+        // Правки комнаты (отказ QUIC и IPv6) кладём, только пока этот выход выбран руками:
+        // правило не знает, куда смотрит селектор, и постоянный отказ резал бы QUIC и IPv6
+        // на обычных выходах. Комнату автомата (порт olcRTC/Телемоста) это не трогает.
+        val wbPort = WbChatParams.socksPort
+        if (wbPort > 0) {
+            val self = WbChatConfigPatch.directForSelf(result, Application.application.packageName)
+            WbChatConfigPatch.log(self)
+            result = self.content
+        }
+        val wbInConfig = wbInConfig()
+        coreWbConfig = wbInConfig
+        if (wbInConfig && wbPort != OlcRtcParams.socksPort) {
+            val quic = OlcRtcConfigPatch.addQuicReject(result, wbPort)
+            WbChatConfigPatch.log(WbChatConfigPatch.Result(quic.content, "QUIC: ${quic.note}", quic.patched))
+            result = quic.content
+            val v6 = OlcRtcConfigPatch.rejectIpv6ToRoom(result, wbPort)
+            WbChatConfigPatch.log(WbChatConfigPatch.Result(v6.content, "IPv6: ${v6.note}", v6.patched))
             result = v6.content
         }
 
@@ -967,6 +998,29 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun roomInConfig(): Boolean = Settings.olcrtcEnabled &&
         (roomWanted || roomAhead || OlcRtcCore.state is OlcRtcCore.State.Ready)
 
+    /** Нужны ли правки под выход WB Chat: он есть и выбран руками (автомат его не выбирает). */
+    private fun wbInConfig(): Boolean = WbChatParams.available &&
+        !Settings.autoModeEnabled &&
+        WbChatParams.isWbExit(Settings.manualExitName)
+
+    /**
+     * Присмотр за ядром WB Chat: держит его, пока служба поднята, туннель не погашен и
+     * выход WB выбран руками ([wbInConfig]). Не выбран — ядро погашено: звонок WB с
+     * 16 каналами иначе висел фоном при любом выходе (замер 15.10: «Комната WB · готов»
+     * при выбранных Нидерландах), жёг мобильный трафик и при смене сети сбивал звонок
+     * другого ядра того же аккаунта.
+     */
+    private fun startWbChat() {
+        runCatching {
+            WbChatWatchdog.start(wanted = { !serviceStopping && !tunnelSuspended && wbInConfig() })
+        }.onFailure { Log.w(TAG, "WB Chat: присмотр не запустился: ${it.message}") }
+    }
+
+    private fun stopWbChat() {
+        runCatching { WbChatWatchdog.stop() }
+            .onFailure { Log.w(TAG, "WB Chat: остановка сорвалась: ${it.message}") }
+    }
+
     /** Выводить ли приложение из tun, если собирать ядро прямо сейчас. */
     private fun selfOutsideTunNow(): Boolean = TunnelFacts.selfOutsideTun(
         vpn = service is VpnService,
@@ -984,7 +1038,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     private fun resyncCore(reason: String): AutoMode.RoomAck? {
         val busy = roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting
-        if (!TunnelFacts.coreConfigStale(
+        // Выход WB Chat выбрали или сняли руками — правки под него разошлись с ядром. Без
+        // параметров WB Chat обе стороны всегда false, и для остальных всё как раньше.
+        val wbStale = !busy && coreWbConfig != wbInConfig()
+        if (!wbStale && !TunnelFacts.coreConfigStale(
                 coreRoomConfig, coreSelfOutsideTun, roomInConfig(), selfOutsideTunNow(), busy, profileReloadPending,
             )
         ) {
@@ -1352,6 +1409,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 }
             }
             stopOlcRtc()
+            stopWbChat()
             runCatching { CoreLog.stop() }
         runCatching { Zapisi.stop() }
             runCatching { Zapisi.stop() }
@@ -1393,6 +1451,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             commandServer.close()
         }
         stopOlcRtc()
+        stopWbChat()
         // Ядро могло подняться и до аварии (CoreLog.start() зовётся раньше конца startService()).
         // Без этой строки объект остаётся «занят» навсегда — следующие старты сервиса
         // журнал ядра молча пропускают, потому что start() видит живой client и выходит.

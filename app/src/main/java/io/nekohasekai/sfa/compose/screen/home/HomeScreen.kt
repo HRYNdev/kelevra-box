@@ -84,6 +84,8 @@ data class ChannelRow(val name: String, val delayMs: Int, val selected: Boolean)
  */
 fun isRoomExit(name: String?): Boolean {
     val tag = name?.takeIf { it.isNotBlank() } ?: return false
+    // Выход WB Chat («Комната WB») — отдельный выход, не комната автомата.
+    if (io.nekohasekai.sfa.bg.WbChatParams.isWbExit(tag)) return false
     PathRegistry.snapshot.value[PathId.ROOM].def.exitTag?.let { return tag == it }
     val n = tag.lowercase()
     return n.contains("комнат") || n.contains("room")
@@ -91,6 +93,7 @@ fun isRoomExit(name: String?): Boolean {
 
 fun badgeOf(name: String?): String? {
     val n = name?.lowercase() ?: return null
+    if (io.nekohasekai.sfa.bg.WbChatParams.isWbExit(name)) return "WB"
     return when {
         // У комнаты страны нет: несущая — чужой видеозвонок. Двухбуквенный огрызок
         // имени («КО») читался бы как код страны и врал бы.
@@ -458,13 +461,23 @@ fun HomeScreen(
                     // и «Нидерланды · запасной», тогда как путь у них один — основной
                     // канал, и меряется он целиком. Поэтому комнату узнаём отдельно,
                     // а всё остальное — это основной канал и его состояние.
-                    val known = paths.byExit(ch.name)
-                        ?: if (isRoomExit(ch.name)) paths[PathId.ROOM] else paths[PathId.MAIN]
+                    // Выход WB Chat не путь реестра: про него говорит его собственное ядро.
+                    val wb = io.nekohasekai.sfa.bg.WbChatParams.isWbExit(ch.name)
+                    val known = if (wb) {
+                        null
+                    } else {
+                        paths.byExit(ch.name)
+                            ?: if (isRoomExit(ch.name)) paths[PathId.ROOM] else paths[PathId.MAIN]
+                    }
                     ExitRow(
                         name = ch.name,
                         delayMs = ch.delayMs,
                         selected = !auto.auto && ch.selected,
-                        subtitle = known?.let { PathWords.state(it, now) },
+                        subtitle = if (wb) {
+                            "WB Chat · " + io.nekohasekai.sfa.bg.WbChatCore.statusText()
+                        } else {
+                            known?.let { PathWords.state(it, now) }
+                        },
                         onClick = {
                             // Выбор руками выключает автомат: иначе он через минуту
                             // передумает, и человек увидит, что его выбор не держится.

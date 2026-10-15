@@ -105,7 +105,11 @@ object AutoModeExits {
             outbound.optString("type") == "selector" && room != null && room in members(outbound)
         }?.key ?: byTag.entries.firstOrNull { it.value.optString("type") == "selector" }?.key
 
-        val main = chooser?.let { tag -> members(byTag.getValue(tag)).firstOrNull { it != room } }
+        // Основной — первый выход селектора, который не комната и не другой socks на петле
+        // (выход WB Chat: его выбирает человек, автомату он не основной канал).
+        val main = chooser?.let { tag ->
+            members(byTag.getValue(tag)).firstOrNull { it != room && !loopbackSocks(byTag[it]) }
+        }
 
         val endpoints = endpointsOf(main, byTag, mutableSetOf())
             .ifEmpty { allEndpoints(byTag) }
@@ -218,6 +222,9 @@ object AutoModeExits {
         }
         return null
     }
+
+    private fun loopbackSocks(outbound: JSONObject?): Boolean =
+        outbound != null && outbound.optString("type") == "socks" && outbound.optString("server") in LOOPBACK
 
     private fun members(outbound: JSONObject): List<String> {
         val list = outbound.optJSONArray("outbounds") ?: return emptyList()
