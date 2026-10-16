@@ -156,6 +156,9 @@ object WbChatCore {
         // по имени не открывалось ничего (замер 15.10: спидтест). Свой резолвер мимо tun
         // ([WbChatConfigPatch.TUN_EXCLUDE]) отдаёт настоящие адреса.
         builder.environment()["OPENFLUX_DNS"] = WbChatConfigPatch.DNS
+        // A/B управления перегрузкой с сервера (поле tcp_cc блока wbchat): ставим только "reno",
+        // иначе переменной нет и движок остаётся на CUBIC.
+        if (params.tcpCc == "reno") builder.environment()["OPENFLUX_TCP_CC"] = "reno"
 
         val p: Process
         synchronized(lock) {

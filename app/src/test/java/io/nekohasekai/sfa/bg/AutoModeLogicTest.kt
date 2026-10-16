@@ -878,6 +878,19 @@ class AutoModeLogicTest {
     }
 
     @Test
+    fun `комната WB до готовности ядра держит основной канал, после готовности применяется`() {
+        // 16.10: селектор уходил на «Комнату WB» за 0,1 с до старта ядра: тысячи connection refused.
+        assertEquals(
+            "Нидерланды",
+            AutoMode.manualTarget(manual = "Комната WB", room = "Комната WB", main = "Нидерланды", roomUp = false),
+        )
+        assertEquals(
+            "Комната WB",
+            AutoMode.manualTarget(manual = "Комната WB", room = "Комната WB", main = "Нидерланды", roomUp = true),
+        )
+    }
+
+    @Test
     fun `поднятая комната применяется как есть`() {
         assertEquals(
             "Комната",

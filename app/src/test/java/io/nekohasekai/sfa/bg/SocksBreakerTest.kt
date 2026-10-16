@@ -61,4 +61,19 @@ class SocksBreakerTest {
         assertFalse((0 until 100).any { b.offer(taymaut, it * 10L) })
         assertTrue(burst(b, 50, start = 10_000, stepMillis = 10) == 1)
     }
+
+    @Test
+    fun `отказ в сокс WB во время подъёма ядра предохранитель не считает`() {
+        val wb = otkaz.replace("127.0.0.1:8808", "127.0.0.1:8809")
+        assertTrue(SocksBreaker.oknoPodemaWb(wb, wbPort = 8809, wbStarting = true))
+        // ядро уже не поднимается — настоящая мёртвая комната, считаем
+        assertFalse(SocksBreaker.oknoPodemaWb(wb, wbPort = 8809, wbStarting = false))
+        // чужой порт (комната olcRTC) окном подъёма WB не прикрыт
+        assertFalse(SocksBreaker.oknoPodemaWb(otkaz, wbPort = 8809, wbStarting = true))
+        assertFalse(SocksBreaker.oknoPodemaWb(wb, wbPort = 0, wbStarting = true))
+        // селектор уже на WB: перезапуск ядра бьёт по живому трафику — отказы считаем
+        assertFalse(SocksBreaker.oknoPodemaWb(wb, wbPort = 8809, wbStarting = true, selectorOnWb = true))
+        // порт сравнивается с разделителем, а не префиксом: 88 — не 8809
+        assertFalse(SocksBreaker.oknoPodemaWb(wb, wbPort = 88, wbStarting = true))
+    }
 }

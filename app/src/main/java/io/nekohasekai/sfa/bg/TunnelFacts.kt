@@ -49,7 +49,8 @@ internal object TunnelFacts {
      * @param roomWanted комнату попросили и не отменили.
      * @param roomAhead туннель поднимают, чтобы следом поднять комнату.
      * @param roomReady ядро комнаты сейчас в комнате.
-     * @param roomSought автомат стоит на комнате или ищет путь, либо комнату выбрал человек.
+     * @param roomSought автомат стоит на комнате, либо комнату выбрал человек. «Ищет путь» сюда
+     *   не входит ([AutoMode.roomSoughtForTun]): качели Searching↔Main пересобирали ядро впустую.
      */
     fun selfOutsideTun(
         vpn: Boolean,
@@ -90,6 +91,28 @@ internal object TunnelFacts {
         roomBusy: Boolean,
         profileOutdated: Boolean = false,
     ): Boolean = !roomBusy && (coreRoom != wantRoom || coreSelfOutside != wantSelfOutside || profileOutdated)
+
+    /**
+     * Нужен ли ещё подъём комнаты, который идёт прямо сейчас.
+     *
+     * Проверяется между попытками и пока ждём готовности: 16.10.2026 на улице попытки 2 и 3
+     * шли через 5 и 55 с после остановки сервиса, а Телемост встал для ненужной комнаты и
+     * вызвал пересборку ядра.
+     *
+     * @param serviceStopping сервис останавливают.
+     * @param tunnelSuspended туннель погашен (дома комната бессмысленна).
+     * @param roomAhead туннель как раз поднимают ради комнаты — флаг погашения ещё стоит,
+     *   но отменять подъём нельзя.
+     * @param raising подъём идёт отдельным потоком по просьбе автомата ([BoxService.setRoomWanted]).
+     * @param roomWanted просьбу не отозвали (человек сменил выбор, автомат ушёл с комнаты).
+     */
+    fun roomRaiseStillWanted(
+        serviceStopping: Boolean,
+        tunnelSuspended: Boolean,
+        roomAhead: Boolean,
+        raising: Boolean,
+        roomWanted: Boolean,
+    ): Boolean = !serviceStopping && (roomAhead || !tunnelSuspended) && (!raising || roomWanted)
 
     /**
      * Отложить ли перечитывание конфига (`serviceReload`), а не пересобирать ядро сразу.

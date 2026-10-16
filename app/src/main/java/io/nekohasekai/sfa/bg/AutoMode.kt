@@ -23,7 +23,9 @@ import java.net.InetSocketAddress
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.concurrent.thread
 import kotlin.random.Random
 
 /**
@@ -231,6 +233,9 @@ object AutoMode {
 
         /** Живо ли сейчас ядро sing-box. Пока туннель погашен, его локальным входом не спросить. */
         fun tunnelLive(): Boolean
+
+        /** Комнату сейчас поднимают (поток сервиса или присмотр) — итог ещё не известен. */
+        fun roomRaising(): Boolean = false
 
         /** Конфиг, с которым работает ядро. */
         fun profileConfig(): String?
@@ -786,8 +791,34 @@ object AutoMode {
     private var holdAt = 0L
 
     /** Последняя пробная попытка поднять комнату — чтобы не долбить её каждым заходом. */
+    /**
+     * «Выбрана комната руками» — копия настройки в памяти. [roomNeeded] зовёт присмотр и
+     * предикат подъёма каждые 250 мс из чужих потоков: Room на каждый вопрос — и дорого, и
+     * ошибка чтения отменила бы подъём. Пишут её только [setManualRoom] и [start].
+     */
+    @Volatile
+    private var manualRoomMem = false
+
+    private fun setManualRoom(value: Boolean) {
+        manualRoomMem = value
+        Settings.autoModeManualRoom = value
+    }
+
     private var roomTriedAt = 0L
+    @Volatile
     private var roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+
+    /**
+     * Прошлая просьба поднять комнату ушла в асинхронный подъём ([RoomAck.Raising]), и чем
+     * он кончился, мы ещё не разобрали. Раньше на «поднимается» пауза сбрасывалась в минуту
+     * при любом исходе, и комната, которая не встаёт, пробовалась каждую минуту (16.10.2026 на
+     * улице: подъёмы 14:08, 14:33:40, 14:33:52). Исход разбирается на следующем заходе.
+     */
+    @Volatile
+    private var roomTrialPending = false
+
+    /** Вердикт «сеть не пускает комнату» уже записан в журнал — не повторять каждым заходом. */
+    private var roomGateLogged = false
     private const val ROOM_TRIAL_PAUSE_MILLIS = 60_000L
 
     /** Комната не встаёт — паузу растим, чтобы не жечь батарею попытками в пустоту. */
@@ -807,6 +838,7 @@ object AutoMode {
             // Settings и manualExit всегда синхронны (каждый мутатор пишет в оба разом), так
             // что повторное чтение на втором start() в том же процессе ничего не меняет.
             manualExit = Settings.manualExitName.takeIf { it.isNotBlank() }
+            manualRoomMem = Settings.autoModeManualRoom
             lastHomeKey = Settings.autoModeHomeKey.takeIf { it.isNotBlank() }
             layout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
                 ?: AutoModeExits.Layout.EMPTY
@@ -830,6 +862,9 @@ object AutoMode {
             pendingSwitch = false
             roomTriedAt = 0L
             roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+            roomTrialPending = false
+            roomGateLogged = false
+            portSilentAt = 0L
             mainFailures = 0
             nodeAnsweredAt = 0L
             peekAt = 0
@@ -934,6 +969,9 @@ object AutoMode {
         // проспать снятие до его старости.
         NetworkModeDetector.forget("сеть сменилась или переподтвердилась")
         nodeAnsweredAt = 0L
+        // Подъём комнаты в прежней сети и молчание порта в ней — про новую сеть не говорят.
+        roomTrialPending = false
+        portSilentAt = 0L
         // Ручной выбор — это «стой здесь», а не «выключи автомат навсегда». Он держится,
         // пока мы в той же сети: под неё человек и выбирал. Сеть другая — обстановка
         // другая, и держаться за прошлый выбор значит увезти человека в мёртвый выход.
@@ -975,6 +1013,11 @@ object AutoMode {
         if (!active) return
         Log.i(TAG, "ядро пересобрано ($reason) — выбор сбрасываю, иду на заход не дожидаясь ритма")
         selected = null
+        // Комната стоит — подъём удался, штрафовать нечего.
+        if (roomUp()) {
+            roomTrialPending = false
+            roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+        }
         // И перечитываем раскладку. Проверочные входы ([ProbeInboundPatch]) занимают
         // СВОБОДНЫЕ порты, а свободные они каждый раз разные: после пересборки старые
         // номера ведут в никуда. Раньше раскладка читалась только на старте автомата,
@@ -1025,7 +1068,7 @@ object AutoMode {
     fun roomNeeded(): Boolean {
         if (!active) return false
         val now = _state.value
-        val manualRoom = !now.auto && runCatching { Settings.autoModeManualRoom }.getOrDefault(false)
+        val manualRoom = !now.auto && manualRoomMem
         return roomNeededIn(now.auto, now.situation, manualRoom)
     }
 
@@ -1035,6 +1078,31 @@ object AutoMode {
      */
     internal fun roomNeededIn(auto: Boolean, situation: Situation, manualRoom: Boolean): Boolean =
         if (!auto) manualRoom else situation == Situation.Room || situation == Situation.Searching
+
+    /**
+     * Держать ли приложение вне tun ради комнаты ([TunnelFacts.selfOutsideTun]).
+     *
+     * От [roomNeeded] отличается одним: «ищем путь» ([Situation.Searching]) вывод не держит.
+     * 16.10.2026 на улице обстановка качалась Searching↔Main (14:06:07, 14:08:35, 14:08:42), и
+     * каждый переход менял список приложений в tun, то есть пересобирал ядро, хотя комната
+     * при этом не поднималась. Когда комнату действительно просят, ядро собирается под неё
+     * ДО входа ([BoxService.prepareCoreForRoom]) — по просьбе, а не по настроению обстановки.
+     */
+    /** Селектор сейчас на выходе WB Chat (выбран руками или автоматом). Читает только Settings.wbchatTag/wbchatAvailable (через WbChatParams.isWbExit), без обращения к диску на ручной комнате. */
+    fun selectorOnWb(): Boolean {
+        val tag = selected ?: manualExit
+        return tag != null && runCatching { WbChatParams.isWbExit(tag) }.getOrDefault(false)
+    }
+
+    fun roomSoughtForTun(): Boolean {
+        if (!active) return false
+        val now = _state.value
+        val manualRoom = !now.auto && manualRoomMem
+        return roomSoughtForTunIn(now.auto, now.situation, manualRoom)
+    }
+
+    internal fun roomSoughtForTunIn(auto: Boolean, situation: Situation, manualRoom: Boolean): Boolean =
+        if (!auto) manualRoom else situation == Situation.Room
 
     /**
      * Присмотр поднял комнату заново. Выход перед подъёмом увели на основной канал
@@ -1069,8 +1137,9 @@ object AutoMode {
         holdAt = 0L
         manualExit = null
         Settings.manualExitName = ""
-        Settings.autoModeManualRoom = false
+        setManualRoom(false)
         Settings.autoModeEnabled = true
+        roomTrialPending = false
         idle = false
         selected = null
         gate.reset(Situation.Unknown)
@@ -1103,10 +1172,11 @@ object AutoMode {
         // журнале видно, был ли автомат вообще включён и кто его переключил.
         Log.i(TAG, "автомат ${if (enabled) "включён" else "выключен"} человеком")
         Settings.autoModeEnabled = enabled
+        roomTrialPending = false
         if (enabled) {
             manualExit = null
             Settings.manualExitName = ""
-            Settings.autoModeManualRoom = false
+            setManualRoom(false)
             holdNetwork = null
             holdAt = 0L
             PathRegistry.reset()
@@ -1160,7 +1230,7 @@ object AutoMode {
         // раз уточняется по раскладке, когда она появится.
         // Выход WB Chat комнатой для автомата не считается, хоть и зовётся «Комната WB».
         val room = if (WbChatParams.isWbExit(tag)) false else layout.room?.let { tag == it } ?: looksLikeRoom(tag)
-        Settings.autoModeManualRoom = room
+        setManualRoom(room)
         // Человек выбрал комнату — значит аварийный выключатель, если он был нажат,
         // он снимает этим же действием. Без этого выбор комнаты молча давал обычный
         // выход: круг писал «Комната», нога не видела участника вовсе (поймано в
@@ -1202,7 +1272,23 @@ object AutoMode {
             Log.i(TAG, "комната ещё не стоит — выбор применю, когда поднимется")
             return false
         }
+        // То же для «Комнаты WB»: её ядро встаёт 3-10 с, а переставленный раньше селектор слал
+        // весь трафик в неслушающий 127.0.0.1:порт (16.10: тысячи connection refused в минуту,
+        // предохранитель, пересборки). Выбор применит заход, когда ядро скажет «готов».
+        if (WbChatParams.isWbExit(tag) && !wbUp()) {
+            Log.i(TAG, "комната WB ещё не стоит — выбор применю, когда ядро скажет «готов»")
+            return false
+        }
         return true
+    }
+
+    /** Ядро WB Chat готово и слушает: только тогда в его сокс можно слать трафик. */
+    private fun wbUp(): Boolean = WbChatCore.state is WbChatCore.State.Ready && WbChatCore.isRunning()
+
+    /** Присмотр за WB Chat: ядро встало. Будим заход, чтобы выбор человека лёг в селектор сразу. */
+    fun wbReady() {
+        Log.i(TAG, "ядро WB Chat готово — иду на заход, не дожидаясь ритма")
+        wakeLoop()
     }
 
     /**
@@ -1324,7 +1410,7 @@ object AutoMode {
             manualExit?.let { tag ->
                 val room = layout.room
                 if (room != null && Settings.autoModeManualRoom != (tag == room)) {
-                    Settings.autoModeManualRoom = tag == room
+                    setManualRoom(tag == room)
                     Log.i(TAG, "выбор «$tag» уточнён по раскладке: комната = ${Settings.autoModeManualRoom}")
                 }
             }
@@ -1355,7 +1441,12 @@ object AutoMode {
             // (поймано в эмуляторе 07.08.2026). Лишних команд нет: choose молчит, когда
             // выбранное уже стоит.
             manualExit?.let { tag ->
-                val target = manualTarget(tag, layout.room, layout.main, roomUp())
+                // «Комната WB» автоматом комнатой не считается, но слушает её сокс тоже поздно.
+                val target = if (WbChatParams.isWbExit(tag)) {
+                    manualTarget(tag, tag, layout.main, wbUp())
+                } else {
+                    manualTarget(tag, layout.room, layout.main, roomUp())
+                }
                 if (target != tag && target != null && selected != target) {
                     Log.i(TAG, "комната выбрана человеком, но ещё не встала — держусь основного канала")
                     // Сигнал по причине, а не по симптому: «выход выбран, но не поднят»
@@ -1567,12 +1658,22 @@ object AutoMode {
         }
 
         val atHome = dnsHome && carried != false
+        val massovyeBylo = massovyeOtkazySvezhie()
         if (hint != NetworkMode.Whitelist && !atHome &&
-            askDetector(broken, hintAge(network), nodeAnswers(), suspect = massovyeOtkazySvezhie())
+            askDetector(broken, hintAge(network), nodeAnswers(), suspect = massovyeBylo)
         ) {
             // Повод от массовых отказов — на один замер, а не на всё время его свежести.
             massovyeOtkazyAt = 0L
-            hint = askNetworkMode(network)
+            // 16.10.2026 на улице: замер режима (4,4-5,8 с) шёл прямо в потоке захода, в том числе
+            // перед подъёмом туннеля после Wi-Fi→LTE (13:02:58, 14:08:30, 14:36:47) — секунды без
+            // интернета. Если повод только «основной не поднялся», ответ нужен подсказкой на
+            // следующий заход, а не этому: меряем в фоне. Синхронно — когда дом по DNS без
+            // трафика или реальные соединения массово падают.
+            if (detectorInBackground(homeMismatch = dnsHome && carried != true, suspect = massovyeBylo)) {
+                askNetworkModeLater(network)
+            } else {
+                hint = askNetworkMode(network)
+            }
         }
 
         val home = homeVerdict(dnsHome, carried, hint)
@@ -1645,6 +1746,8 @@ object AutoMode {
         }
         if (home || main) {
             mainFailures = 0
+            // Ушли на дом или основной канал — прошлый подъём комнаты уже не наша неудача.
+            roomTrialPending = false
         } else {
             mainFailures++
         }
@@ -1710,10 +1813,56 @@ object AutoMode {
     private fun trialRaiseRoom(host: Host) {
         // Уже стоит или как раз встаёт — просить нечего. Подъём теперь идёт своим потоком,
         // и без этой проверки каждый заход добавлял бы к нему вторую просьбу.
-        if (roomUp() || roomSettling()) return
+        if (roomUp()) {
+            // Подъём, о котором просили, удался — пауза возвращается к минуте.
+            roomTrialPending = false
+            roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+            return
+        }
+        // Подъём идёт (поток сервиса, пересборка до входа, пауза между попытками, присмотр) —
+        // это «встаёт», а не «не встала»: итог разбираем, только когда всё затихло.
+        if (roomSettling() || runCatching { host.roomRaising() }.getOrDefault(false)) return
         if (layout.room == null || !OlcRtcParams.roomAllowed) return
         val now = SystemClock.elapsedRealtime()
+        if (roomTrialPending) {
+            // Прошлый подъём ушёл в поток и закончился, а комнаты нет — значит не встала.
+            // Паузу удваиваем и отсчитываем от конца подъёма, а не от просьбы: сам подъём
+            // занимает минуту-две.
+            roomTrialPending = false
+            if (OlcRtcCore.lastError == OlcRtcCore.CANCELLED_REASON) {
+                // Подъём отменили мы же (остановка, смена выбора, уход с комнаты) — это не неудача.
+                roomTriedAt = 0L
+                Log.i(TAG, "подъём комнаты отменён сверху — штрафа нет")
+            } else {
+                roomTrialPause = nextTrialPause(roomTrialPause)
+                roomTriedAt = now
+                PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
+                Log.i(TAG, "комната не встала (подъём кончился ничем), следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
+            }
+        }
         if (roomTriedAt != 0L && now - roomTriedAt < roomTrialPause) return
+        // Сеть, в которой комнате не за что зацепиться: молчит всё, даже разрешённый адрес, или
+        // система не признала сеть рабочей. Комната тоже ходит по этой сети — зря будить звонок
+        // и копить штраф (16.10.2026 на улице, 14:28: радио молчало ~25 с, а комнату уже просили).
+        // «Признана рабочей» (VALIDATED) воротами НЕ служит: Android ставит её своей проверкой через
+        // Google мимо туннеля, под белым списком её, скорее всего, нет, а комната — единственная
+        // дорога. Здесь она только в журнале.
+        val roomNet = lastNetwork
+        val roomGate = roomNet?.let { net ->
+            networkAllowsRoom(NetworkModeDetector.reportFor(net), System.currentTimeMillis())
+        } ?: true
+        if (!roomGate) {
+            if (!roomGateLogged) {
+                roomGateLogged = true
+                Log.i(
+                    TAG,
+                    "комнату не пробую: только что замер показал тишину на всё или сети нет " +
+                        "(система считает сеть рабочей: ${roomNet?.let(::validated)}) — попытки и штрафа нет",
+                )
+            }
+            return
+        }
+        roomGateLogged = false
 
         // Туннель погашен — комнату поднимать некуда, и сервис откажет, не начав. Раньше
         // мы всё равно просили, получали мгновенный отказ «туннель погашен» и записывали
@@ -1757,18 +1906,50 @@ object AutoMode {
             // всё это время был бы слеп (замер 08.08.2026 — 69 с). Итог принесёт реестр:
             // его пишет присмотр, а пересборку ядра — сам сервис через [onCoreRebuilt].
             ack == RoomAck.Raising || roomUp() || roomSettling() -> {
-                roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+                // Паузу тут не сбрасываем: подъём идёт своим потоком, и удался ли он, видно
+                // только на следующем заходе ([roomTrialPending]).
+                roomTrialPending = true
                 Log.i(TAG, "комната поднимается, жду вердикта присмотра")
             }
 
             else -> {
-                roomTrialPause = (roomTrialPause * 2).coerceAtMost(ROOM_TRIAL_PAUSE_CAP_MILLIS)
+                roomTrialPause = nextTrialPause(roomTrialPause)
                 // Остывание помнит реестр, но распоряжается им по-прежнему [roomTrialPause]:
                 // решения из общей памяти на этом шаге не принимает никто.
                 PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
                 Log.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
             }
         }
+    }
+
+    /** Насколько свеж замер, которому верим при запрете комнаты по тишине. */
+    internal const val ROOM_GATE_FRESH_MILLIS = 15_000L
+
+    /** Пауза перед следующей пробной попыткой после неудачи: вдвое длиннее, но не выше потолка. */
+    internal fun nextTrialPause(current: Long): Long =
+        (current * 2).coerceIn(ROOM_TRIAL_PAUSE_MILLIS, ROOM_TRIAL_PAUSE_CAP_MILLIS)
+
+    /**
+     * Есть ли смысл просить комнату в этой сети.
+     *
+     * Нет, если замер режима, снятый только что ([ROOM_GATE_FRESH_MILLIS]), показал: физической
+     * сети нет, либо молчит всё — и неразрешённый адрес, и разрешённый контроль. Тишина без
+     * контроля неотличима от белого списка, поэтому на весь срок подсказки ([HINT_TTL_MILLIS])
+     * её не растягиваем: через несколько секунд комнату снова можно просить. Белый список сюда НЕ
+     * входит — в нём как раз комната (Телемост, Яндекс) и есть дорога наружу. Флаг VALIDATED от
+     * Android воротами не служит: под белым списком его обычно нет.
+     *
+     * @param report замер режима для этой сети; `null` — не мерили.
+     * @param nowMillis стенные часы, как у [NetworkModeReport.atMillis].
+     */
+    internal fun networkAllowsRoom(report: NetworkModeReport?, nowMillis: Long): Boolean {
+        if (report == null) return true
+        val age = nowMillis - report.atMillis
+        if (age !in 0 until ROOM_GATE_FRESH_MILLIS) return true
+        if (report.mode == NetworkMode.NoNetwork) return false
+        val s = report.signals
+        val silentAll = s.physicalNetwork && s.tcpUnlisted == ProbeOutcome.Silence && s.tcpAllowed == ProbeOutcome.Silence
+        return !silentAll
     }
 
     /**
@@ -2697,6 +2878,40 @@ object AutoMode {
         NetworkMode.Unknown
     }
 
+    /** Фоновый замер режима уже идёт — второй не запускаем. */
+    private val modeAskInFlight = AtomicBoolean(false)
+
+    /**
+     * Замер режима сети в своём потоке: заход не ждёт, итог ляжет в кэш подсказок
+     * ([cachedHint]) и будет учтён следующим заходом. Выдержку детектора не обходим
+     * (`force = false`), а «белый список» будит заход сразу.
+     */
+    private fun askNetworkModeLater(network: Network) {
+        if (!modeAskInFlight.compareAndSet(false, true)) return
+        thread(name = "auto-netmode", isDaemon = true) {
+            try {
+                val report = runBlocking { NetworkModeDetector.detect(force = false, network = network) }
+                Log.i(TAG, "подсказка о сети (в фоне): ${report.mode} — ${report.note} (${report.tookMillis} мс)")
+                if (report.mode == NetworkMode.Whitelist) wakeLoop()
+            } catch (t: Throwable) {
+                Log.w(TAG, "режим сети в фоне определить не вышло: ${t.message}")
+            } finally {
+                modeAskInFlight.set(false)
+            }
+        }
+    }
+
+    /**
+     * Можно ли мерить режим сети в фоне, а не в потоке захода.
+     *
+     * Нельзя, когда ответ нужен этому же заходу для решения: дом по DNS есть, а трафик
+     * не идёт (иначе заход выкинет человека из дома по недоопознанному), или реальные
+     * соединения массово падают. Когда повод один — «основной не поднялся» — вердикт
+     * успевает к следующему заходу, а секунды без интернета на смене сети не нужны.
+     */
+    internal fun detectorInBackground(homeMismatch: Boolean, suspect: Boolean): Boolean =
+        !homeMismatch && !suspect
+
     /** Что резолвер сети сказал про одно имя. */
     private enum class HostAnswer {
         /** Адрес подменный: имя заворачивает тот, кто нам отвечает. */
@@ -2770,10 +2985,22 @@ object AutoMode {
         // Узел молчит — приглядке есть что искать. Отозвался (или адресов мы не знаем) —
         // искать нечего.
         peekWanted = portOpen == false
+        // Прошлое молчание порта помним: один пик SYN — слабый довод (16.10.2026 на улице, 14:28:41:
+        // радио молчало ~25 с, а автомат уже объявил основной мёртвым и поднимал комнату).
+        val nowMs = SystemClock.elapsedRealtime()
+        // Давнее молчание — не «первый пик»: между заходами могло пройти что угодно.
+        val prevSilentAt = portSilentAt.takeIf { it != 0L && nowMs - it <= PORT_SILENCE_STALE_MILLIS } ?: 0L
+        portSilentAt = if (portOpen == false) (if (prevSilentAt != 0L) prevSilentAt else nowMs) else 0L
         if (portOpen == false && !inRoom) {
-            return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
-        }
-        if (portOpen == false) {
+            // Честная проба при невыбранном основном и без закреплённого входа переставляет селектор
+            // и рвёт живые соединения (interrupt_exist_connections) — на одном пике этого не стоит.
+            val canAsk = layout.localProxy != null && host.tunnelLive() &&
+                firstSilenceMayProbe(layout.mainPinned, standsOnMain = selected != null && selected == layout.main)
+            if (!canAsk || portSilenceConfirmed(prevSilentAt, nowMs)) {
+                return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
+            }
+            Log.i(TAG, "основной канал: адрес узла молчит впервые — один пик не довод, спрашиваю канал целиком")
+        } else if (portOpen == false) {
             Log.i(TAG, "основной канал: адрес узла молчит, но мы в комнате — спрашиваю канал целиком")
         }
 
@@ -2793,6 +3020,32 @@ object AutoMode {
         if (squeezed) Log.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
         return noteMain(mainVerdict(portOpen, trafficFlows, squeezed), portOpen, squeeze.takeIf { squeezed })
     }
+
+    /** Когда порт узла замолчал в первый раз подряд (elapsedRealtime); 0 — отвечает. */
+    @Volatile
+    private var portSilentAt = 0L
+
+    /** Второй пик молчания порта не раньше чем через столько после первого. */
+    internal const val PORT_SILENCE_GAP_MILLIS = 10_000L
+
+    /**
+     * Молчание порта подтверждено: уже молчал [PORT_SILENCE_GAP_MILLIS] назад и дольше, а в
+     * промежутке не отвечал. Тогда живую пробу канала можно не тратить.
+     *
+     * @param firstSilentAt когда порт замолчал впервые подряд; 0 — до этого отвечал.
+     */
+    /** Давнее молчание порта за первый пик не считаем. */
+    internal const val PORT_SILENCE_STALE_MILLIS = 2 * 60_000L
+
+    /**
+     * Можно ли на первом молчании порта спросить канал целиком: только если проба не
+     * переставит селектор (вход основного закреплён или мы и так на нём).
+     */
+    internal fun firstSilenceMayProbe(mainPinned: Boolean, standsOnMain: Boolean): Boolean =
+        mainPinned || standsOnMain
+
+    internal fun portSilenceConfirmed(firstSilentAt: Long, now: Long): Boolean =
+        firstSilentAt != 0L && now - firstSilentAt >= PORT_SILENCE_GAP_MILLIS
 
     /**
      * Теневая запись про основной канал. Вердикт [works] уже вынесен и не меняется —
