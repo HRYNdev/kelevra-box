@@ -35,6 +35,12 @@ object WbChatCore {
 
     const val NOSITEL = "wbchat"
 
+    /** Мультиплексор потоков без gVisor (форк wbchat-11); ему нужен socks-вход, он у нас и есть. */
+    internal const val ARG_STREAM_MUX = "--stream-mux"
+
+    /** Постоянные переменные окружения ядра: FEC в приложении выключен. */
+    internal fun fixedEnv(): Map<String, String> = mapOf("OPENFLUX_DNS" to WbChatConfigPatch.DNS, "WBCHAT_FEC" to "0")
+
     private const val BINARY = "libopenflux.so"
 
     const val READY_TIMEOUT_MILLIS = 60_000
@@ -136,6 +142,7 @@ object WbChatCore {
             bin.absolutePath,
             "--role=client",
             "--inbound=socks5",
+            ARG_STREAM_MUX,
             "-s", "127.0.0.1:${params.socksPort}",
             "-t", NOSITEL,
             "--wbchat-peer", params.peer,
@@ -155,7 +162,7 @@ object WbChatCore {
         // идёт через наш sing-box и отдаёт fakeip 198.18.x — для выхода это пустой адрес,
         // по имени не открывалось ничего (замер 15.10: спидтест). Свой резолвер мимо tun
         // ([WbChatConfigPatch.TUN_EXCLUDE]) отдаёт настоящие адреса.
-        builder.environment()["OPENFLUX_DNS"] = WbChatConfigPatch.DNS
+        builder.environment().putAll(fixedEnv()) // OPENFLUX_DNS, WBCHAT_FEC=0
         // A/B управления перегрузкой с сервера (поле tcp_cc блока wbchat): ставим только "reno",
         // иначе переменной нет и движок остаётся на CUBIC.
         if (params.tcpCc == "reno") builder.environment()["OPENFLUX_TCP_CC"] = "reno"
