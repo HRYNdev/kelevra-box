@@ -183,6 +183,7 @@ object Settings {
     var wbchatKey by dataStore.string(SettingsKey.WBCHAT_KEY) { "" }
     var wbchatBond by dataStore.int(SettingsKey.WBCHAT_BOND) { 0 }
     var wbchatTag by dataStore.string(SettingsKey.WBCHAT_TAG) { "" }
+    var wbchatTcpCc by dataStore.string(SettingsKey.WBCHAT_TCP_CC) { "" }
 
 
     // Выход выбирается сам. Человеку это ничего не запрещает: он выбирает выход руками,

@@ -96,6 +96,7 @@ object SettingsKey {
     const val WBCHAT_KEY = "wbchat_key"
     const val WBCHAT_BOND = "wbchat_bond"
     const val WBCHAT_TAG = "wbchat_tag"
+    const val WBCHAT_TCP_CC = "wbchat_tcp_cc"
 
     /** Своё имя устройства в комнате: сервер его не раздаёт, а совпадать они не должны. */
     const val OLCRTC_DEVICE_ID = "olcrtc_device_id"

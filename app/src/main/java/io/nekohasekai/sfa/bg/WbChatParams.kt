@@ -29,10 +29,12 @@ object WbChatParams {
         val key: String,
         val bond: Int,
         val tag: String,
+        /** Управление перегрузкой TCP ядра WB: только "reno" или пусто (= прежний CUBIC движка). */
+        val tcpCc: String = "",
     ) {
         /** Без секретов — для журнала и сравнения «параметры сменились». */
         override fun toString(): String =
-            "WbChatParams(port=$socksPort, peer=$peer, bond=$bond, tag=$tag, " +
+            "WbChatParams(port=$socksPort, peer=$peer, bond=$bond, tag=$tag, tcpCc=${tcpCc.ifEmpty { "по умолчанию" }}, " +
                 "token=${token.length} симв., cookies=${cookies.length} симв., key=${if (key.isBlank()) "нет" else "есть"})"
     }
 
@@ -69,8 +71,16 @@ object WbChatParams {
             key = Settings.wbchatKey,
             bond = Settings.wbchatBond,
             tag = Settings.wbchatTag,
+            tcpCc = Settings.wbchatTcpCc,
         )
     }
+
+    /**
+     * Необязательное поле `tcp_cc` блока wbchat: переключатель A/B управления перегрузкой без
+     * новой сборки. Принимается ровно "reno"; всё остальное и отсутствие поля — пусто, то есть
+     * движок остаётся на CUBIC, как и до появления поля.
+     */
+    internal fun tcpCcFrom(raw: String?): String = if (raw == "reno") "reno" else ""
 
     /**
      * Кладёт в настройки блок `wbchat` из /info. `null` — блока нет: стираем всё.
@@ -92,6 +102,7 @@ object WbChatParams {
             Settings.wbchatCookies = ""
             Settings.wbchatKey = ""
             Settings.wbchatBond = 0
+            Settings.wbchatTcpCc = ""
             Settings.wbchatTag = ""
             return
         }
@@ -102,6 +113,7 @@ object WbChatParams {
         Settings.wbchatCookies = cookies
         Settings.wbchatKey = json.optString("key")
         Settings.wbchatBond = json.optInt("bond")
+        Settings.wbchatTcpCc = tcpCcFrom(if (json.has("tcp_cc")) json.optString("tcp_cc") else null)
         Settings.wbchatTag = json.optString("tag")
         Settings.wbchatAvailable = true
         val now = resolve()

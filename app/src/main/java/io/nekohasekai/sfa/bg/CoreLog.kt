@@ -149,7 +149,16 @@ object CoreLog {
         if (line.contains("ERROR") && line.contains("open connection to")) {
             oknoOtkazov++
             bystroOtkazov++
-            if (predohranitel.offer(line, teper)) {
+            // Настройки на каждой строке не читаем: порт — из уже работающих параметров ядра, и
+            // только пока оно поднимается.
+            val wbStarting = WbChatCore.state is WbChatCore.State.Starting
+            val wbPodnimaetsya = wbStarting && SocksBreaker.oknoPodemaWb(
+                line,
+                WbChatCore.runningParams?.socksPort ?: 0,
+                wbStarting,
+                AutoMode.selectorOnWb(),
+            )
+            if (!wbPodnimaetsya && predohranitel.offer(line, teper)) {
                 Log.w(TAG, "шторм отказов в локальный сокс — увожу выход с мёртвой комнаты")
                 runCatching { Zapisi.perehod("predohranitel", "отказы в локальный сокс") }
                 // Переключение выхода — вызов в командный сервер; поток журнала им не держим.

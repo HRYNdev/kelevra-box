@@ -139,6 +139,8 @@ object WbChatWatchdog {
                     Log.w(TAG, "WB Chat не поднят ($error) — следующая попытка через ${pauseAfter(fails) / 1000} с")
                 } else {
                     notBefore = 0L
+                    // Выбор «Комнаты WB» ждал готовности ядра — пусть автомат применит его сейчас.
+                    runCatching { AutoMode.wbReady() }
                 }
             }
         } catch (_: InterruptedException) {
