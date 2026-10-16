@@ -155,4 +155,12 @@ class WbChatPatchTest {
         org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom("Reno"))
         org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom("reno "))
     }
+
+    @Test
+    fun `ядро WB - мультиплексор включён, FEC выключен, DNS на месте`() {
+        assertEquals("--stream-mux", WbChatCore.ARG_STREAM_MUX)
+        val env = WbChatCore.fixedEnv()
+        assertEquals("0", env["WBCHAT_FEC"])
+        assertEquals(WbChatConfigPatch.DNS, env["OPENFLUX_DNS"])
+    }
 }
