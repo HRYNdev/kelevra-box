@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -580,6 +581,9 @@ fun SFANavHost(
             OOMReportFileContentScreen(navController = navController, reportId = reportId, fileKind = fileKind)
         }
 
+        composable("panel") {
+            io.nekohasekai.sfa.compose.screen.home.PanelSetiScreen(onBack = { navController.popBackStack() })
+        }
         composable(Screen.Settings.route) {
             val uiState = dashboardViewModel?.uiState?.collectAsState()?.value
             var autoStart by remember { mutableStateOf(Settings.startedByUser) }
@@ -592,7 +596,12 @@ fun SFANavHost(
             val логиПишутся = remember { io.nekohasekai.sfa.bg.LogUploadWork.logsAvailable() }
             val scope = rememberCoroutineScope()
             val context = LocalContext.current
+            // Пункт «Панель сети» — только устройству админа; сервер говорит это в сводке подписки.
+            var panel by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { panel = io.nekohasekai.sfa.compose.screen.home.loadSubscription()?.panel == true }
             SimpleSettingsScreen(
+                panel = panel,
+                onPanel = { navController.navigate("panel") },
                 autoStart = autoStart,
                 onAutoStartChange = {
                     autoStart = it
