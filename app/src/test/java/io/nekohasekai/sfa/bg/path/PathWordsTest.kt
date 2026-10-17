@@ -195,7 +195,7 @@ class PathWordsTest {
         PathRegistry.dead(PathId.HOME, "подменных адресов нет")
 
         PathRegistry.probing(PathId.MAIN)
-        assertEquals("Проверяю связь", headline(chosen = PathId.MAIN))
+        assertEquals("Проверка связи", headline(chosen = PathId.MAIN))
 
         PathRegistry.alive(PathId.MAIN, latencyMs = 210)
         assertEquals("Выход выбирается сам", headline(chosen = PathId.MAIN))
@@ -211,14 +211,14 @@ class PathWordsTest {
     fun `стоять не на чем — ищем путь`() {
         PathRegistry.dead(PathId.HOME, "подменных адресов нет")
         PathRegistry.dead(PathId.MAIN, "ответа не дождались")
-        assertEquals("Ищу путь", headline(chosen = null))
+        assertEquals("Поиск пути", headline(chosen = null))
     }
 
     @Test
     fun `ещё ничего не мерили — не обещаем работу`() {
-        assertEquals("Проверяю связь", headline(chosen = null))
+        assertEquals("Проверка связи", headline(chosen = null))
         PathRegistry.probing(PathId.HOME)
-        assertEquals("Проверяю связь", headline(chosen = null))
+        assertEquals("Проверка связи", headline(chosen = null))
     }
 
     @Test
@@ -233,7 +233,7 @@ class PathWordsTest {
         // обязана остаться прежней, иначе правка про дом молча испортила бы шторку.
         PathRegistry.unchecked(PathId.HOME, "дома можно быть только за своим роутером")
         PathRegistry.dead(PathId.MAIN, "ответа не дождались")
-        assertEquals("Ищу путь", headline(chosen = null))
+        assertEquals("Поиск пути", headline(chosen = null))
     }
 
     // ------------------------------------------------------ «меряем» против «связи нет»

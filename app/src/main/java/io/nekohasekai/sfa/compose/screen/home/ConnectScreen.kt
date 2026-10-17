@@ -390,7 +390,7 @@ private fun ColumnScope.StepDone(onDone: () -> Unit) {
     StepHeader(
         icon = Icons.Outlined.CheckCircle,
         title = "Готово",
-        text = "Сеть включена и будет включаться сама.\nБольше сюда заходить не нужно.",
+        text = "Сеть подключена.\nПодключение включается автоматически.",
     )
     Spacer(Modifier.weight(1f))
     KButton(text = "Открыть", onClick = onDone)
