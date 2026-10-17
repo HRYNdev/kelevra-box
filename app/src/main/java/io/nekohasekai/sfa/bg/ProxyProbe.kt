@@ -28,6 +28,12 @@ object ProxyProbe {
 
         /** Канал трафик не несёт. [reason] — словами, для лога. */
         data class Dead(val reason: String) : Result
+
+        /**
+         * Замер не состоялся: наш же вход не принял соединение (ядро пересобрано, порт из прошлой
+         * его жизни) или мерить нечем. Про канал это не говорит ничего — ни «жив», ни «мёртв».
+         */
+        data class Unmeasured(val reason: String) : Result
     }
 
     @Suppress("UNUSED_PARAMETER")
@@ -40,8 +46,9 @@ object ProxyProbe {
         val measurement = HonestProbe.measure(proxy, "основной канал", timeoutMillis)
         return when {
             measurement.live -> Result.Live(measurement.latencyMs ?: 0L)
-            // «Не проверено» тоже не «живо»: пусть звонящий скорее лишний раз перепроверит,
-            // чем поверит в канал, которого никто не спрашивал.
+            // «Не проверено» — не «живо», но и не «мёртв»: живым его не считает никто, а смертью
+            // узла оно не засчитывается (вход из прошлой жизни ядра узла не касается).
+            !measurement.measured || measurement.reason == HonestProbe.ENTRY_REFUSED -> Result.Unmeasured(measurement.reason)
             else -> Result.Dead(measurement.reason)
         }
     }
@@ -50,6 +57,7 @@ object ProxyProbe {
         when (result) {
             is Result.Live -> Log.i(TAG, "$where: трафик идёт, ответ за ${result.latencyMs} мс")
             is Result.Dead -> Log.i(TAG, "$where: трафика нет — ${result.reason}")
+            is Result.Unmeasured -> Log.i(TAG, "$where: замер не состоялся — ${result.reason}")
         }
     }
 }

@@ -554,8 +554,18 @@ object AutoMode {
     @Volatile
     private var nodeIndex = 0
 
-    /** С какого захода (elapsedRealtime) первый узел снова жив, пока мы на запасном; 0 — не жив. */
-    private var primaryOkSince = 0L
+    /**
+     * Сторож очереди узлов: когда провал узла считается смертью и когда пора вернуться на
+     * первый ([AutoModeNodeWatch]). Окно смены сети, подтверждение, пауза возврата — там.
+     */
+    private val nodeWatch = AutoModeNodeWatch()
+
+    /**
+     * Что сказал о каждом узле разовый опрос путей сервиса ([nodeMeasured]): тег → (когда, жив ли).
+     * Нужен ровно для одного: не вставать на узел, который свежий замер назвал мёртвым, когда
+     * своей пробой его канал проверить нечем.
+     */
+    private val nodeMeasurements = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Boolean>>()
 
     /** Сеть сменилась — следующее наблюдение принимаем без подтверждений. */
     @Volatile
@@ -858,7 +868,10 @@ object AutoMode {
                 ?: AutoModeExits.Layout.EMPTY
             layout = baseLayout
             nodeIndex = 0
-            primaryOkSince = 0L
+            // Новый подъём — очередь с первого узла, окно смены сети с нуля: что было до
+            // остановки, про эту сеть не говорит ничего.
+            nodeWatch.reset(SystemClock.elapsedRealtime())
+            nodeMeasurements.clear()
             gate.reset(initial)
             // На чьей сети стоит начальная обстановка, мы ещё не знаем — узнаем первым
             // же заходом. До того держать вердикт на молчании не на чем ([holdsVerdict]).
@@ -974,6 +987,8 @@ object AutoMode {
         lastValidated = nowValidated
         lastNetworkKey = nowKey
         networkChanged = true
+        // Окно смены сети: пока оно идёт, провал узла — провал сети, на запасной не уходим.
+        nodeWatch.networkChanged(SystemClock.elapsedRealtime())
         if (onlyResolvers) {
             Log.i(TAG, "сеть та же, но резолверы сменились: ${describe(network)} — перепроверяю")
         } else {
@@ -1172,6 +1187,8 @@ object AutoMode {
         silentHoldAt = 0L
         mainFailures = 0
         PathRegistry.reset()
+        // Автомат снова сам — и начинает с первого узла очереди, как при новом подъёме.
+        resetQueue("ручной выбор отпущен")
         link = Link.Unknown
         publish(true, Situation.Unknown)
     }
@@ -1769,7 +1786,9 @@ object AutoMode {
 
             else -> {
                 if (nodeIndex != 0) maybeReturnToPrimary(network, host)
-                mainWorks(network, host, inRoom = inRoom) || switchToReserve(network, host)
+                val works = mainWorks(network, host, inRoom = inRoom)
+                if (works) nodeWatch.nodeAlive()
+                works || reserveIfDead(network, host)
             }
         }
         if (home || main) {
@@ -2061,6 +2080,11 @@ object AutoMode {
                 // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
                 // следующей смены обстановки — то есть ровно то, чего дом и избегает.
                 if (host.suspendTunnel("дома обход делает роутер")) selected = null
+                // Туннеля дома нет, и запасной узел, выбранный до дома, ничего не значит: из дома
+                // выходим с первого узла очереди. Раньше очередь сбрасывал только [start], а
+                // возврат ([maybeReturnToPrimary]) дома не идёт — и «Финляндия», выбранная за
+                // секунды мигания вайфая 17.10.2026 в 22:44, пережила весь вечер дома.
+                if (queueIndexAfter(situation, nodeIndex) == 0) resetQueue("дома туннель не нужен")
             }
 
             Situation.Main -> {
@@ -2883,11 +2907,17 @@ object AutoMode {
     /**
      * Соединения через узел отказывают ([CoreLog.otkazUzla]) — проверить узел сейчас. Только когда
      * есть куда уйти (в очереди больше одного узла) и стоим на основном канале: дальше решает заход —
-     * [mainWorks] подтверждает смерть, [switchToReserve] ведёт на следующий узел.
+     * [mainWorks] меряет узел, [reserveIfDead] засчитывает живые отказы как подтверждение смерти
+     * (если они случились на устоявшейся сети) и ведёт на следующий узел.
      */
     fun otkazyUzla(teg: String) {
-        if (!active || baseLayout.nodes.size < 2 || gate.current != Situation.Main || manualExit != null) return
+        if (!active) return
         val now = SystemClock.elapsedRealtime()
+        // Отметку ставим всегда: это довод «узел умер по живым соединениям» для [reserveIfDead].
+        // Засчитается он, только если отказы пришли уже на устоявшейся сети ([AutoModeNodeWatch]).
+        // Ядро пишет отказ по конечному выходу («Нидерланды · XHTTP»), а считаем мы узлы.
+        nodeWatch.liveFailures(baseLayout.nodeOf(teg) ?: teg, now)
+        if (baseLayout.nodes.size < 2 || gate.current != Situation.Main || manualExit != null) return
         if (uzelBudilAt != 0L && now - uzelBudilAt < UZEL_BUDIT_MILLIS) return
         uzelBudilAt = now
         Log.i(TAG, "соединения через «$teg» отказывают — проверяю узел сейчас, не дожидаясь захода")
@@ -3071,46 +3101,141 @@ object AutoMode {
     // ---------- очередь узлов (решение 17.10.2026: действует телефон, порядок задаёт сервер) ----------
 
     /** Вернуться на первый узел, только если он жив столько подряд (два захода с промежутком). */
-    internal const val RETURN_AFTER_MILLIS = 4 * 60_000L
+    internal const val RETURN_AFTER_MILLIS = AutoModeNodeWatch.RETURN_AFTER_MILLIS
+
+    /** Сколько замер разового опроса путей ([nodeMeasured]) считается свежим. */
+    internal const val NODE_MEASUREMENT_FRESH_MILLIS = 30_000L
+
+    /** Что показала проба узла очереди в этом заходе. */
+    enum class NodeCheck {
+        /** Через закреплённый вход узла прошёл запрос. */
+        Live,
+
+        /** Адрес молчит или запрос через вход не прошёл. */
+        Dead,
+
+        /** Адрес отвечает, а канал целиком проверить нечем (нет входа, туннель погашен). */
+        ByAddress,
+
+        /** Замер не состоялся: вход из прошлой жизни ядра, проба не смогла спросить. */
+        Unmeasured,
+    }
+
+    /**
+     * Можно ли встать на узел по пробе этого захода. Только на живой — или на отвечающий по адресу,
+     * когда канал проверить нечем и свежий замер опроса путей не называл его мёртвым. Мёртвый и
+     * непроверенный — нет: 17.10.2026 в 23:54 выход переключили на «Финляндию» в ту же секунду,
+     * когда опрос путей написал про неё «мёртв».
+     *
+     * @param measuredDeadRecently свежий замер опроса путей ([nodeMeasured]) назвал узел мёртвым.
+     */
+    internal fun mayStandOn(check: NodeCheck, measuredDeadRecently: Boolean): Boolean = when (check) {
+        NodeCheck.Live -> true
+        NodeCheck.ByAddress -> !measuredDeadRecently
+        NodeCheck.Dead, NodeCheck.Unmeasured -> false
+    }
 
     /**
      * Жив ли узел очереди [tag], не трогая выбор: адрес принимает соединение и через его
      * закреплённый вход ([AutoModeExits.Layout.probeEntries]) проходит запрос. Закреплённого
-     * входа нет (правка конфига не легла) — судим по адресу: переставлять селектор ради пробы
-     * значит рвать живые соединения, а основной после перехода всё равно проверит заход.
+     * входа нет (правка конфига не легла) или туннель погашен — судим по адресу
+     * ([NodeCheck.ByAddress]): переставлять селектор ради пробы значит рвать живые соединения.
      */
-    private fun nodeAlive(network: Network, host: Host, tag: String): Boolean {
+    private fun checkNode(network: Network, host: Host, tag: String): NodeCheck {
         val endpoints = baseLayout.nodeEndpoints[tag].orEmpty()
         if (endpoints.isEmpty() || !anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS)) {
             Log.i(TAG, "узел «$tag»: ни один адрес не отвечает")
-            return false
+            return NodeCheck.Dead
         }
         val entry = baseLayout.probeEntries[tag]
         if (entry == null || !host.tunnelLive()) {
-            Log.i(TAG, "узел «$tag»: адрес отвечает, канал целиком проверить нечем — считаю живым по адресу")
-            return true
+            Log.i(TAG, "узел «$tag»: адрес отвечает, канал целиком проверить нечем — по адресу жив")
+            return NodeCheck.ByAddress
         }
         val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
         ProxyProbe.log("узел «$tag»", result)
-        return result is ProxyProbe.Result.Live
+        return when (result) {
+            is ProxyProbe.Result.Live -> NodeCheck.Live
+            is ProxyProbe.Result.Dead -> NodeCheck.Dead
+            is ProxyProbe.Result.Unmeasured -> NodeCheck.Unmeasured
+        }
+    }
+
+    /** Свежий замер опроса путей назвал узел мёртвым. */
+    private fun measuredDeadRecently(tag: String): Boolean {
+        val (at, live) = nodeMeasurements[tag] ?: return false
+        return !live && SystemClock.elapsedRealtime() - at in 0..NODE_MEASUREMENT_FRESH_MILLIS
     }
 
     /**
-     * Текущий узел признан мёртвым ([mainWorks] уже подтвердил: молчание дважды или проба не прошла) —
-     * идём по очереди узлов, начиная с первого, и встаём на первый живой. Ни один не ответил —
-     * false, и дальше всё как раньше: провал основного, пробный подъём комнаты.
+     * Замер узла от разового опроса путей сервиса ([BoxService.checkPathsHonestly]). Реестр путей
+     * помнит только текущий узел, поэтому замеры остальных узлов очереди приходят сюда.
+     *
+     * @return true — это узел очереди, замер принят; false — такого узла нет.
      */
-    private fun switchToReserve(network: Network, host: Host): Boolean {
+    fun nodeMeasured(tag: String, live: Boolean, measured: Boolean): Boolean {
+        if (tag !in baseLayout.nodes) return false
+        if (measured) nodeMeasurements[tag] = SystemClock.elapsedRealtime() to live
+        return true
+    }
+
+    /**
+     * Текущий узел не ответил ([mainWorks]). Уходим на запасной, только если это смерть узла, а не
+     * сети ([AutoModeNodeWatch.nodeDead]): в окно смены сети — никогда, на устоявшейся сети — после
+     * второго провала через паузу или сразу, если соединения через узел уже массово отказывают.
+     */
+    private fun reserveIfDead(network: Network, host: Host): Boolean {
+        if (baseLayout.nodes.size < 2) return false
+        val tag = layout.main ?: return false
+        val now = SystemClock.elapsedRealtime()
+        val death = nodeWatch.nodeDead(tag, now, validated(network))
+        when (death) {
+            AutoModeNodeWatch.Death.Window -> {
+                Log.i(TAG, "узел «$tag» не ответил, но сеть только что сменилась — это не довод, на запасной не ухожу")
+                return false
+            }
+            AutoModeNodeWatch.Death.FirstMiss -> {
+                Log.i(
+                    TAG,
+                    "узел «$tag» не ответил на рабочей сети — перепроверю не раньше чем через " +
+                        "${AutoModeNodeWatch.CONFIRM_MILLIS / 1000} с, до того на запасной не ухожу",
+                )
+                return false
+            }
+            AutoModeNodeWatch.Death.Confirmed, AutoModeNodeWatch.Death.ConfirmedByLive -> Unit
+        }
+        val why = if (death == AutoModeNodeWatch.Death.ConfirmedByLive) {
+            "узел «$tag» не отвечает, соединения через него отказывают"
+        } else {
+            "узел «$tag» не отвечает второй раз подряд"
+        }
+        return switchToReserve(network, host, why)
+    }
+
+    /**
+     * Смерть текущего узла подтверждена — идём по очереди узлов, начиная с первого, и встаём на
+     * первый, на который можно встать ([mayStandOn]). Ни один не годится — false, и дальше всё как
+     * раньше: провал основного, пробный подъём комнаты.
+     */
+    private fun switchToReserve(network: Network, host: Host, why: String): Boolean {
         val nodes = baseLayout.nodes
         if (nodes.size < 2) return false
         for (idx in nodes.indices) {
             if (idx == nodeIndex) continue
-            if (nodeAlive(network, host, nodes[idx])) {
-                selectNode(host, idx, "узел «${layout.main}» не отвечает")
+            val tag = nodes[idx]
+            val check = checkNode(network, host, tag)
+            val deadRecently = measuredDeadRecently(tag)
+            if (mayStandOn(check, deadRecently)) {
+                selectNode(host, idx, why)
                 return true
             }
+            if (check == NodeCheck.ByAddress && deadRecently) {
+                Log.i(TAG, "узел «$tag» отвечает по адресу, но опрос путей только что назвал его мёртвым — не встаю")
+            } else if (check == NodeCheck.Unmeasured) {
+                Log.i(TAG, "узел «$tag»: замер не состоялся — не встаю на непроверенный")
+            }
         }
-        Log.i(TAG, "ни один узел очереди ${nodes} не отвечает")
+        Log.i(TAG, "ни один узел очереди ${nodes} не отвечает ($why)")
         return false
     }
 
@@ -3121,17 +3246,45 @@ object AutoMode {
     private fun maybeReturnToPrimary(network: Network, host: Host) {
         val primary = baseLayout.nodes.firstOrNull() ?: return
         val now = SystemClock.elapsedRealtime()
-        if (!nodeAlive(network, host, primary)) {
-            primaryOkSince = 0L
+        // Возвращаемся только на проверенный канал: «по адресу» — не довод для перехода.
+        if (checkNode(network, host, primary) != NodeCheck.Live) {
+            nodeWatch.primaryDead()
             return
         }
-        if (primaryOkSince == 0L) {
-            primaryOkSince = now
-            Log.i(TAG, "первый узел «$primary» снова отвечает — вернусь, если продержится ${RETURN_AFTER_MILLIS / 60_000} мин")
-            return
+        when (nodeWatch.primaryAlive(now)) {
+            AutoModeNodeWatch.Return.Started -> Log.i(
+                TAG,
+                "первый узел «$primary» снова отвечает — вернусь, если продержится ${RETURN_AFTER_MILLIS / 60_000} мин",
+            )
+            AutoModeNodeWatch.Return.Waiting -> Unit
+            AutoModeNodeWatch.Return.Due ->
+                selectNode(host, 0, "первый узел «$primary» жив ${nodeWatch.primaryOkFor(now) / 1000} с")
         }
-        if (now - primaryOkSince < RETURN_AFTER_MILLIS) return
-        selectNode(host, 0, "первый узел «$primary» жив ${(now - primaryOkSince) / 1000} с")
+    }
+
+    /**
+     * На каком узле очереди стоять после того, как автомат встал на обстановку [situation]. Дома
+     * туннеля нет — и очередь с первого узла: уход из дома — такой же новый подъём, как [start].
+     * В остальных обстановках узел прежний: возвращает на первый только пауза
+     * ([maybeReturnToPrimary]), а сама смена сети узел не меняет вовсе.
+     */
+    internal fun queueIndexAfter(situation: Situation, nodeIndex: Int): Int =
+        if (situation == Situation.Home) 0 else nodeIndex
+
+    /**
+     * Очередь — снова с первого узла: дома (туннеля нет), ручной выбор отпущен. Выход в ядре не
+     * трогаем: туннель дома погашен, а при подъёме обстановка «основной канал» сама выставит
+     * [layout].main.
+     */
+    private fun resetQueue(why: String) {
+        nodeWatch.queueReset()
+        if (nodeIndex == 0) return
+        val was = layout.main
+        nodeIndex = 0
+        layout = baseLayout
+        portSilentAt = 0L
+        PathRegistry.bindExits(main = layout.main, room = layout.room)
+        Log.i(TAG, "очередь узлов снова с первого: «$was» → «${layout.main}» ($why)")
     }
 
     /** Встать на узел очереди [idx]: весь автомат дальше считает основным его. */
@@ -3140,7 +3293,7 @@ object AutoMode {
         val was = layout.main
         nodeIndex = idx
         layout = baseLayout.forNode(tag)
-        primaryOkSince = 0L
+        nodeWatch.switched()
         portSilentAt = 0L
         PathRegistry.bindExits(main = layout.main, room = layout.room)
         // Узел только что проверен ([nodeAlive]) — иначе экран до следующего захода показывал бы
@@ -3196,7 +3349,8 @@ object AutoMode {
                 PathRegistry.alive(PathId.MAIN, probe.latencyMs)
             }
             is ProxyProbe.Result.Dead -> PathRegistry.dead(PathId.MAIN, probe.reason)
-            null -> when (portOpen) {
+            // Замер не состоялся (вход из прошлой жизни ядра) — пишем то, что сказал адрес.
+            is ProxyProbe.Result.Unmeasured, null -> when (portOpen) {
                 false -> PathRegistry.dead(PathId.MAIN, "адрес узла не отвечает", Evidence.Hint)
                 true -> PathRegistry.alive(PathId.MAIN, evidence = Evidence.Hint)
                 // Раскладку не поняли: отказ не выдумываем, но и замером это не назовёшь.
@@ -3277,7 +3431,7 @@ object AutoMode {
      * раньше утверждал обратное («существующие соединения селектор не рвёт») и потому
      * дефект жил.
      */
-    private fun probeThroughMain(host: Host, proxy: AutoModeExits.Endpoint): Boolean {
+    private fun probeThroughMain(host: Host, proxy: AutoModeExits.Endpoint): Boolean? {
         val group = layout.chooser
         val main = layout.main
 
@@ -3304,6 +3458,9 @@ object AutoMode {
         // выносится выше и от записи не зависит.
         lastMainProbe = result
         val alive = result is ProxyProbe.Result.Live
+        // Наш же вход не принял соединение — ядро пересобрали посреди пробы. Про канал это не
+        // говорит ничего: вердикт за адресом узла, как когда пробы не было вовсе.
+        val unmeasured = result is ProxyProbe.Result.Unmeasured
         // Через канал прошёл запрос и вернулся ответ — под белым списком такого не бывает
         // вовсе. Подсказку об обратном опровергаем делом, а не ждём её старости.
         if (alive) nodeAnswered("через основной канал прошёл запрос")
@@ -3316,7 +3473,7 @@ object AutoMode {
                 }
                 .onFailure { Log.w(TAG, "выход вернуть на «$restore» не вышло: ${it.message}") }
         }
-        return alive
+        return if (unmeasured) null else alive
     }
 
     /**
@@ -3445,10 +3602,12 @@ object AutoMode {
         honestPeekAt = now
 
         lastMainProbe = null
-        val alive = probeThroughMain(host, proxy)
+        val measured = probeThroughMain(host, proxy)
+        val alive = measured == true
         // Замер настоящий и ровно про основной путь — в реестр он ложится так же, как из
         // полного захода: иначе экран все три минуты держал бы запись прошлого захода.
-        noteMain(alive, portOpen = null)
+        // Не состоялся (вход из прошлой жизни ядра) — писать нечего.
+        if (measured != null) noteMain(alive, portOpen = null)
         refreshLink()
         if (!alive) return false
         Log.i(TAG, "приглядка из комнаты: основной путь ответил на честную пробу — проверяю обстановку целиком")

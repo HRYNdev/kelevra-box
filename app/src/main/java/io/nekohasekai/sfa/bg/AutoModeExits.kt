@@ -64,7 +64,16 @@ object AutoModeExits {
         val nodeEndpoints: Map<String, List<Endpoint>> = emptyMap(),
         /** Общий вход (смотрит туда же, куда селектор) — на случай, когда у узла нет своего. */
         val sharedProxy: Endpoint? = null,
+        /**
+         * Конечные выходы каждого узла очереди (`Нидерланды · XHTTP` у группы `Нидерланды`):
+         * ядро пишет отказ соединения по конечному выходу, а автомату нужен узел.
+         */
+        val nodeOutbounds: Map<String, List<String>> = emptyMap(),
     ) {
+        /** Узел очереди, к которому относится выход [tag] (сам узел или его конечный выход). */
+        fun nodeOf(tag: String): String? =
+            tag.takeIf { it in nodes } ?: nodeOutbounds.entries.firstOrNull { tag in it.value }?.key
+
         /** Есть ли вообще между чем переключать. */
         val canSwitch: Boolean get() = chooser != null && room != null && main != null
 
@@ -167,6 +176,7 @@ object AutoModeExits {
             }).distinct()
         } ?: listOfNotNull(main)
         val nodeEndpoints = nodes.associateWith { endpointsOf(it, byTag, mutableSetOf()) }
+        val nodeOutbounds = nodes.associateWith { leavesOf(it, byTag, mutableSetOf()) }
 
         // Мерить по отдельности имеет смысл ровно те пути, которые есть кому запомнить,
         // а помнит их [io.nekohasekai.sfa.bg.path.PathRegistry], и путей у него три.
@@ -204,6 +214,7 @@ object AutoModeExits {
             nodes = nodes,
             nodeEndpoints = nodeEndpoints,
             sharedProxy = localProxy(root, socksPort),
+            nodeOutbounds = nodeOutbounds,
         )
     }
 
@@ -301,6 +312,15 @@ object AutoModeExits {
         val nested = members(outbound)
         if (nested.isNotEmpty()) return nested.flatMap { endpointsOf(it, byTag, seen) }
         return listOfNotNull(endpointOf(outbound))
+    }
+
+    /** Конечные выходы под [tag] (группы разворачиваются вглубь, кольцо держит [seen]). */
+    private fun leavesOf(tag: String, byTag: Map<String, JSONObject>, seen: MutableSet<String>): List<String> {
+        if (!seen.add(tag)) return emptyList()
+        val outbound = byTag[tag] ?: return emptyList()
+        val nested = members(outbound)
+        if (nested.isEmpty()) return listOf(tag)
+        return nested.flatMap { leavesOf(it, byTag, seen) }
     }
 
     /** Запасной вариант: раскладку не поняли — стучимся во все чужие адреса из конфига. */
