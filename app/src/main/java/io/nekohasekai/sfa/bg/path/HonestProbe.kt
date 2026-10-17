@@ -142,6 +142,13 @@ object HonestProbe {
         }
     }
 
+    /**
+     * Причина отказа, когда наш же локальный вход не принял соединение. Про путь она не говорит
+     * ничего: так выглядит вход из прошлой жизни ядра, которое пересобрали посреди замера
+     * (17.10.2026: «Финляндия» через 127.0.0.1:39985 «мёртв» — ядро в эту секунду уже слушало 42785).
+     */
+    const val ENTRY_REFUSED = "локальный вход не отвечает"
+
     /** Пробы идут по одной: параллельная пачка запросов и заметна, и мешает сама себе. */
     private val turn = ReentrantLock()
 
@@ -283,7 +290,7 @@ object HonestProbe {
             Measurement.dead(
                 when (t) {
                     is SocketTimeoutException -> "ответа не дождались за $timeoutMillis мс"
-                    is ConnectException -> "локальный вход не отвечает"
+                    is ConnectException -> ENTRY_REFUSED
                     else -> t.message?.takeIf { it.isNotBlank() } ?: t.javaClass.simpleName
                 },
                 facts,
