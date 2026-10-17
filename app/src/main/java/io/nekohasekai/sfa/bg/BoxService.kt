@@ -772,8 +772,29 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // проверки связи в трафике теряются, ifconfig.me нет.
                 val measurement = HonestProbe.measure(entry, exit)
                 Log.i(TAG, "путь «$exit»: $measurement")
+                // Ядро могли пересобрать посреди опроса (подъём туннеля → отменённая комната →
+                // пересборка, 17.10.2026 23:54: две за 0,3 с), и тогда вход из прошлой его жизни
+                // молчит про путь, а не за него: «Финляндия … мёртв — локальный вход не отвечает»
+                // при живой Финляндии. Такой замер никуда не пишем.
+                val nowEntry = runningConfig?.let { AutoModeExits.probeEntries(it)[exit] }
+                if (nowEntry != entry) {
+                    Log.i(TAG, "путь «$exit»: ядро пересобрано во время опроса (вход ${entry.port} → ${nowEntry?.port}) — замер устарел, не пишу")
+                    continue
+                }
                 val id = PathRegistry.snapshot.value.byExit(exit)?.def?.id
                 if (id == null) {
+                    // Реестр помнит только узел, на котором стоим; остальные узлы очереди помнит
+                    // автомат — ему этот замер и нужен, чтобы не встать на мёртвый узел.
+                    if (AutoMode.nodeMeasured(
+                            exit,
+                            live = measurement.live,
+                            // Вход не принял соединение — это про наше ядро, а не про узел.
+                            measured = measurement.measured && measurement.reason != HonestProbe.ENTRY_REFUSED,
+                        )) {
+                        Log.i(TAG, "путь «$exit»: другой узел очереди — замер отдал автомату")
+                        if (measurement.live && liveEntry == null) liveEntry = entry
+                        continue
+                    }
                     // Сюда попадать больше нечему: мерим ровно те выходы, которые реестр
                     // умеет помнить (см. [AutoModeExits.Layout.measurable]). Проверка
                     // остаётся сторожем — потраченная наружу проба, которую некуда
