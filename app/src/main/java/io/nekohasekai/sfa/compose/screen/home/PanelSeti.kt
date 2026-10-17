@@ -64,10 +64,10 @@ suspend fun propuskPaneli(): PanelSostoyanie = withContext(Dispatchers.IO) {
     runCatching {
         val profil = ProfileManager.get(Settings.selectedProfile)
             ?: return@runCatching PanelSostoyanie.Oshibka("Профиль не выбран")
-        if (profil.typed.type != TypedProfile.Type.Remote) return@runCatching PanelSostoyanie.Oshibka("Профиль не из сети")
+        if (profil.typed.type != TypedProfile.Type.Remote) return@runCatching PanelSostoyanie.Oshibka("Профиль не принадлежит сети")
         val p = SubscriptionLink.parse(profil.typed.remoteURL)
         if (p == null || p.kind != 'u') {
-            return@runCatching PanelSostoyanie.Oshibka("Панель открывается с профиля, подключённого по коду")
+            return@runCatching PanelSostoyanie.Oshibka("Панель доступна только для профиля, подключённого по коду")
         }
         val conn = URL(Kelevra.adresSeti("https://${p.host}/panel/api/v1/vhod/ustroystvo")).openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
@@ -85,11 +85,11 @@ suspend fun propuskPaneli(): PanelSostoyanie = withContext(Dispatchers.IO) {
         val ssylka = json?.optString("ssylka").orEmpty()
         when {
             kod in 200..299 && ssylka.startsWith("https://") -> PanelSostoyanie.Gotovo(ssylka)
-            kod == 403 -> PanelSostoyanie.Oshibka("Этому устройству панель не положена")
-            kod in 500..599 -> PanelSostoyanie.Oshibka("Мозг сети сейчас недоступен — связь при этом работает")
-            else -> PanelSostoyanie.Oshibka(json?.optString("oshibka")?.takeIf { it.isNotBlank() } ?: "Панель ответила $kod")
+            kod == 403 -> PanelSostoyanie.Oshibka("Нет доступа к панели с этого устройства")
+            kod in 500..599 -> PanelSostoyanie.Oshibka("Панель недоступна")
+            else -> PanelSostoyanie.Oshibka(json?.optString("oshibka")?.takeIf { it.isNotBlank() } ?: "Ошибка запроса · $kod")
         }
-    }.getOrElse { PanelSostoyanie.Oshibka("Нет связи с сетью: ${it.javaClass.simpleName}") }
+    }.getOrElse { PanelSostoyanie.Oshibka("Нет связи с панелью: ${it.javaClass.simpleName}") }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -113,7 +113,7 @@ fun PanelSetiScreen(onBack: () -> Unit) {
         // (иначе в «Новом человеке» кнопка «Создать» под клавишами).
         Box(Modifier.fillMaxWidth().weight(1f).imePadding(), contentAlignment = Alignment.Center) {
             when (val s = sost) {
-                PanelSostoyanie.Zhdem -> Podpis("Открываю панель…")
+                PanelSostoyanie.Zhdem -> Podpis("Загрузка панели…")
                 is PanelSostoyanie.Oshibka -> Podpis(s.tekst)
                 is PanelSostoyanie.Gotovo -> AndroidView(
                     // Без обрезки WebView рисует поверх шапки.
