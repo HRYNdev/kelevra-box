@@ -89,7 +89,7 @@ object PathWords {
         chosen == PathId.MAIN -> when (snapshot[PathId.MAIN].status) {
             PathStatus.Alive -> "Выход выбирается сам"
             PathStatus.Dead, PathStatus.Unavailable -> "Связи нет"
-            else -> "Проверяю связь"
+            else -> "Проверка связи"
         }
 
         !auto -> STARTED
@@ -98,9 +98,9 @@ object PathWords {
         // тоже отказал, либо его тут и быть не может (в соте дома нет). Раньше в этой
         // строке требовался именно отказ дома, и в мобильной сети, где дом больше не
         // спрашивается вовсе, «Ищу путь» пропадало в пользу «Проверяю связь».
-        snapshot[PathId.MAIN].refused && !snapshot[PathId.HOME].usable -> "Ищу путь"
+        snapshot[PathId.MAIN].refused && !snapshot[PathId.HOME].usable -> "Поиск пути"
 
-        else -> "Проверяю связь"
+        else -> "Проверка связи"
     }
 
     /**

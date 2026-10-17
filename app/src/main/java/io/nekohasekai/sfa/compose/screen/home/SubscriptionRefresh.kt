@@ -218,7 +218,7 @@ object SubscriptionRefresh {
             // Говорим ровно то, что произошло: обещать «уже работает» выключенному ядру нельзя.
             val note = when {
                 !changed -> "Готово. Настройки не менялись."
-                reloaded -> "Готово. Изменения уже действуют."
+                reloaded -> "Изменения применены."
                 else -> "Готово. Изменения применятся при подключении."
             }
             _state.value = State.Ok(profile.typed.lastUpdated, note)

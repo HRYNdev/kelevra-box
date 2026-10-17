@@ -276,18 +276,18 @@ fun HomeScreen(
             state = state,
             title = when {
                 !hasProfile -> vid.tekst("podklyuchit", "Подключить")
-                busy && serviceStatus == Status.Starting -> "Подключаюсь"
+                busy && serviceStatus == Status.Starting -> "Подключение"
                 busy -> "Отключаюсь"
                 home -> "Дома"
                 noNetwork -> "Нет сети"
-                searching -> "Ищу путь"
+                searching -> "Поиск пути"
                 roomRising -> "Поднимаю комнату"
                 // Короткое слово: «Комната не отвечает» вылезало за обод круга.
                 roomDead -> "Комната молчит"
                 squeezed -> "Медленно"
                 linkDead -> "Связи нет"
                 manualDead -> "Не отвечает"
-                measuring -> "Проверяю связь"
+                measuring -> "Проверка связи"
                 running -> vid.tekst("podklyucheno", "Подключено")
                 else -> vid.tekst("otklyucheno", "Отключено")
             },
@@ -305,7 +305,7 @@ fun HomeScreen(
                 // иначе он видит рабочий круг и не понимает, почему работает не всё.
                 running && rulesNote != null -> rulesNote
                 !hasProfile -> "нажмите, чтобы подключить"
-                busy -> "подождите"
+                busy -> ""
                 home -> "дома интернет и так открыт, туннель выключен"
                 noNetwork -> "включится, когда появится сеть"
                 searching -> "подбираю рабочий выход"
