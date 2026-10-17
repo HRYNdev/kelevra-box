@@ -581,7 +581,9 @@ fun SFANavHost(
             OOMReportFileContentScreen(navController = navController, reportId = reportId, fileKind = fileKind)
         }
 
-        composable("panel") {
+        // Под settings/: маршрут вне известных главному экрану уводится на «Сеть» и ломает вкладку «Настройки»
+        // (MainActivity: allowedRoutes, проверено на телефоне 17.10).
+        composable("settings/panel") {
             io.nekohasekai.sfa.compose.screen.home.PanelSetiScreen(onBack = { navController.popBackStack() })
         }
         composable(Screen.Settings.route) {
@@ -601,7 +603,7 @@ fun SFANavHost(
             LaunchedEffect(Unit) { panel = io.nekohasekai.sfa.compose.screen.home.loadSubscription()?.panel == true }
             SimpleSettingsScreen(
                 panel = panel,
-                onPanel = { navController.navigate("panel") },
+                onPanel = { navController.navigate("settings/panel") },
                 autoStart = autoStart,
                 onAutoStartChange = {
                     autoStart = it
