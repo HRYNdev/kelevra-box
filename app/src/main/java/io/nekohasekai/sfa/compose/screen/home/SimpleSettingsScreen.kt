@@ -70,6 +70,9 @@ fun SimpleSettingsScreen(
     onAdvanced: () -> Unit,
     onComplaint: () -> Unit,
     onCheckUpdate: () -> Unit,
+    /** Устройство админа своей сети — пункт «Панель сети»; у остальных его нет вовсе. */
+    panel: Boolean = false,
+    onPanel: () -> Unit = {},
 
     обновлениеПодпись: String,
     отправкаЛоговПодпись: String,
@@ -177,6 +180,15 @@ fun SimpleSettingsScreen(
                     chevron = true,
                     onClick = onConnectByCode,
                 )
+                if (panel) {
+                    KDivider()
+                    KRowItem(
+                        title = "Панель сети",
+                        subtitle = "Люди, устройства, узлы и трафик",
+                        chevron = true,
+                        onClick = onPanel,
+                    )
+                }
             }
 
             Spacer(Modifier.height(18.dp))

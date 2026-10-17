@@ -42,6 +42,8 @@ data class SubscriptionInfo(
      * Старый сервер поля не присылает — тогда false, и всё работает как раньше.
      */
     val sendLogNow: Boolean = false,
+    /** Устройство админа своей сети: в настройках есть пункт «Панель сети» (см. PanelSeti.kt). */
+    val panel: Boolean = false,
     /**
      * Чьё это устройство и как оно называется — сервер узнаёт по X-Device-Id.
      *
@@ -208,6 +210,7 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
             olcrtc = json.optJSONObject("olcrtc"),
             wbchat = json.optJSONObject("wbchat"),
             sendLogNow = json.optBoolean("send_log_now"),
+            panel = json.optBoolean("panel"),
             vid = json.opt("vid"),
             reply = json.optJSONObject("reply")?.let { answer ->
                 val body = answer.optString("text")
