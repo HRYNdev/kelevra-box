@@ -651,7 +651,7 @@ fun SFANavHost(
                     }
                 },
                 обновлениеПодпись = when {
-                    обновлениеИдёт -> "Проверяю…"
+                    обновлениеИдёт -> "Проверка…"
                     обновлениеИтог.isNotBlank() -> обновлениеИтог
                     else -> "Сейчас ${io.nekohasekai.sfa.BuildConfig.VERSION_NAME}"
                 },
