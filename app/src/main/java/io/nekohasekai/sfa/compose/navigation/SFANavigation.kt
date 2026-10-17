@@ -148,6 +148,7 @@ fun SFANavHost(
                     onToggle = { onToggleService() },
                     onSelectChannel = { tag -> dashboardViewModel.selectChannel(tag) },
                     onConnect = { navController.navigate("connect") },
+                    onOpenPanel = { navController.navigate("settings/panel") },
                 )
             } else {
                 Unit
