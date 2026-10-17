@@ -439,7 +439,10 @@ object OlcRtcWatchdog {
 
         val result = runCatching {
             val params = OlcRtcParams.resolve()
-            OlcRtcCore.start(params, protector, requireProtector)
+            OlcRtcCore.start(
+                params, protector, requireProtector,
+                stillNeeded = { active && runCatching { roomNeeded() }.getOrDefault(false) },
+            )
         }.getOrElse { OlcRtcCore.State.Failed(it.message ?: it.javaClass.simpleName) }
         if (!active) return false
 

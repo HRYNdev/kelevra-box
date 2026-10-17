@@ -138,4 +138,29 @@ class WbChatPatchTest {
         assertEquals(WbChatWatchdog.SLOW_PAUSE_MILLIS, WbChatWatchdog.pauseAfter(3))
         assertEquals(WbChatWatchdog.SLOW_PAUSE_MILLIS, WbChatWatchdog.pauseAfter(10))
     }
+
+    @Test
+    fun `каждый резолвер ядра WB идёт мимо tun`() {
+        WbChatConfigPatch.DNS.split(",").map { it.substringBefore(":") + "/32" }.forEach {
+            org.junit.Assert.assertTrue("$it не исключён из tun", it in WbChatConfigPatch.TUN_EXCLUDE)
+        }
+    }
+
+    @Test
+    fun `tcp_cc принимается только как reno`() {
+        org.junit.Assert.assertEquals("reno", WbChatParams.tcpCcFrom("reno"))
+        org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom(null))
+        org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom(""))
+        org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom("cubic"))
+        org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom("Reno"))
+        org.junit.Assert.assertEquals("", WbChatParams.tcpCcFrom("reno "))
+    }
+
+    @Test
+    fun `ядро WB - мультиплексор включён, FEC выключен, DNS на месте`() {
+        assertEquals("--stream-mux", WbChatCore.ARG_STREAM_MUX)
+        val env = WbChatCore.fixedEnv()
+        assertEquals("0", env["WBCHAT_FEC"])
+        assertEquals(WbChatConfigPatch.DNS, env["OPENFLUX_DNS"])
+    }
 }

@@ -188,25 +188,59 @@ object OlcRtcCore {
         params: Params,
         protector: ((Int) -> Boolean)?,
         requireProtector: Boolean,
+        stillNeeded: () -> Boolean = { true },
     ): State {
         val attempts = params.attempts.coerceAtLeast(1)
         var last: State = State.Idle
         for (attempt in 1..attempts) {
-            last = startOnce(params, protector, requireProtector, attempt, attempts)
+            // 16.10.2026 на улице: сервис остановили в 13:21:09, а попытки 2 и 3 шли в 13:21:14
+            // и 13:22:04 — комнату поднимали уже никому не нужную. Смотрим перед каждой попыткой.
+            if (!stillNeeded()) return cancelled()
+            last = startOnce(params, protector, requireProtector, attempt, attempts, stillNeeded)
             if (last is State.Ready) return last
             // Причина не в комнате, а в самой сборке или параметрах — повтор ничего не даст.
             if (last is State.Unavailable || last is State.Failed && isPermanent(last.reason)) return last
             if (attempt < attempts) {
                 Log.i(TAG, "попытка $attempt из $attempts не удалась (${lastError}), ждём ${params.retryPauseMillis} мс")
-                runCatching { Thread.sleep(params.retryPauseMillis) }
+                if (!sleepWhileNeeded(params.retryPauseMillis, stillNeeded)) return cancelled()
             }
         }
         return last
     }
 
+    /** Подъём остановлен снаружи: комната больше не нужна. */
+    const val CANCELLED_REASON = "подъём отменён: комната больше не нужна"
+
+    private fun cancelled(): State {
+        Log.i(TAG, "подъём комнаты прерван: она больше не нужна")
+        return failed(CANCELLED_REASON, unavailable = false)
+    }
+
+    /**
+     * Спит [millis], пока [stillNeeded]. Шаг мелкий: пауза между попытками — десятки секунд,
+     * и спать их целиком над остановленным сервисом незачем.
+     *
+     * @return `false`, если комната перестала быть нужна, не дождавшись конца паузы.
+     */
+    internal fun sleepWhileNeeded(millis: Long, stillNeeded: () -> Boolean, stepMillis: Long = 250L): Boolean {
+        var left = millis
+        while (left > 0) {
+            if (!stillNeeded()) return false
+            val step = minOf(stepMillis, left)
+            if (runCatching { Thread.sleep(step) }.isFailure) return stillNeeded()
+            left -= step
+        }
+        return stillNeeded()
+    }
+
     /** Отказы, которые повтором не лечатся: чинить надо параметры или сборку. */
-    private fun isPermanent(reason: String): Boolean =
-        reason.startsWith("не задан") || reason.startsWith("порт SOCKS") ||
+    internal fun isPermanent(reason: String): Boolean =
+        reason == CANCELLED_REASON ||
+            // Выхода нет в конференции: три попытки по 45 с его не вызовут (16.10.2026 на улице:
+            // «выход в конференции не найден» ×3 = 2 мин 15 с впустую). Паузу перед новой
+            // просьбой растит автомат ([AutoMode.nextTrialPause]).
+            reason.contains(TelemostCore.NO_EXIT_REASON) ||
+            reason.startsWith("не задан") || reason.startsWith("порт SOCKS") ||
             reason.startsWith("ядро собрано без") || reason.startsWith("нет protect") ||
             tokenOtvergnut(reason)
 
@@ -229,8 +263,9 @@ object OlcRtcCore {
         requireProtector: Boolean,
         attempt: Int,
         attempts: Int,
+        stillNeeded: () -> Boolean = { true },
     ): State {
-        if (params.telemost) return startTelemostOnce(params, attempt, attempts)
+        if (params.telemost) return startTelemostOnce(params, attempt, attempts, stillNeeded)
         // Сменили носитель с Телемоста на olcRTC — его процесс держит тот же порт SOCKS.
         if (TelemostCore.isRunning()) TelemostCore.stop()
         val mobile = mobileClass
@@ -329,7 +364,7 @@ object OlcRtcCore {
      * protect(fd) здесь не нужен и невозможен (чужой процесс): от петли через свой tun
      * держит вывод приложения из tun на время комнаты, см. [TelemostCore].
      */
-    private fun startTelemostOnce(params: Params, attempt: Int, attempts: Int): State {
+    private fun startTelemostOnce(params: Params, attempt: Int, attempts: Int, stillNeeded: () -> Boolean): State {
         val why = when {
             !TelemostCore.isAvailable -> "ядро собрано без Телемоста (нет клиента OpenFlux)"
             params.telemostUrl.isBlank() -> "не задана ссылка Телемоста"
@@ -351,6 +386,7 @@ object OlcRtcCore {
                 socksPort = params.socksPort,
                 stripes = params.telemostStripes,
                 stripesMax = params.telemostStripesMax,
+                stillNeeded = stillNeeded,
             )
         } catch (t: Throwable) {
             runCatching { TelemostCore.stop() }

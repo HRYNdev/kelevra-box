@@ -37,6 +37,16 @@ internal class SocksBreaker(
     }
 
     companion object {
+        /**
+         * Отказ в сокс «Комнаты WB», пока её ядро ещё поднимается (3-10 с): это окно подъёма,
+         * а не мёртвая комната. Предохранитель его не считает.
+         */
+        fun oknoPodemaWb(line: String, wbPort: Int, wbStarting: Boolean, selectorOnWb: Boolean = false): Boolean =
+            // Селектор уже на WB (перезапуск ядра до 60 с) — отказы в его сокс бьют по живому
+            // трафику человека, это не «окно подъёма», и предохранитель обязан их считать.
+            // Порт сравниваем с разделителем: «:88» не должен прикрывать «:8808».
+            wbStarting && !selectorOnWb && wbPort > 0 && line.contains("$LOOPBACK_DIAL$wbPort:")
+
         const val LOOPBACK_DIAL = "dial tcp 127.0.0.1:"
         const val REFUSED = "connection refused"
     }
