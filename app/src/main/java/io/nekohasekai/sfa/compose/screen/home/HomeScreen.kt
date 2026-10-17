@@ -97,7 +97,11 @@ fun badgeOf(name: String?): String? {
     return when {
         // У комнаты страны нет: несущая — чужой видеозвонок. Двухбуквенный огрызок
         // имени («КО») читался бы как код страны и врал бы.
-        isRoomExit(n) -> null
+        // Имя как есть: реестр хранит тег комнаты с заглавной, и строчное «комната» с ним
+        // не совпадало — комната получала огрызок «КО».
+        isRoomExit(name) -> null
+        // Раньше «nl»: в «finland» тоже есть «nl», и Финляндия получила бы NL.
+        n.contains("финлянд") || n.contains("finland") || n.contains("suomi") -> "FI"
         n.contains("нидерланд") || n.contains("netherl") || n.contains("nl") -> "NL"
         n.contains("герман") || n.contains("german") || n.contains("de") -> "DE"
         n.contains("екатеринб") || n.contains("дом") || n.contains("home") || n.contains("ru") -> "RU"
@@ -124,6 +128,7 @@ fun HomeScreen(
     onToggle: () -> Unit,
     onSelectChannel: (String) -> Unit,
     onConnect: () -> Unit,
+    onOpenPanel: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -271,18 +276,18 @@ fun HomeScreen(
             state = state,
             title = when {
                 !hasProfile -> vid.tekst("podklyuchit", "Подключить")
-                busy && serviceStatus == Status.Starting -> "Подключаюсь"
+                busy && serviceStatus == Status.Starting -> "Подключение"
                 busy -> "Отключаюсь"
                 home -> "Дома"
                 noNetwork -> "Нет сети"
-                searching -> "Ищу путь"
+                searching -> "Поиск пути"
                 roomRising -> "Поднимаю комнату"
                 // Короткое слово: «Комната не отвечает» вылезало за обод круга.
                 roomDead -> "Комната молчит"
                 squeezed -> "Медленно"
                 linkDead -> "Связи нет"
                 manualDead -> "Не отвечает"
-                measuring -> "Проверяю связь"
+                measuring -> "Проверка связи"
                 running -> vid.tekst("podklyucheno", "Подключено")
                 else -> vid.tekst("otklyucheno", "Отключено")
             },
@@ -300,7 +305,7 @@ fun HomeScreen(
                 // иначе он видит рабочий круг и не понимает, почему работает не всё.
                 running && rulesNote != null -> rulesNote
                 !hasProfile -> "нажмите, чтобы подключить"
-                busy -> "подождите"
+                busy -> ""
                 home -> "дома интернет и так открыт, туннель выключен"
                 noNetwork -> "включится, когда появится сеть"
                 searching -> "подбираю рабочий выход"
@@ -553,7 +558,7 @@ fun HomeScreen(
                         // Подсказка объясняет ровно эту строку, поэтому и живёт с ней.
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "так это устройство подписано на сервере",
+                            text = "имя устройства на сервере",
                             fontFamily = Montserrat,
                             fontSize = 12.sp,
                             color = colors.Dim,
@@ -574,11 +579,27 @@ fun HomeScreen(
                     if (devices.all { it.trafficBytes <= 0L }) {
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "прочерк — расход по устройствам сервер не считал",
+                            text = "прочерк — расход не учтён сервером",
                             fontFamily = Montserrat,
                             fontSize = 12.sp,
                             color = colors.Dim,
                             modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
+                // Панель своей сети — в «Подписке», как на компьютере (решение 17.10). Только
+                // устройству админа: сервер говорит это в сводке. В Настройках пункт тоже есть.
+                if (sub?.panel == true) {
+                    Spacer(Modifier.height(KDim.Gap))
+                    KCard {
+                        KRowItem(
+                            title = "Панель сети",
+                            subtitle = "Люди, устройства, узлы и трафик",
+                            chevron = true,
+                            onClick = {
+                                showSubscription = false
+                                onOpenPanel()
+                            },
                         )
                     }
                 }

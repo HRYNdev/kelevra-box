@@ -98,6 +98,27 @@ object AutoModeExits {
     }
 
     /**
+     * Список выходов для ручного выбора, вычитанный из конфига, — когда ядро молчит (дома
+     * автомат гасит туннель, первые секунды после включения). Порядок как в селекторе у
+     * сервера: все узлы очереди, затем комната, затем WB Chat ([wbTag], если он есть).
+     *
+     * Отмечен ровно один: комната, если выбрана она; иначе выход, выбранный руками
+     * ([manualExit]), если он есть в списке; иначе основной узел.
+     *
+     * @return пары «тег выхода — отмечен ли».
+     */
+    fun configRows(layout: Layout, roomChosen: Boolean, manualExit: String, wbTag: String?): List<Pair<String, Boolean>> {
+        val nodes = layout.nodes.ifEmpty { listOfNotNull(layout.main) }
+        val tags = (nodes + listOfNotNull(layout.room, wbTag)).distinct()
+        val chosen = when {
+            roomChosen && layout.room != null -> layout.room
+            manualExit.isNotBlank() && manualExit in tags && manualExit != layout.room -> manualExit
+            else -> nodes.firstOrNull()
+        }
+        return tags.map { it to (it == chosen) }
+    }
+
+    /**
      * @param socksPort порт, на котором ядро olcRTC поднимает свой SOCKS5.
      * @return разложенные выходы; при любой неожиданности — [Layout.EMPTY],
      *   потому что автомат без раскладки просто не переключает, а не падает.

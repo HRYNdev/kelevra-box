@@ -283,11 +283,10 @@ class DashboardViewModel :
         // Без него запасной список (до первых групп от ядра) показывал только два выхода,
         // и «Комната WB» пропадала из выбора на первые секунды после включения (16.10).
         val wbTag = Settings.wbchatTag.takeIf { WbChatParams.available && it.isNotBlank() && "\"$it\"" in content }
-        val rows = listOfNotNull(
-            layout.main?.let { Triple(it, 0, !roomChosen) },
-            layout.room?.let { Triple(it, 0, roomChosen) },
-            wbTag?.let { Triple(it, 0, Settings.manualExitName == it) },
-        )
+        // Все узлы очереди, не только основной: иначе «Финляндия» пропадала из ручного выбора,
+        // пока ядро молчит (17.10).
+        val rows = AutoModeExits.configRows(layout, roomChosen, Settings.manualExitName, wbTag)
+            .map { (tag, chosen) -> Triple(tag, 0, chosen) }
         ConfigExits(rows = rows, chooser = layout.chooser)
     }.getOrElse { ConfigExits() }
 
