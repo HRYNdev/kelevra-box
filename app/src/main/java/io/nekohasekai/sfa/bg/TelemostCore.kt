@@ -45,6 +45,9 @@ object TelemostCore {
      */
     const val DEFAULT_READY_TIMEOUT_MILLIS = 45_000
 
+    /** Причина отказа, когда в конференции нет выхода: повторять попытку бесполезно. */
+    const val NO_EXIT_REASON = "выход в конференции не найден"
+
     const val DEFAULT_STRIPES = 3
     const val DEFAULT_STRIPES_MAX = 6
 
@@ -103,6 +106,7 @@ object TelemostCore {
         stripes: Int,
         stripesMax: Int,
         readyTimeoutMillis: Int = DEFAULT_READY_TIMEOUT_MILLIS,
+        stillNeeded: () -> Boolean = { true },
     ): String? {
         stop()
         val bin = binary() ?: return "ядро собрано без Телемоста (нет $BINARY)"
@@ -146,6 +150,13 @@ object TelemostCore {
         val startedAt = SystemClock.elapsedRealtime()
         val deadline = startedAt + readyTimeoutMillis
         while (SystemClock.elapsedRealtime() < deadline) {
+            // 16.10.2026 на улице: Телемост встал в 13:22:44 для комнаты, которую остановили
+            // в 13:21:09, и вызвал пересборку ядра. Пока ждём полосы, смотрим, нужна ли комната.
+            if (!stillNeeded()) {
+                Log.i(TAG, "комната больше не нужна — не дожидаюсь готовности")
+                stop()
+                return OlcRtcCore.CANCELLED_REASON
+            }
             if (!alive(p)) {
                 process = null
                 return "ядро Телемоста вышло (код ${runCatching { p.exitValue() }.getOrDefault(-1)}): $lastLine"
@@ -156,7 +167,7 @@ object TelemostCore {
             }
             Thread.sleep(250)
         }
-        val why = if (pairedLanes == 0) "выход в конференции не найден" else "SOCKS не открылся"
+        val why = if (pairedLanes == 0) NO_EXIT_REASON else "SOCKS не открылся"
         stop()
         return "Телемост не собрался за ${readyTimeoutMillis / 1000} с: $why"
     }

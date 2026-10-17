@@ -219,6 +219,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         override fun tunnelLive(): Boolean = !tunnelSuspended
 
+        override fun roomRaising(): Boolean = roomRaising || OlcRtcWatchdog.restarting
+
         // Отдаём тот конфиг, который ядро исполняет сейчас, а не файл профиля: правки
         // живут только в памяти, и по файлу автомат не увидел бы ни запрета QUIC, ни
         // входов, закреплённых за путями. Ядра ещё нет — остаётся файл, как раньше.
@@ -535,7 +537,18 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         val result =
             runCatching {
-                OlcRtcCore.start(params, protector, requireProtector = vpn != null)
+                OlcRtcCore.start(
+                    params, protector, requireProtector = vpn != null,
+                    stillNeeded = {
+                        TunnelFacts.roomRaiseStillWanted(
+                            serviceStopping = serviceStopping,
+                            tunnelSuspended = tunnelSuspended,
+                            roomAhead = roomAhead,
+                            raising = roomRaising,
+                            roomWanted = roomWanted,
+                        )
+                    },
+                )
             }.getOrElse { OlcRtcCore.State.Failed(it.message ?: it.javaClass.simpleName) }
 
         when (result) {
@@ -550,7 +563,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 OlcRtcWatchdog.start(
                     protector,
                     requireProtector = vpn != null,
-                    roomNeeded = { !tunnelSuspended && !serviceStopping && AutoMode.roomNeeded() },
+                    // Присмотр поднимает комнату сам только пока ядро собрано под неё: на «ищем путь» приложение
+                    // остаётся в tun ([AutoMode.roomSoughtForTun]), а Телемост — отдельный процесс без
+                    // protect(fd), в tun он зациклился бы. Повтор в этом случае — дело автомата.
+                    roomNeeded = {
+                        !tunnelSuspended && !serviceStopping && AutoMode.roomNeeded() &&
+                            (roomWanted || roomAhead || AutoMode.roomSoughtForTun())
+                    },
                     raisingElsewhere = { roomRaising },
                 )
             }
@@ -1027,7 +1046,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         roomWanted = roomWanted,
         roomAhead = roomAhead,
         roomReady = OlcRtcCore.state is OlcRtcCore.State.Ready,
-        roomSought = runCatching { AutoMode.roomNeeded() }.getOrDefault(false),
+        roomSought = runCatching { AutoMode.roomSoughtForTun() }.getOrDefault(false),
     )
 
     /**
@@ -1112,6 +1131,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             if (wanted && roomRaising) {
                 Log.i(TAG, "комната уже поднимается ($reason) — второй раз не прошу")
+                // Просьбу подтверждаем: её могли отозвать, а подъём смотрит на этот флаг.
+                roomWanted = true
                 return AutoMode.RoomAck.Raising
             }
             // Присмотр сам гасит и поднимает ядро. Заход автомата видел в этот момент
@@ -1119,6 +1140,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // гасит чужой запуск — два подъёма рвали друг друга.
             if (wanted && (OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting)) {
                 Log.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
+                // roomWanted здесь не трогаем: подъём присмотра может провалиться, и флаг остался бы
+                // true при лежащей комнате. Присмотр отменяется собственным roomNeeded().
                 return AutoMode.RoomAck.Raising
             }
             val up = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
@@ -1189,6 +1212,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         if (tokenOtvergnutNow() && obnovitTokenKomnaty()) {
             startOlcRtcIfEnabled()
         }
+        // Пересборка в ветке «комната не встала» меняет порт и выбор в селекторе — автомату
+        // об этом знать так же, как и на успешном пути (16.10.2026 на улице: без этого он
+        // мерил основной канал по старому порту, «локальный вход не отвечает» → ложный
+        // «основной мёртв» → новый круг подъёма комнаты в 14:08:35, 14:33:40, 14:33:52).
+        var resyncedAfterFail = false
         val rebuilt = synchronized(tunnelLock) {
             roomRaising = false
             when {
@@ -1197,7 +1225,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                     roomWanted = false
                     // Ядро осталось собранным под комнату, которой нет: `final` уводил бы
                     // остатки трафика в её мёртвый сокс. Возвращаем к тому, что есть.
-                    resyncCore("комната не встала: $reason")
+                    // Сервис останавливают или туннель погасили: пересборка подняла бы tun там, где его не ждут.
+                    resyncedAfterFail = !serviceStopping && !tunnelSuspended &&
+                        resyncCore("комната не встала: $reason") == AutoMode.RoomAck.Changed
                     false
                 }
 
@@ -1224,6 +1254,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
         // Что бы ни вышло — реестр узнаёт об этом сразу, не дожидаясь круга автомата.
         RoomNote.note()
+        if (resyncedAfterFail) AutoMode.onCoreRebuilt("ядро возвращено после неудачи комнаты ($reason)")
         if (!rebuilt) return
         // Комната встала — в урезанной сети это единственная дорога наружу, и именно
         // сейчас появляется возможность дотянуть недостающие наборы правил.

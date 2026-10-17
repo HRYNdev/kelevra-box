@@ -134,6 +134,48 @@ object CoreLog {
     /** Каким выходом шли: «using outbound/direct[direct]». */
     private val RX_VYHOD = Regex("""using outbound/([a-zA-Z0-9_.\-]+)""")
 
+    /** Выход-узел в строке отказа: «using outbound/vless[Нидерланды · XHTTP]» → (vless, Нидерланды · XHTTP). */
+    private val RX_VYHOD_TEG = Regex("""using outbound/([A-Za-z0-9_-]+)\[([^\]]+)]""")
+
+    /** Типы выходов, которые ведут на узел (не прямой выход, не комната на петле, не блок). */
+    private val TIPY_UZLA = setOf("vless", "vmess", "trojan", "shadowsocks", "hysteria2", "tuic", "anytls")
+
+    /** Сколько отказов через узлы за [UZEL_OKNO_MS] будит автомат проверить узел. */
+    internal const val UZEL_POROG = 3
+    private const val UZEL_OKNO_MS = 30 * 1000L
+
+    @Volatile
+    private var uzelOknoNachalo = 0L
+
+    @Volatile
+    private var uzelOtkazov = 0
+
+    /**
+     * Отказы соединений через узел — повод проверить его сейчас, а не на плановом заходе.
+     *
+     * Шторм (см. [BYSTRO_POROG]) ловит сотни отказов, а телефон с лёгким трафиком при смерти узла
+     * набирает их единицы: 17.10.2026 узел остановили, а автомат заметил это только на плановом заходе
+     * через 4 минуты. Здесь хватает [UZEL_POROG] отказов за полминуты; решение по-прежнему за заходом
+     * (молчание узла дважды или провал пробы), побудка стоит одну пробу.
+     */
+    /** Выход-узел, через который отказало соединение; null — отказ не через узел (прямой, комната). */
+    internal fun vyhodUzla(line: String): String? {
+        val m = RX_VYHOD_TEG.find(line) ?: return null
+        return m.groupValues[2].takeIf { m.groupValues[1].lowercase(Locale.US) in TIPY_UZLA }
+    }
+
+    internal fun otkazUzla(line: String, teper: Long) {
+        val teg = vyhodUzla(line) ?: return
+        if (teper - uzelOknoNachalo >= UZEL_OKNO_MS) {
+            uzelOknoNachalo = teper
+            uzelOtkazov = 0
+        }
+        uzelOtkazov++
+        if (uzelOtkazov == UZEL_POROG) {
+            thread(name = "otkazy-uzla", isDaemon = true) { AutoMode.otkazyUzla(teg) }
+        }
+    }
+
     private fun uchest(line: String) {
         val teper = System.currentTimeMillis()
         if (oknoNachalo == 0L) oknoNachalo = teper
@@ -149,7 +191,17 @@ object CoreLog {
         if (line.contains("ERROR") && line.contains("open connection to")) {
             oknoOtkazov++
             bystroOtkazov++
-            if (predohranitel.offer(line, teper)) {
+            otkazUzla(line, teper)
+            // Настройки на каждой строке не читаем: порт — из уже работающих параметров ядра, и
+            // только пока оно поднимается.
+            val wbStarting = WbChatCore.state is WbChatCore.State.Starting
+            val wbPodnimaetsya = wbStarting && SocksBreaker.oknoPodemaWb(
+                line,
+                WbChatCore.runningParams?.socksPort ?: 0,
+                wbStarting,
+                AutoMode.selectorOnWb(),
+            )
+            if (!wbPodnimaetsya && predohranitel.offer(line, teper)) {
                 Log.w(TAG, "шторм отказов в локальный сокс — увожу выход с мёртвой комнаты")
                 runCatching { Zapisi.perehod("predohranitel", "отказы в локальный сокс") }
                 // Переключение выхода — вызов в командный сервер; поток журнала им не держим.
