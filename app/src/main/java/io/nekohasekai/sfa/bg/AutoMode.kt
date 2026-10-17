@@ -543,6 +543,20 @@ object AutoMode {
     @Volatile
     private var layout: AutoModeExits.Layout = AutoModeExits.Layout.EMPTY
 
+    /**
+     * Раскладка как её прочитали из конфига: основной — первый узел очереди. [layout] — та же
+     * раскладка, но основным в ней стоит узел, на котором мы сейчас ([nodeIndex]).
+     */
+    @Volatile
+    private var baseLayout: AutoModeExits.Layout = AutoModeExits.Layout.EMPTY
+
+    /** На каком узле очереди стоим: 0 — основной, дальше запасные. */
+    @Volatile
+    private var nodeIndex = 0
+
+    /** С какого захода (elapsedRealtime) первый узел снова жив, пока мы на запасном; 0 — не жив. */
+    private var primaryOkSince = 0L
+
     /** Сеть сменилась — следующее наблюдение принимаем без подтверждений. */
     @Volatile
     private var networkChanged = false
@@ -840,8 +854,11 @@ object AutoMode {
             manualExit = Settings.manualExitName.takeIf { it.isNotBlank() }
             manualRoomMem = Settings.autoModeManualRoom
             lastHomeKey = Settings.autoModeHomeKey.takeIf { it.isNotBlank() }
-            layout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
+            baseLayout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
                 ?: AutoModeExits.Layout.EMPTY
+            layout = baseLayout
+            nodeIndex = 0
+            primaryOkSince = 0L
             gate.reset(initial)
             // На чьей сети стоит начальная обстановка, мы ещё не знаем — узнаем первым
             // же заходом. До того держать вердикт на молчании не на чем ([holdsVerdict]).
@@ -899,7 +916,8 @@ object AutoMode {
                 TAG,
                 "автомат включён (${if (Settings.autoModeEnabled) "сам" else "выключен человеком"}): " +
                     "выбор ${layout.chooser ?: "нет"}, основной ${layout.main ?: "нет"}, " +
-                    "комната ${layout.room ?: "нет"}, адресов ${layout.mainEndpoints.size}",
+                    "комната ${layout.room ?: "нет"}, адресов ${layout.mainEndpoints.size}" +
+                    if (baseLayout.nodes.size > 1) ", очередь узлов ${baseLayout.nodes}" else "",
             )
         }
     }
@@ -1118,14 +1136,21 @@ object AutoMode {
     /** Перечитывает раскладку выходов и входов из конфига, который сейчас в ядре. */
     private fun refreshLayout(reason: String) {
         val content = runCatching { host?.profileConfig() }.getOrNull() ?: return
-        val fresh = runCatching { AutoModeExits.parse(content, OlcRtcParams.socksPort) }.getOrNull() ?: return
-        if (fresh.localProxy == layout.localProxy && fresh.mainEndpoints == layout.mainEndpoints) return
+        val parsed = runCatching { AutoModeExits.parse(content, OlcRtcParams.socksPort) }.getOrNull() ?: return
+        // Стоим на запасном узле — и в новой раскладке остаёмся на нём, если он там есть.
+        val stoim = layout.main
+        val idx = parsed.nodes.indexOf(stoim).takeIf { it >= 0 } ?: 0
+        val fresh = parsed.nodes.getOrNull(idx)?.let { parsed.forNode(it) } ?: parsed
+        if (parsed == baseLayout && fresh.localProxy == layout.localProxy && fresh.mainEndpoints == layout.mainEndpoints) return
+        baseLayout = parsed
+        nodeIndex = idx
         layout = fresh
         PathRegistry.bindExits(main = fresh.main, room = fresh.room)
         Log.i(
             TAG,
             "раскладка перечитана ($reason): вход основного ${fresh.localProxy?.port ?: "нет"}, " +
-                "адресов узла ${fresh.mainEndpoints.size}",
+                "адресов узла ${fresh.mainEndpoints.size}" +
+                if (parsed.nodes.size > 1) ", очередь узлов ${parsed.nodes}, стоим на «${fresh.main}»" else "",
         )
     }
 
@@ -1742,7 +1767,10 @@ object AutoMode {
                 false
             }
 
-            else -> mainWorks(network, host, inRoom = inRoom)
+            else -> {
+                if (nodeIndex != 0) maybeReturnToPrimary(network, host)
+                mainWorks(network, host, inRoom = inRoom) || switchToReserve(network, host)
+            }
         }
         if (home || main) {
             mainFailures = 0
@@ -3019,6 +3047,90 @@ object AutoMode {
         val squeezed = squeeze?.let(SpeedProbe::squeezed) ?: false
         if (squeezed) Log.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
         return noteMain(mainVerdict(portOpen, trafficFlows, squeezed), portOpen, squeeze.takeIf { squeezed })
+    }
+
+    // ---------- очередь узлов (решение 17.10.2026: действует телефон, порядок задаёт сервер) ----------
+
+    /** Вернуться на первый узел, только если он жив столько подряд (два захода с промежутком). */
+    internal const val RETURN_AFTER_MILLIS = 4 * 60_000L
+
+    /**
+     * Жив ли узел очереди [tag], не трогая выбор: адрес принимает соединение и через его
+     * закреплённый вход ([AutoModeExits.Layout.probeEntries]) проходит запрос. Закреплённого
+     * входа нет (правка конфига не легла) — судим по адресу: переставлять селектор ради пробы
+     * значит рвать живые соединения, а основной после перехода всё равно проверит заход.
+     */
+    private fun nodeAlive(network: Network, host: Host, tag: String): Boolean {
+        val endpoints = baseLayout.nodeEndpoints[tag].orEmpty()
+        if (endpoints.isEmpty() || !anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS)) {
+            Log.i(TAG, "узел «$tag»: ни один адрес не отвечает")
+            return false
+        }
+        val entry = baseLayout.probeEntries[tag]
+        if (entry == null || !host.tunnelLive()) {
+            Log.i(TAG, "узел «$tag»: адрес отвечает, канал целиком проверить нечем — считаю живым по адресу")
+            return true
+        }
+        val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
+        ProxyProbe.log("узел «$tag»", result)
+        return result is ProxyProbe.Result.Live
+    }
+
+    /**
+     * Текущий узел признан мёртвым ([mainWorks] уже подтвердил: молчание дважды или проба не прошла) —
+     * идём по очереди узлов, начиная с первого, и встаём на первый живой. Ни один не ответил —
+     * false, и дальше всё как раньше: провал основного, пробный подъём комнаты.
+     */
+    private fun switchToReserve(network: Network, host: Host): Boolean {
+        val nodes = baseLayout.nodes
+        if (nodes.size < 2) return false
+        for (idx in nodes.indices) {
+            if (idx == nodeIndex) continue
+            if (nodeAlive(network, host, nodes[idx])) {
+                selectNode(host, idx, "узел «${layout.main}» не отвечает")
+                return true
+            }
+        }
+        Log.i(TAG, "ни один узел очереди ${nodes} не отвечает")
+        return false
+    }
+
+    /**
+     * Стоим на запасном: первый узел очереди ожил? Возвращаемся, только когда он отвечает
+     * [RETURN_AFTER_MILLIS] подряд — иначе мигающий основной гонял бы нас туда-сюда.
+     */
+    private fun maybeReturnToPrimary(network: Network, host: Host) {
+        val primary = baseLayout.nodes.firstOrNull() ?: return
+        val now = SystemClock.elapsedRealtime()
+        if (!nodeAlive(network, host, primary)) {
+            primaryOkSince = 0L
+            return
+        }
+        if (primaryOkSince == 0L) {
+            primaryOkSince = now
+            Log.i(TAG, "первый узел «$primary» снова отвечает — вернусь, если продержится ${RETURN_AFTER_MILLIS / 60_000} мин")
+            return
+        }
+        if (now - primaryOkSince < RETURN_AFTER_MILLIS) return
+        selectNode(host, 0, "первый узел «$primary» жив ${(now - primaryOkSince) / 1000} с")
+    }
+
+    /** Встать на узел очереди [idx]: весь автомат дальше считает основным его. */
+    private fun selectNode(host: Host, idx: Int, why: String) {
+        val tag = baseLayout.nodes.getOrNull(idx) ?: return
+        val was = layout.main
+        nodeIndex = idx
+        layout = baseLayout.forNode(tag)
+        primaryOkSince = 0L
+        portSilentAt = 0L
+        PathRegistry.bindExits(main = layout.main, room = layout.room)
+        // Узел только что проверен ([nodeAlive]) — иначе экран до следующего захода показывал бы
+        // отказ прежнего узла, то есть «связи нет» при живой связи.
+        PathRegistry.alive(PathId.MAIN, reason = "узел «$tag»")
+        Log.i(TAG, "узел сменён: «$was» → «$tag» ($why)")
+        // На основном канале переставляем выбор сразу; из комнаты уходим обычным порядком —
+        // вердиктом «основной жив» через задвижку. Выбор человека не трогаем.
+        if (gate.current == Situation.Main && manualExit == null) choose(host, tag, "очередь узлов: $why")
     }
 
     /** Когда порт узла замолчал в первый раз подряд (elapsedRealtime); 0 — отвечает. */
