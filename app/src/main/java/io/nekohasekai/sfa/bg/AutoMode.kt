@@ -2875,6 +2875,25 @@ object AutoMode {
         wakeLoop()
     }
 
+    /** Когда в последний раз будили заход по отказам узла; не чаще [UZEL_BUDIT_MILLIS]. */
+    private var uzelBudilAt = 0L
+
+    internal const val UZEL_BUDIT_MILLIS = 60_000L
+
+    /**
+     * Соединения через узел отказывают ([CoreLog.otkazUzla]) — проверить узел сейчас. Только когда
+     * есть куда уйти (в очереди больше одного узла) и стоим на основном канале: дальше решает заход —
+     * [mainWorks] подтверждает смерть, [switchToReserve] ведёт на следующий узел.
+     */
+    fun otkazyUzla(teg: String) {
+        if (!active || baseLayout.nodes.size < 2 || gate.current != Situation.Main || manualExit != null) return
+        val now = SystemClock.elapsedRealtime()
+        if (uzelBudilAt != 0L && now - uzelBudilAt < UZEL_BUDIT_MILLIS) return
+        uzelBudilAt = now
+        Log.i(TAG, "соединения через «$teg» отказывают — проверяю узел сейчас, не дожидаясь захода")
+        wakeLoop()
+    }
+
     private fun massovyeOtkazySvezhie(): Boolean =
         massovyeOtkazyAt != 0L && SystemClock.elapsedRealtime() - massovyeOtkazyAt < HINT_TTL_MILLIS
 
