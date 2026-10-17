@@ -97,7 +97,11 @@ fun badgeOf(name: String?): String? {
     return when {
         // У комнаты страны нет: несущая — чужой видеозвонок. Двухбуквенный огрызок
         // имени («КО») читался бы как код страны и врал бы.
-        isRoomExit(n) -> null
+        // Имя как есть: реестр хранит тег комнаты с заглавной, и строчное «комната» с ним
+        // не совпадало — комната получала огрызок «КО».
+        isRoomExit(name) -> null
+        // Раньше «nl»: в «finland» тоже есть «nl», и Финляндия получила бы NL.
+        n.contains("финлянд") || n.contains("finland") || n.contains("suomi") -> "FI"
         n.contains("нидерланд") || n.contains("netherl") || n.contains("nl") -> "NL"
         n.contains("герман") || n.contains("german") || n.contains("de") -> "DE"
         n.contains("екатеринб") || n.contains("дом") || n.contains("home") || n.contains("ru") -> "RU"
@@ -124,6 +128,7 @@ fun HomeScreen(
     onToggle: () -> Unit,
     onSelectChannel: (String) -> Unit,
     onConnect: () -> Unit,
+    onOpenPanel: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val colors = K
@@ -579,6 +584,22 @@ fun HomeScreen(
                             fontSize = 12.sp,
                             color = colors.Dim,
                             modifier = Modifier.padding(start = 4.dp),
+                        )
+                    }
+                }
+                // Панель своей сети — в «Подписке», как на компьютере (решение 17.10). Только
+                // устройству админа: сервер говорит это в сводке. В Настройках пункт тоже есть.
+                if (sub?.panel == true) {
+                    Spacer(Modifier.height(KDim.Gap))
+                    KCard {
+                        KRowItem(
+                            title = "Панель сети",
+                            subtitle = "Люди, устройства, узлы и трафик",
+                            chevron = true,
+                            onClick = {
+                                showSubscription = false
+                                onOpenPanel()
+                            },
                         )
                     }
                 }
