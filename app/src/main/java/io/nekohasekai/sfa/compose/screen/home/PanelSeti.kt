@@ -2,6 +2,7 @@ package io.nekohasekai.sfa.compose.screen.home
 
 import android.annotation.SuppressLint
 import android.webkit.CookieManager
+import android.view.ViewGroup
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -107,7 +109,9 @@ fun PanelSetiScreen(onBack: () -> Unit) {
     // Отступы под системные панели даёт Scaffold главного окна, как всем внутренним экранам.
     Column(Modifier.fillMaxSize().background(K.Bg)) {
         KScreenHeader(title = "Панель сети", onBack = onBack)
-        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+        // imePadding: клавиатура ужимает окно панели, а не ложится поверх шторки
+        // (иначе в «Новом человеке» кнопка «Создать» под клавишами).
+        Box(Modifier.fillMaxWidth().weight(1f).imePadding(), contentAlignment = Alignment.Center) {
             when (val s = sost) {
                 PanelSostoyanie.Zhdem -> Podpis("Открываю панель…")
                 is PanelSostoyanie.Oshibka -> Podpis(s.tekst)
@@ -117,6 +121,13 @@ fun PanelSetiScreen(onBack: () -> Unit) {
                     factory = { ctx ->
                         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true)
                         WebView(ctx).apply {
+                            // Без явного MATCH_PARENT WebView внутри Compose считает высоту окна
+                            // нулевой: 100vh = 0, и шторки панели (QR, новый человек) выходили
+                            // высотой в пиксель — затемнение есть, содержимого нет (замер 17.10).
+                            layoutParams = ViewGroup.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                            )
                             // Без своего фона WebView до первой отрисовки страницы белый — вспышка в тёмной теме.
                             setBackgroundColor(fon)
                             settings.javaScriptEnabled = true
