@@ -54,6 +54,16 @@ object AutoModeExits {
          * Пусто — конфиг без правки, и тогда меряется только «текущий выбор», а не путь.
          */
         val probeEntries: Map<String, Endpoint> = emptyMap(),
+        /**
+         * Очередь узлов (решение 17.10.2026): группы-узлы в селекторе по порядку, первый —
+         * основной, дальше запасные. Порядок задаёт сервер (мозг по группе человека). У
+         * профиля с одним узлом здесь один элемент — [main], поведение прежнее.
+         */
+        val nodes: List<String> = emptyList(),
+        /** Адреса каждого узла очереди. */
+        val nodeEndpoints: Map<String, List<Endpoint>> = emptyMap(),
+        /** Общий вход (смотрит туда же, куда селектор) — на случай, когда у узла нет своего. */
+        val sharedProxy: Endpoint? = null,
     ) {
         /** Есть ли вообще между чем переключать. */
         val canSwitch: Boolean get() = chooser != null && room != null && main != null
@@ -67,6 +77,20 @@ object AutoModeExits {
 
         /** Вход, закреплённый за путём [tag]. `null` — путь мерить нечем. */
         fun entryFor(tag: String?): Endpoint? = tag?.let { probeEntries[it] }
+
+        /**
+         * Та же раскладка, но основным считается узел [tag] из очереди: его адреса, его
+         * закреплённый вход. Весь автомат дальше работает с «текущим основным», не зная,
+         * какой он по счёту. Узла нет в очереди — раскладка без изменений.
+         */
+        fun forNode(tag: String): Layout {
+            if (tag !in nodes || tag == main) return this
+            return copy(
+                main = tag,
+                mainEndpoints = nodeEndpoints[tag].orEmpty(),
+                localProxy = probeEntries[tag] ?: sharedProxy,
+            )
+        }
 
         companion object {
             val EMPTY = Layout(null, null, null, emptyList(), null)
@@ -114,6 +138,15 @@ object AutoModeExits {
         val endpoints = endpointsOf(main, byTag, mutableSetOf())
             .ifEmpty { allEndpoints(byTag) }
 
+        // Очередь узлов: основной и за ним остальные группы-узлы селектора (urltest — так сервер
+        // собирает узел из его способов подключения), в порядке, который задал сервер.
+        val nodes = chooser?.let { tag ->
+            (listOfNotNull(main) + members(byTag.getValue(tag)).filter {
+                it != room && !loopbackSocks(byTag[it]) && byTag[it]?.optString("type") == "urltest"
+            }).distinct()
+        } ?: listOfNotNull(main)
+        val nodeEndpoints = nodes.associateWith { endpointsOf(it, byTag, mutableSetOf()) }
+
         // Мерить по отдельности имеет смысл ровно те пути, которые есть кому запомнить,
         // а помнит их [io.nekohasekai.sfa.bg.path.PathRegistry], и путей у него три.
         // Комната сюда не попадает — у неё свой закреплённый SOCKS в ядре olcRTC,
@@ -130,7 +163,9 @@ object AutoModeExits {
         // ту ложь, ради которой реестр и заводили. Хуже того, докачка наборов правил
         // берёт первый живой вход ([BoxService.refreshRuleSets]) и ушла бы напрямую —
         // туда, где в урезанной сети наш домен и срезан.
-        val measurable = listOfNotNull(main).filter { it != room }
+        // Узлов в очереди может быть несколько: закреплённый вход нужен каждому, иначе запасной
+        // не проверить, не переставив выбор (и не порвав живые соединения).
+        val measurable = nodes.filter { it != room }
 
         val entries = probeEntries(root)
 
@@ -145,6 +180,9 @@ object AutoModeExits {
             localProxy = main?.let { entries[it] } ?: localProxy(root, socksPort),
             measurable = measurable,
             probeEntries = entries,
+            nodes = nodes,
+            nodeEndpoints = nodeEndpoints,
+            sharedProxy = localProxy(root, socksPort),
         )
     }
 
