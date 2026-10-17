@@ -558,7 +558,7 @@ fun HomeScreen(
                         // Подсказка объясняет ровно эту строку, поэтому и живёт с ней.
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "так это устройство подписано на сервере",
+                            text = "имя устройства на сервере",
                             fontFamily = Montserrat,
                             fontSize = 12.sp,
                             color = colors.Dim,
@@ -579,7 +579,7 @@ fun HomeScreen(
                     if (devices.all { it.trafficBytes <= 0L }) {
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            text = "прочерк — расход по устройствам сервер не считал",
+                            text = "прочерк — расход не учтён сервером",
                             fontFamily = Montserrat,
                             fontSize = 12.sp,
                             color = colors.Dim,
