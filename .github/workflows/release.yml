@@ -75,7 +75,7 @@ jobs:
     name: core (${{ matrix.variant }})
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: sing-box-for-android
           submodules: recursive
@@ -110,7 +110,7 @@ jobs:
       # в том числе ядро на dev — ровно то, ради чего заведён warm-core.
       - name: Кеш ядра
         id: core-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
           # core-olcrtc/** из хеша убран 14.08: с переходом на форк apply.py в сборке не
@@ -121,7 +121,7 @@ jobs:
 
       - name: Checkout sing-box core
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.CORE_REPO }}
           ref: ${{ env.CORE_REF }}
@@ -130,7 +130,7 @@ jobs:
 
       - name: Checkout olcrtc
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.OLCRTC_REPO }}
           ref: ${{ env.OLCRTC_REF }}
@@ -158,7 +158,7 @@ jobs:
       # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc
       - name: Setup Go
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: olcrtc/go.mod
           cache: false
@@ -174,7 +174,7 @@ jobs:
       - name: Кеш Go-модулей
         id: gomod-cache
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -196,7 +196,7 @@ jobs:
       # хеш всех gradle-файлов, поэтому любая правка build.gradle.kts убивает попадания насовсем.
       - name: Кеш Gradle
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -207,7 +207,7 @@ jobs:
 
       - name: Setup Android SDK
         if: steps.core-cache.outputs.cache-hit != 'true'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           # пакет 'tools' снят из SDK-репозитория Google, дефолт action на нём падает
           packages: 'platform-tools'
@@ -311,7 +311,7 @@ jobs:
       # Тег теперь кеш только читает — с dev он виден, это дефолтная ветка.
       - name: Сохранить кеш ядра
         if: steps.core-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
           key: ${{ steps.core-cache.outputs.cache-primary-key }}
@@ -320,7 +320,7 @@ jobs:
       # не было (иначе GitHub откажет — ключ уже занят). На теге не пишем никогда.
       - name: Сохранить кеш Go-модулей
         if: steps.core-cache.outputs.cache-hit != 'true' && steps.gomod-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/')
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -328,7 +328,7 @@ jobs:
           key: ${{ steps.gomod-cache.outputs.cache-primary-key }}
 
       - name: Upload core
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
@@ -348,7 +348,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: sing-box-for-android
           submodules: recursive
@@ -361,7 +361,7 @@ jobs:
 
       # см. комментарий у такого же шага в job core
       - name: Кеш Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -371,13 +371,13 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           # пакет 'tools' снят из SDK-репозитория Google, дефолт action на нём падает
           packages: 'platform-tools'
 
       - name: Забрать ядро из job core
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: core-libbox*
           merge-multiple: true
@@ -432,7 +432,7 @@ jobs:
       # и сервер, выдав носитель telemost, получит «в этой сборке комнаты нет».
       # Публикуется только arm64 APK — собираем ровно его ABI.
       - name: Setup Go (OpenFlux)
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.26.7"
           cache: false
@@ -512,7 +512,7 @@ jobs:
           cat kelevra-version.json
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kelevra-apk-release
           path: |
@@ -526,7 +526,7 @@ jobs:
       # публикуется только пуш тега: ручной запуск — прогон конвейера без релиза
       - name: Публикация релиза
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk
