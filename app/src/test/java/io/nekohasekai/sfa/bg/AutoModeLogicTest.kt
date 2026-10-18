@@ -382,6 +382,44 @@ class AutoModeLogicTest {
         assertFalse(AutoMode.brokenEnough(homeMismatch = false, mainFailed = false, settling = false))
     }
 
+    // --------------------------------------- счёт провалов основного в окне смены сети
+
+    @Test
+    fun `провал на устоявшейся сети считается`() {
+        assertEquals(1, AutoMode.nextMainFailures(0, ok = false, settled = true))
+        assertEquals(2, AutoMode.nextMainFailures(1, ok = false, settled = true))
+    }
+
+    @Test
+    fun `провал в окне смены сети не меняет счёт`() {
+        // Как и для узла (AutoModeNodeWatch) — заход «сети нет» про канал ничего не говорит.
+        assertEquals(1, AutoMode.nextMainFailures(1, ok = false, settled = false))
+        assertEquals(0, AutoMode.nextMainFailures(0, ok = false, settled = false))
+    }
+
+    @Test
+    fun `успех или дом сбрасывают счёт независимо от окна`() {
+        assertEquals(0, AutoMode.nextMainFailures(3, ok = true, settled = true))
+        assertEquals(0, AutoMode.nextMainFailures(3, ok = true, settled = false))
+    }
+
+    @Test
+    fun `два провала в окне комнату не поднимают`() {
+        var failures = 0
+        failures = AutoMode.nextMainFailures(failures, ok = false, settled = false)
+        failures = AutoMode.nextMainFailures(failures, ok = false, settled = false)
+        assertTrue(failures < AutoMode.ROOM_TRIAL_AFTER)
+    }
+
+    @Test
+    fun `после окна два провала на устоявшейся сети поднимают комнату`() {
+        var failures = 0
+        failures = AutoMode.nextMainFailures(failures, ok = false, settled = false)
+        failures = AutoMode.nextMainFailures(failures, ok = false, settled = true)
+        failures = AutoMode.nextMainFailures(failures, ok = false, settled = true)
+        assertTrue(failures >= AutoMode.ROOM_TRIAL_AFTER)
+    }
+
     @Test
     fun `пока всё сходится — определитель не зовём вовсе`() {
         assertFalse(AutoMode.askDetector(broken = false, cachedAgeMillis = null))

@@ -1791,12 +1791,16 @@ object AutoMode {
                 works || reserveIfDead(network, host)
             }
         }
+        val mainSettled = nodeWatch.settled(SystemClock.elapsedRealtime(), validated(network))
+        if (!(home || main) && !mainSettled) {
+            // Сеть только что сменилась (журнал 17.10.2026 про узел — здесь то же про канал):
+            // заход «сети нет» не доказывает, что основной канал плох, поэтому счёт не растёт.
+            Log.i(TAG, "основной канал не поднялся, но сеть только что сменилась — заход в счёт провалов не идёт")
+        }
+        mainFailures = nextMainFailures(mainFailures, ok = home || main, settled = mainSettled)
         if (home || main) {
-            mainFailures = 0
             // Ушли на дом или основной канал — прошлый подъём комнаты уже не наша неудача.
             roomTrialPending = false
-        } else {
-            mainFailures++
         }
 
         val room = if (home || main) {
@@ -2777,6 +2781,21 @@ object AutoMode {
      */
     internal fun brokenEnough(homeMismatch: Boolean, mainFailed: Boolean, settling: Boolean): Boolean =
         if (settling) mainFailed else homeMismatch || mainFailed
+
+    /**
+     * Сколько заходов подряд основной канал не поднимается — по тому же правилу окна, что и
+     * [AutoModeNodeWatch] для узла: провал в окне смены сети не доказывает ничего про канал,
+     * поэтому счёт не растёт, но и не сбрасывается — следующий заход на устоявшейся сети досчитает.
+     *
+     * @param prev счёт до этого захода.
+     * @param ok этим заходом живы дом или основной канал.
+     * @param settled сеть устоялась ([AutoModeNodeWatch.settled]).
+     */
+    internal fun nextMainFailures(prev: Int, ok: Boolean, settled: Boolean): Int = when {
+        ok -> 0
+        !settled -> prev
+        else -> prev + 1
+    }
 
     /**
      * Можно ли закрывать серию перепроверок после смены сети.
