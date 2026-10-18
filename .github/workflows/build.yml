@@ -23,7 +23,7 @@ jobs:
       # Приложение обязано лежать в папке с этим именем: build_libbox копирует
       # готовый .aar в ../sing-box-for-android/app/libs (см. cmd/internal/build_libbox/main.go)
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: sing-box-for-android
           submodules: recursive
@@ -32,14 +32,14 @@ jobs:
       # это разница между 15 минутами и парой минут на каждую правку в Kotlin.
       - name: Кеш ядра
         id: libbox-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: sing-box-for-android/app/libs
           key: libbox-xhttp2-${{ github.event.inputs.core_ref || 'v1.14.1' }}
 
       - name: Checkout sing-box core
         if: steps.libbox-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
           ref: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
@@ -48,7 +48,7 @@ jobs:
 
       - name: Setup Go
         if: steps.libbox-cache.outputs.cache-hit != 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: sing-box/go.mod
           cache-dependency-path: sing-box/go.sum
@@ -62,7 +62,7 @@ jobs:
       # свой кеш вместо cache: gradle у setup-java: у того нет restore-keys, и любая
       # правка build.gradle.kts убивает попадания насовсем (разбор → release.yml)
       - name: Кеш Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -72,7 +72,7 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           # пакет 'tools' снят из SDK-репозитория Google, дефолт action на нём падает
           packages: 'platform-tools'
@@ -159,14 +159,14 @@ jobs:
 
       # ядро отдаём артефактом: с ним можно собирать приложение локально за минуту
       - name: Upload core
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: libbox
           path: sing-box-for-android/app/libs/*.aar
           if-no-files-found: error
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kelevra-apk
           path: sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk

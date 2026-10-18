@@ -80,13 +80,13 @@ jobs:
     name: build (${{ matrix.variant }})
     steps:
       - name: Checkout app
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: sing-box-for-android
           submodules: recursive
 
       - name: Checkout sing-box core
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ github.event.inputs.core_repo || 'SagerNet/sing-box' }}
           ref: ${{ github.event.inputs.core_ref || 'v1.14.1' }}
@@ -94,7 +94,7 @@ jobs:
           fetch-depth: 0 # нужны теги: версия ядра берётся из git describe
 
       - name: Checkout olcrtc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: ${{ env.OLCRTC_REPO }}
           ref: ${{ env.OLCRTC_REF }}
@@ -116,13 +116,13 @@ jobs:
 
       # olcrtc требует go 1.26.3, sing-box 1.24.7 — берём версию из olcrtc
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: olcrtc/go.mod
           cache: false
 
       - name: Кеш Go-модулей
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
@@ -141,7 +141,7 @@ jobs:
 
       # свой кеш вместо cache: gradle у setup-java (разбор → release.yml)
       - name: Кеш Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.gradle/caches
@@ -151,7 +151,7 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           # пакет 'tools' снят из SDK-репозитория Google, дефолт action на нём падает
           packages: 'platform-tools'
@@ -257,7 +257,7 @@ jobs:
           grep -qa 'v2rayxhttp' "$SO" && echo "транспорт xhttp внутри ядра: есть" || { echo "ОШИБКА: ядро собрано без патча xhttp"; exit 1; }
 
       - name: Upload core
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: sing-box-for-android/app/libs/${{ matrix.aar }}
@@ -275,7 +275,7 @@ jobs:
 
       - name: Upload нога
         if: matrix.variant == 'main'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: olcrtc-linux-amd64
           path: /tmp/olcrtc-linux-amd64
@@ -307,7 +307,7 @@ jobs:
 
       - name: Upload APK
         if: matrix.variant == 'main' && github.event.inputs.build_apk == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kelevra-apk-olcrtc
           path: sing-box-for-android/app/build/outputs/apk/**/*arm64*.apk

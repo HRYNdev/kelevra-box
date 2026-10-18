@@ -289,9 +289,13 @@ class ImenaSaytovTest {
      * Каждый новый адрес — синхронный запрос всего списка соединений в потоке чтения
      * журнала. Замер на эмуляторе 13.09.2026: 13-21 мс процессора ядра на запрос при
      * сорока новых адресах в секунду. Короткая пачка проходит, остальное ждёт.
+     *
+     * Часы сценарные: на настоящих медленные запросы под нагрузкой успевали накопить
+     * лишний жетон, и счёт запросов зависел от скорости машины.
      */
     @Test
     fun lavina_raznyh_adresov_ne_bolshe_pachki_zaprosov() {
+        ImenaSaytov.chasy = { 30_000_000L }
         val telo = AtomicReference("""{"connections":[]}""")
         val zaprosov = AtomicInteger(0)
         val (socket, thread) = podnyatServer(telo, zaprosov)
@@ -299,8 +303,7 @@ class ImenaSaytovTest {
             for (i in 0 until 50) {
                 ImenaSaytov.imya("10.8.0.$i")
             }
-            assertTrue("ожидали не больше 3 запросов на пачку, было ${zaprosov.get()}", zaprosov.get() <= 3)
-            assertTrue("пачка должна проходить, было ${zaprosov.get()}", zaprosov.get() >= 2)
+            assertEquals("пачка проходит целиком, дальше потолок", 3, zaprosov.get())
         } finally {
             runCatching { socket.close() }
             runCatching { thread.interrupt() }
@@ -375,19 +378,30 @@ class ImenaSaytovTest {
         }
     }
 
+    /**
+     * Упёрлись в потолок — запроса не было, и через время тот же адрес спрашивается.
+     *
+     * Часы сценарные ([ImenaSaytov.chasy]), а не настоящие. На настоящих тест был
+     * нестабильным: потолок пополняется по времени (жетон в 500 мс), и если три первых
+     * запроса к серверу шли медленно (нагруженная машина, CI), за время пачки копился
+     * лишний жетон. Тогда к ядру уходил запрос и по 10.7.0.9, адрес помечался спрошенным
+     * на 5 с, и после паузы 700 мс имя не запрашивалось — проверка падала. Со сценарными
+     * часами пачка идёт в один момент: ровно три запроса, 10.7.0.9 в них не попадает.
+     */
     @Test
     fun otkaz_potolka_ne_pomechaet_adres_sproshennym() {
-        // Упёрлись в потолок — запроса не было, и через время тот же адрес спрашивается.
+        val T0 = 20_000_000L
+        ImenaSaytov.chasy = { T0 }
         val telo = AtomicReference("""{"connections":[]}""")
         val zaprosov = AtomicInteger(0)
         val (socket, thread) = podnyatServer(telo, zaprosov)
         try {
             for (i in 0 until 10) ImenaSaytov.imya("10.7.0.$i")
-            val poslePachki = zaprosov.get()
+            assertEquals("пачка в один момент — ровно ёмкость потолка", 3, zaprosov.get())
             telo.set("""{"connections":[{"metadata":{"host":"late.example","destinationIP":"10.7.0.9"}}]}""")
-            Thread.sleep(700)
+            ImenaSaytov.chasy = { T0 + 700L }
             assertEquals("late.example", ImenaSaytov.imya("10.7.0.9"))
-            assertEquals(poslePachki + 1, zaprosov.get())
+            assertEquals(4, zaprosov.get())
         } finally {
             runCatching { socket.close() }
             runCatching { thread.interrupt() }

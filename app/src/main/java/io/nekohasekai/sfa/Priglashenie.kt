@@ -164,6 +164,38 @@ object Priglashenie {
             .joinToString("") { "%02x".format(it) }
             .take(32)
 
+    /**
+     * Имя нового профиля из входа по коду. Первый профиль называется «Kelevra», как раньше.
+     * Если такое имя уже занято, к нему добавляется сервер, выдавший профиль (первая часть
+     * имени хоста: «Kelevra · node2kv»), затем дата добавления, затем номер. Так новый
+     * профиль в списке отличается от старого, а сервер берётся из самого адреса профиля.
+     */
+    fun imyaProfilya(url: String, zanyatye: Collection<String>, data: String): String {
+        val zanyato = zanyatye.map { it.trim().lowercase() }.toSet()
+        fun svobodno(imya: String) = imya.lowercase() !in zanyato
+        val baza = "Kelevra"
+        if (svobodno(baza)) return baza
+        val server = korotkoeImyaServera(url)
+        val sServerom = if (server.isEmpty()) baza else "$baza · $server"
+        if (svobodno(sServerom)) return sServerom
+        val sDatoy = "$sServerom · $data"
+        if (svobodno(sDatoy)) return sDatoy
+        var n = 2
+        while (!svobodno("$sDatoy ($n)")) n++
+        return "$sDatoy ($n)"
+    }
+
+    /** Первая часть имени хоста из адреса: `https://node2kv.example.com/u/…` → `node2kv`. IP — целиком. */
+    internal fun korotkoeImyaServera(url: String): String {
+        val host = (SubscriptionLink.parse(url)?.host ?: url.substringAfter("://", "").substringBefore('/'))
+            .substringAfterLast('@')
+            .let { h -> if (h.startsWith("[")) h.substringBefore(']').removePrefix("[") else h.substringBefore(':') }
+            .lowercase()
+        if (host.isEmpty()) return ""
+        if (host.all { it.isDigit() || it == '.' } || host.contains(':')) return host
+        return host.substringBefore('.')
+    }
+
     /** Тот же ли это профиль: одинаковый адрес либо старый /k/<код> с одним из введённых кодов. */
     fun totZhe(profilUrl: String, imeyushijsya: String, vvedennyeKody: List<String>): Boolean {
         val a = SubscriptionLink.parse(profilUrl)

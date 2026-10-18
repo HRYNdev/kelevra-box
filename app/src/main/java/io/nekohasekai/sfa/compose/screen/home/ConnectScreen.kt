@@ -496,7 +496,13 @@ private suspend fun zagruzitProfil(url: String, vvedennyeKody: List<String>) {
             autoUpdateInterval = 60
             lastUpdated = Date()
         }
-    val profile = Profile(name = "Kelevra", typed = typed).apply { userOrder = ProfileManager.nextOrder() }
+    // Имя отличает новый профиль от уже имеющихся: при втором профиле к нему добавляется сервер.
+    val imya = Priglashenie.imyaProfilya(
+        url,
+        ProfileManager.list().map { it.name },
+        java.text.SimpleDateFormat("dd.MM", java.util.Locale.ROOT).format(Date()),
+    )
+    val profile = Profile(name = imya, typed = typed).apply { userOrder = ProfileManager.nextOrder() }
 
     val app = io.nekohasekai.sfa.Application.application
     val dir = File(app.filesDir, "configs").also { it.mkdirs() }

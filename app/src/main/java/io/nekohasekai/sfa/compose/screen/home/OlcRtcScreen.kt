@@ -59,6 +59,10 @@ import kotlinx.coroutines.launch
  * Параметры комнаты приезжают с сервера вместе с остальной подпиской. Поля ниже —
  * переопределение для отладки: пустое поле означает «как у сети». Токен WB сеть тоже
  * раздаёт (владельцу кода), поле здесь — тот же перебивающий запасной вариант.
+ *
+ * Носитель «Телемост» токена WB и полей olcRTC (носитель, комната, участник, ключ, способ
+ * связи) не читает: в этом режиме экран их не показывает, остаётся только порт. Строка
+ * WB Chat от носителя не зависит и видна в обоих режимах.
  */
 @Composable
 fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -84,10 +88,12 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     // через комнату и сбили бы присмотру счёт отказов. Здесь только чтение.
     var status by remember { mutableStateOf(currentStatus()) }
     var wbStatus by remember { mutableStateOf(wbChatStatus()) }
+    var telemost by remember { mutableStateOf(OlcRtcParams.telemost) }
     LaunchedEffect(enabled) {
         while (true) {
             status = currentStatus()
             wbStatus = wbChatStatus()
+            telemost = OlcRtcParams.telemost
             delay(1_000)
         }
     }
@@ -137,12 +143,14 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 KRowItem(title = stringResource(R.string.room_source), subtitle = sourceText())
                 KDivider()
                 KRowItem(title = stringResource(R.string.room_which), subtitle = roomSummary())
-                KDivider()
-                KRowItem(title = stringResource(R.string.room_pass), subtitle = tokenText())
-                Spacer(Modifier.height(10.dp))
-                OlcRtcField(stringResource(R.string.room_pass_field), wbToken, secret = true) {
-                    wbToken = it
-                    persist { Settings.olcrtcWbToken = it }
+                if (!telemost) {
+                    KDivider()
+                    KRowItem(title = stringResource(R.string.room_pass), subtitle = tokenText())
+                    Spacer(Modifier.height(10.dp))
+                    OlcRtcField(stringResource(R.string.room_pass_field), wbToken, secret = true) {
+                        wbToken = it
+                        persist { Settings.olcrtcWbToken = it }
+                    }
                 }
             }
 
@@ -152,30 +160,32 @@ fun OlcRtcScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     title = stringResource(R.string.room_manual_title),
                     subtitle = stringResource(R.string.room_manual_subtitle),
                 )
-                Spacer(Modifier.height(10.dp))
-                OlcRtcField(stringResource(R.string.room_field_carrier), carrier) {
-                    carrier = it
-                    persist { Settings.olcrtcCarrier = it }
-                }
-                Spacer(Modifier.height(10.dp))
-                OlcRtcField(stringResource(R.string.room_field_room), roomId) {
-                    roomId = it
-                    persist { Settings.olcrtcRoomId = it }
-                }
-                Spacer(Modifier.height(10.dp))
-                OlcRtcField(stringResource(R.string.room_field_client), clientId) {
-                    clientId = it
-                    persist { Settings.olcrtcClientId = it }
-                }
-                Spacer(Modifier.height(10.dp))
-                OlcRtcField(stringResource(R.string.room_field_key), keyHex, secret = true) {
-                    keyHex = it
-                    persist { Settings.olcrtcKeyHex = it }
-                }
-                Spacer(Modifier.height(10.dp))
-                OlcRtcField(stringResource(R.string.room_field_transport), transport) {
-                    transport = it
-                    persist { Settings.olcrtcTransport = it }
+                if (!telemost) {
+                    Spacer(Modifier.height(10.dp))
+                    OlcRtcField(stringResource(R.string.room_field_carrier), carrier) {
+                        carrier = it
+                        persist { Settings.olcrtcCarrier = it }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OlcRtcField(stringResource(R.string.room_field_room), roomId) {
+                        roomId = it
+                        persist { Settings.olcrtcRoomId = it }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OlcRtcField(stringResource(R.string.room_field_client), clientId) {
+                        clientId = it
+                        persist { Settings.olcrtcClientId = it }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OlcRtcField(stringResource(R.string.room_field_key), keyHex, secret = true) {
+                        keyHex = it
+                        persist { Settings.olcrtcKeyHex = it }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    OlcRtcField(stringResource(R.string.room_field_transport), transport) {
+                        transport = it
+                        persist { Settings.olcrtcTransport = it }
+                    }
                 }
                 Spacer(Modifier.height(10.dp))
                 OlcRtcField(stringResource(R.string.room_field_port), socksPort, numeric = true) { value ->
