@@ -107,6 +107,9 @@ object SettingsKey {
     /** Человек выбрал руками именно комнату: её ядро надо поднимать и после перезапуска. */
     const val AUTO_MODE_MANUAL_ROOM = "auto_mode_manual_room"
 
+    /** Пароль служебного порта ядра (Clash API) этого устройства: создаётся здесь, сервер его не знает. */
+    const val CLASH_SECRET = "clash_secret"
+
     /** Имя выхода, выбранного руками: выбор должен пережить выключенную сеть и перезапуск. */
     const val AUTO_MODE_MANUAL_EXIT = "auto_mode_manual_exit"
 

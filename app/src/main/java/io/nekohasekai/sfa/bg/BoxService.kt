@@ -697,6 +697,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             result = v6.content
         }
 
+        // Служебный порт ядра (Clash API) закрываем паролем устройства: без него любое
+        // приложение телефона читает список соединений и переключает выход
+        // ([ClashSecretPatch]). Пароль профиля, если сервер его задал, главнее.
+        val clash = ClashSecretPatch.addSecret(result) { Settings.clashSecret }
+        ClashSecretPatch.log(clash)
+        result = clash.content
+        ImenaSaytov.sekret = clash.secret
+
         val layout = AutoModeExits.parse(result, OlcRtcParams.socksPort)
         val probe = ProbeInboundPatch.addProbeInbounds(result, layout.measurable)
         ProbeInboundPatch.log(probe)

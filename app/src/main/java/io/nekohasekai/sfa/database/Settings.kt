@@ -195,6 +195,22 @@ object Settings {
     // окажется выбранной, но не поднятой.
     var autoModeManualRoom by dataStore.boolean(SettingsKey.AUTO_MODE_MANUAL_ROOM) { false }
 
+    // Пароль служебного порта ядра (Clash API). Свой у каждого устройства, создаётся при
+    // первом обращении ([clashSecret]) и нигде, кроме приватной базы приложения, не лежит.
+    private var clashSecretStored by dataStore.string(SettingsKey.CLASH_SECRET) { "" }
+
+    @get:Synchronized
+    val clashSecret: String
+        get() {
+            val have = clashSecretStored
+            if (have.length >= 32) return have
+            val bytes = ByteArray(32)
+            java.security.SecureRandom().nextBytes(bytes)
+            val fresh = bytes.joinToString("") { "%02x".format(it) }
+            clashSecretStored = fresh
+            return fresh
+        }
+
     // Имя выхода, выбранного руками. Держали его только в памяти автомата, поэтому выбор,
     // сделанный до включения сети, пропадал: ядра ещё нет, команду выбора отдать некому,
     // а перезапуск процесса стирал память. 07.08.2026 это ловилось в эмуляторе: выбрал
