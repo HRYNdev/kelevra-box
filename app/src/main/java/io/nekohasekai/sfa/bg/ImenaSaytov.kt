@@ -29,6 +29,13 @@ import org.json.JSONObject
 object ImenaSaytov {
     private const val TAG = "KelevraImena"
 
+    /**
+     * Пароль служебного порта в запущенном конфиге ([ClashSecretPatch]); пусто — порт
+     * без пароля (старый профиль, правка не легла). Ставит BoxService при сборке конфига.
+     */
+    @Volatile
+    internal var sekret: String = ""
+
     /** Служебный порт ядра. Тот же, что стоит в профиле по умолчанию. */
     private const val ADRES = "http://127.0.0.1:9090/connections"
 
@@ -150,6 +157,8 @@ object ImenaSaytov {
         conn.connectTimeout = 1500
         conn.readTimeout = 1500
         conn.requestMethod = "GET"
+        val parol = sekret
+        if (parol.isNotEmpty()) conn.setRequestProperty("Authorization", "Bearer $parol")
         try {
             if (conn.responseCode !in 200..299) return ""
             return BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
@@ -195,6 +204,7 @@ object ImenaSaytov {
         kesh.clear()
         sprashivaliPoAdresu.clear()
         otkazyvaloS = 0L
+        sekret = ""
         potolok.sbrosit()
         chasy = { System.nanoTime() / 1_000_000L }
     }
