@@ -174,4 +174,52 @@ class PriglashenieTest {
         assertFalse(io.nekohasekai.sfa.update.IshodUstanovki.mozhnoUvedomit(1_000_000L + sutki - 1, 1_000_000L))
         assertTrue(io.nekohasekai.sfa.update.IshodUstanovki.mozhnoUvedomit(1_000_000L + sutki, 1_000_000L))
     }
+
+    // ---- имя профиля ----
+
+    @Test
+    fun pervyj_profil_nazyvaetsya_kak_ranshe() {
+        assertEquals("Kelevra", Priglashenie.imyaProfilya("https://$subkv/u/klyuch", emptyList(), "18.10"))
+        assertEquals("Kelevra", Priglashenie.imyaProfilya("https://$subkv/u/klyuch", listOf("Мой профиль"), "18.10"))
+    }
+
+    @Test
+    fun vtoroj_profil_otlichaetsya_serverom() {
+        assertEquals(
+            "Kelevra · node2kv",
+            Priglashenie.imyaProfilya("https://node2kv.example.com/u/klyuch", listOf("Kelevra"), "18.10"),
+        )
+        assertEquals(
+            "Kelevra · subkv",
+            Priglashenie.imyaProfilya("https://$subkv/k/KOD", listOf("kelevra "), "18.10"),
+        )
+    }
+
+    @Test
+    fun tot_zhe_server_dobavlyaet_datu_potom_nomer() {
+        val url = "https://node2kv.example.com/u/klyuch"
+        assertEquals(
+            "Kelevra · node2kv · 18.10",
+            Priglashenie.imyaProfilya(url, listOf("Kelevra", "Kelevra · node2kv"), "18.10"),
+        )
+        assertEquals(
+            "Kelevra · node2kv · 18.10 (3)",
+            Priglashenie.imyaProfilya(
+                url,
+                listOf("Kelevra", "Kelevra · node2kv", "Kelevra · node2kv · 18.10", "Kelevra · node2kv · 18.10 (2)"),
+                "18.10",
+            ),
+        )
+    }
+
+    @Test
+    fun korotkoe_imya_servera_iz_lyubogo_adresa() {
+        assertEquals("subkv", Priglashenie.korotkoeImyaServera("https://$subkv/u/klyuch"))
+        assertEquals("node2kv", Priglashenie.korotkoeImyaServera("https://node2kv.example.com:8443/k/KOD"))
+        assertEquals("panel", Priglashenie.korotkoeImyaServera("https://panel.example.org/sub/abc?x=1"))
+        assertEquals("10.0.0.5", Priglashenie.korotkoeImyaServera("http://10.0.0.5:2096/sub/abc"))
+        assertEquals("", Priglashenie.korotkoeImyaServera("ne-adres"))
+        // Без сервера в адресе имя всё равно отличается: дата и номер.
+        assertEquals("Kelevra · 18.10", Priglashenie.imyaProfilya("ne-adres", listOf("Kelevra"), "18.10"))
+    }
 }
