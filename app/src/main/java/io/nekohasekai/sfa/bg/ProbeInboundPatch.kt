@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import java.net.InetAddress
 import java.net.ServerSocket
 import org.json.JSONArray
@@ -175,6 +174,6 @@ object ProbeInboundPatch {
     }
 
     fun log(result: Result) {
-        Log.i(TAG, result.note)
+        KLog.i(TAG, result.note)
     }
 }

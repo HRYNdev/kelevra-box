@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.sfa.bg.path.HonestProbe
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
@@ -167,7 +166,7 @@ object OlcRtcCore {
         try {
             Class.forName(CLASS_MOBILE, true, OlcRtcCore::class.java.classLoader)
         } catch (t: Throwable) {
-            Log.w(TAG, "класс $CLASS_MOBILE недоступен: ${t.javaClass.simpleName}: ${t.message}")
+            KLog.w(TAG, "класс $CLASS_MOBILE недоступен: ${t.javaClass.simpleName}: ${t.message}")
             null
         }
     }
@@ -201,7 +200,7 @@ object OlcRtcCore {
             // Причина не в комнате, а в самой сборке или параметрах — повтор ничего не даст.
             if (last is State.Unavailable || last is State.Failed && isPermanent(last.reason)) return last
             if (attempt < attempts) {
-                Log.i(TAG, "попытка $attempt из $attempts не удалась (${lastError}), ждём ${params.retryPauseMillis} мс")
+                KLog.i(TAG, "попытка $attempt из $attempts не удалась (${lastError}), ждём ${params.retryPauseMillis} мс")
                 if (!sleepWhileNeeded(params.retryPauseMillis, stillNeeded)) return cancelled()
             }
         }
@@ -212,7 +211,7 @@ object OlcRtcCore {
     const val CANCELLED_REASON = "подъём отменён: комната больше не нужна"
 
     private fun cancelled(): State {
-        Log.i(TAG, "подъём комнаты прерван: она больше не нужна")
+        KLog.i(TAG, "подъём комнаты прерван: она больше не нужна")
         return failed(CANCELLED_REASON, unavailable = false)
     }
 
@@ -282,7 +281,7 @@ object OlcRtcCore {
         lastError = null
         return try {
             if (invokeIsRunning(mobile)) {
-                Log.w(TAG, "ядро уже запущено, гасим прошлый запуск")
+                KLog.w(TAG, "ядро уже запущено, гасим прошлый запуск")
                 invokeStop(mobile)
             }
 
@@ -312,7 +311,7 @@ object OlcRtcCore {
                 LIVENESS_FAILURES,
             )
 
-            Log.i(
+            KLog.i(
                 TAG,
                 "старт (попытка $attempt из $attempts, потолок ${params.readyTimeoutMillis} мс): " +
                     "carrier=${params.carrier} transport=${params.transport} " +
@@ -344,7 +343,7 @@ object OlcRtcCore {
 
             state = State.Ready
             health = Health.Unknown
-            Log.i(
+            KLog.i(
                 TAG,
                 "готов за ${android.os.SystemClock.elapsedRealtime() - startedAt} мс " +
                     "(попытка $attempt): SOCKS5 на $SOCKS_LISTEN_HOST:${params.socksPort}",
@@ -378,7 +377,7 @@ object OlcRtcCore {
 
         state = State.Starting
         lastError = null
-        Log.i(TAG, "старт носителя Телемост (попытка $attempt из $attempts)")
+        KLog.i(TAG, "старт носителя Телемост (попытка $attempt из $attempts)")
         val reason = try {
             TelemostCore.start(
                 url = params.telemostUrl,
@@ -395,7 +394,7 @@ object OlcRtcCore {
         if (reason != null) return failed(reason, unavailable = false)
         state = State.Ready
         health = Health.Unknown
-        Log.i(TAG, "Телемост готов: SOCKS5 на $SOCKS_LISTEN_HOST:${params.socksPort}")
+        KLog.i(TAG, "Телемост готов: SOCKS5 на $SOCKS_LISTEN_HOST:${params.socksPort}")
         return State.Ready
     }
 
@@ -418,15 +417,15 @@ object OlcRtcCore {
             state = State.Idle
             return
         }
-        Log.i(TAG, "остановка ядра")
+        KLog.i(TAG, "остановка ядра")
         val stopper = Thread({ runCatching { invokeStop(mobile) } }, "olcrtc-stop")
         stopper.isDaemon = true
         stopper.start()
         stopper.join(STOP_TIMEOUT_MILLIS)
         if (stopper.isAlive) {
-            Log.w(TAG, "ядро не остановилось за ${STOP_TIMEOUT_MILLIS} мс, продолжаем без него")
+            KLog.w(TAG, "ядро не остановилось за ${STOP_TIMEOUT_MILLIS} мс, продолжаем без него")
         } else {
-            Log.i(TAG, "ядро остановлено")
+            KLog.i(TAG, "ядро остановлено")
         }
         state = State.Idle
     }
@@ -456,7 +455,7 @@ object OlcRtcCore {
         }
         health = result
         healthCheckedAt = android.os.SystemClock.elapsedRealtime()
-        Log.i(
+        KLog.i(
             TAG,
             "проверка канала: " + when (result) {
                 is Health.Live -> "данные идут, ${result.latencyMs} мс"
@@ -494,7 +493,7 @@ object OlcRtcCore {
         val newState = if (unavailable) State.Unavailable else State.Failed(reason)
         state = newState
         lastError = reason
-        Log.w(TAG, "olcRTC не поднят: $reason")
+        KLog.w(TAG, "olcRTC не поднят: $reason")
         return newState
     }
 
@@ -532,7 +531,7 @@ object OlcRtcCore {
             when (method.name) {
                 "writeLog" -> {
                     val line = (args?.getOrNull(0) as? String)?.trimEnd()
-                    if (!line.isNullOrBlank()) Log.i(CORE_TAG, redact(line))
+                    if (!line.isNullOrBlank()) KLog.i(CORE_TAG, redact(line))
                     null
                 }
 
@@ -561,10 +560,10 @@ object OlcRtcCore {
                 "protect" -> {
                     val fd = (args?.getOrNull(0) as? Number)?.toInt()
                     val ok = fd != null && runCatching { protector(fd) }.getOrElse {
-                        Log.w(TAG, "protect(fd) сорвался: ${it.message}")
+                        KLog.w(TAG, "protect(fd) сорвался: ${it.message}")
                         false
                     }
-                    if (!ok) Log.w(TAG, "protect(fd=$fd) вернул false — сокет не защищён от своего tun")
+                    if (!ok) KLog.w(TAG, "protect(fd=$fd) вернул false — сокет не защищён от своего tun")
                     ok
                 }
 
@@ -580,7 +579,7 @@ object OlcRtcCore {
     private fun loadInterface(name: String): Class<*>? = try {
         Class.forName(name, true, OlcRtcCore::class.java.classLoader)
     } catch (t: Throwable) {
-        Log.w(TAG, "интерфейс $name недоступен: ${t.message}")
+        KLog.w(TAG, "интерфейс $name недоступен: ${t.message}")
         null
     }
 

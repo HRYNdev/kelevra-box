@@ -28,7 +28,6 @@ import android.net.NetworkRequest
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -87,7 +86,7 @@ object DefaultNetworkListener {
                         // Свежий слушатель зовётся из того же ConnectivityThread, что и рассылка
                         // ниже: голый вызов здесь ронял бы процесс ровно так же (fix/crashes-15-08).
                         if (network != null) notifyListeners(listOf(message.listener), network) {
-                            Log.w(TAG, "слушатель сети упал на Start", it)
+                            KLog.w(TAG, "слушатель сети упал на Start", it)
                         }
                     }
 
@@ -117,14 +116,14 @@ object DefaultNetworkListener {
                         pendingRequests.forEach { it.response.complete(message.network) }
                         pendingRequests.clear()
                         notifyListeners(listeners.values, network) {
-                            Log.w(TAG, "слушатель сети упал на Put: ${it.message}")
+                            KLog.w(TAG, "слушатель сети упал на Put: ${it.message}")
                         }
                     }
 
                     is NetworkMessage.Update ->
                         if (network == message.network) {
                             notifyListeners(listeners.values, network) {
-                                Log.w(TAG, "слушатель сети упал на Update: ${it.message}")
+                                KLog.w(TAG, "слушатель сети упал на Update: ${it.message}")
                             }
                         }
 
@@ -132,7 +131,7 @@ object DefaultNetworkListener {
                         if (network == message.network) {
                             network = null
                             notifyListeners(listeners.values, null) {
-                                Log.w(TAG, "слушатель сети упал на Lost: ${it.message}")
+                                KLog.w(TAG, "слушатель сети упал на Lost: ${it.message}")
                             }
                         }
                 }
@@ -165,7 +164,7 @@ object DefaultNetworkListener {
             // Появление и пропажа сети — самые дешёвые и самые надёжные отметки времени
             // в разборе «связь пропала». До сих пор они не писались вовсе, и обрыв
             // приходилось выводить из того, что автомат вдруг заговорил про «сети нет».
-            Log.i(TAG, "система: сеть $network появилась")
+            KLog.i(TAG, "система: сеть $network появилась")
             networkActor.send(
                 NetworkMessage.Put(
                     network,
@@ -189,7 +188,7 @@ object DefaultNetworkListener {
         }
 
         override fun onLost(network: Network) = runBlocking {
-            Log.i(TAG, "система: сеть $network пропала")
+            KLog.i(TAG, "система: сеть $network пропала")
             networkActor.send(
                 NetworkMessage.Lost(
                     network,

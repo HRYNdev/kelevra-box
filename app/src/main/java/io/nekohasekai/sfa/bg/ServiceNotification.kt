@@ -128,7 +128,8 @@ class ServiceNotification(private val status: MutableLiveData<Status>, private v
                         PendingIntent.getBroadcast(
                             service,
                             0,
-                            Intent(Action.SERVICE_CLOSE).setPackage(service.packageName),
+                            Intent(Action.SERVICE_CLOSE).setPackage(service.packageName)
+                                .putExtra(BoxService.EXTRA_KTO, "человек: уведомление"),
                             flags,
                         ),
                     ).build(),

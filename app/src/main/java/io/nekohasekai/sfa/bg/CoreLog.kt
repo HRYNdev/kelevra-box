@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.libbox.LogEntry
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.database.Settings
@@ -94,6 +93,14 @@ object CoreLog {
     @Volatile
     private var oknoOtkazov = 0
 
+    /** Из [oknoOtkazov] — отказы самого туннеля (см. [kodOtkazaTunnelya]). */
+    @Volatile
+    private var oknoTunnel = 0
+
+    /** Из [oknoOtkazov] — отказы прямых соединений на голый адрес (без имени), отдельным счётом. */
+    @Volatile
+    private var oknoPryamoIp = 0
+
     private val oknoKody = LinkedHashMap<String, Int>()
 
     /** Имена сайтов, по которым отказывали в этом окне: ось «сайт» для разбора. */
@@ -176,6 +183,113 @@ object CoreLog {
         }
     }
 
+    /**
+     * Отказ самого туннеля — код причины; null, если строка не про это.
+     *
+     * Повод. До 20.10.2026 отказом считалась только строка `open connection to`, то есть
+     * отказ ПРЯМОГО соединения: туннель так не ломается. У телефона с мёртвым туннелем
+     * сводка писала «соединений 475, отказов 0», а журнал ядра тем временем был забит
+     * `connection upload handshake: io: read/write on closed pipe` — так выглядит гибель
+     * выхода-узла изнутри ядра. Считаем по выходам туннеля:
+     * - `upload handshake` — соединение через узел не прошло рукопожатие;
+     * - `report handshake success` — то же на стороне входа;
+     * - `listen packet connection` через узел (не через прямой выход) — UDP через узел;
+     * - `urltest[…] … unavailable` — проверка выходов в ядре сама назвала узел недоступным.
+     *
+     * `download closed: http2: response body closed` — штатное закрытие потока, не отказ.
+     */
+    internal fun kodOtkazaTunnelya(line: String): String? {
+        if (line.contains("download closed")) return null
+        val error = line.contains("ERROR")
+        return when {
+            error && line.contains("upload handshake") -> "tunnel_upload"
+            error && line.contains("report handshake success") -> "tunnel_rukopozhatie"
+            error && line.contains("listen packet connection") && !line.contains("outbound/direct[") -> "tunnel_pakety"
+            line.contains("outbound/urltest[") && line.contains(" unavailable") -> "urltest_nedostupen"
+            else -> null
+        }
+    }
+
+    /** Голый адрес, а не имя: IPv4 или IPv6. */
+    internal fun golyyAdres(adres: String): Boolean =
+        adres.isNotEmpty() && (adres.contains(':') || RX_IPV4.matches(adres))
+
+    private val RX_IPV4 = Regex("""\d{1,3}(\.\d{1,3}){3}""")
+
+    /** Уровень строки ядра по её началу («DEBUG[1067] …»): 0 паника … 6 трассировка; null — не узнан. */
+    internal fun urovenStroki(line: String): Int? {
+        val skobka = line.indexOf('[')
+        if (skobka <= 0 || skobka > 6) return null
+        return when (line.substring(0, skobka)) {
+            "PANIC" -> 0
+            "FATAL" -> 1
+            "ERROR" -> 2
+            "WARN" -> 3
+            "INFO" -> 4
+            "DEBUG" -> 5
+            "TRACE" -> 6
+            else -> null
+        }
+    }
+
+    private const val UROVEN_INFO = 4
+    private const val UROVEN_DEBUG = 5
+
+    /** DEBUG-строки, которые разбирает сервер (netmon `razbor_zhurnalov.py`): решение маршрута. */
+    private val RX_DEBUG_MARSHRUT = Regex("""router: match\[\d+].*?=> (?:route\(|direct)""")
+
+    /** Запрос имени: номер запроса и сама строка нужны, только если по нему придёт отказ набором. */
+    private val RX_DNS_ZAPROS = Regex("""\[(\d+) [\d.]+m?s] dns: exchange [a-zA-Z0-9_.\-]+\. IN (?:A|AAAA|HTTPS)""")
+
+    /** Отказ имени набором правил (реклама): «[id …] dns: match[N] rule_set=ads => reject». */
+    private val RX_DNS_OTKAZ = Regex("""\[(\d+) [\d.]+m?s] dns: match\[\d+] rule_set=[a-z0-9_\-]+ => reject""")
+
+    /** Сколько запросов имени помним в ожидании отказа. Отказ идёт следом за запросом. */
+    private const val DNS_ZAPROSY_MAX = 256
+
+    private val dnsZaprosy = object : LinkedHashMap<String, String>(DNS_ZAPROSY_MAX, 0.75f, false) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > DNS_ZAPROSY_MAX
+    }
+
+    /**
+     * Что из строки ядра ложится в файл: список строк (пусто — ничего).
+     *
+     * Повод. 20.10.2026: ядро на подробности DEBUG/TRACE заполняло свои 3 × 2 МБ за 2–18 минут
+     * и вытесняло само себя — к жалобе от беды не оставалось ни строки. В файл идёт всё
+     * от INFO и выше (в том числе `inbound/outbound connection`, по которым сервер считает
+     * соединения, и все ERROR), а из DEBUG — только то, что сервер разбирает: решение маршрута
+     * (`router: match … => route(…)/direct`), отказ имени набором с его запросом (`dns: exchange`
+     * пишется лишь когда следом пришёл `=> reject` того же номера) и `urltest … unavailable`.
+     * TRACE не пишется. Счёт ([uchest]) и окно сырья ([zapomnit]) видят все строки, как раньше.
+     */
+    internal fun vFayl(level: Int, line: String): List<String> {
+        val uroven = urovenStroki(line) ?: level
+        if (uroven <= UROVEN_INFO) return listOf(line)
+        if (uroven > UROVEN_DEBUG) return emptyList()
+        if (RX_DEBUG_MARSHRUT.containsMatchIn(line)) return listOf(line)
+        if (line.contains("outbound/urltest[") && line.contains(" unavailable")) return listOf(line)
+        RX_DNS_ZAPROS.find(line)?.let { m ->
+            synchronized(dnsZaprosy) { dnsZaprosy[m.groupValues[1]] = line }
+            return emptyList()
+        }
+        RX_DNS_OTKAZ.find(line)?.let { m ->
+            val zapros = synchronized(dnsZaprosy) { dnsZaprosy.remove(m.groupValues[1]) }
+            return listOfNotNull(zapros, line)
+        }
+        return emptyList()
+    }
+
+    /** Один отказ (прямой или туннеля) — в оба окна и в проверку шторма. */
+    private fun schestOtkaz(teper: Long) {
+        oknoOtkazov++
+        bystroOtkazov++
+        if (shtorm(bystroOtkazov, bystroSoed)) {
+            // Шторм в коротком окне — и повод спросить режим сети. Поток журнала не держим.
+            thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("шторм за ${BYSTRO_OKNO_MS / 1000} с") }
+            podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${BYSTRO_OKNO_MS / 1000} с")
+        }
+    }
+
     private fun uchest(line: String) {
         val teper = System.currentTimeMillis()
         if (oknoNachalo == 0L) oknoNachalo = teper
@@ -188,9 +302,12 @@ object CoreLog {
             oknoSoedineniy++
             bystroSoed++
         }
+        kodOtkazaTunnelya(line)?.let { kod ->
+            oknoTunnel++
+            oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
+            schestOtkaz(teper)
+        }
         if (line.contains("ERROR") && line.contains("open connection to")) {
-            oknoOtkazov++
-            bystroOtkazov++
             otkazUzla(line, teper)
             // Настройки на каждой строке не читаем: порт — из уже работающих параметров ядра, и
             // только пока оно поднимается.
@@ -202,16 +319,12 @@ object CoreLog {
                 AutoMode.selectorOnWb(),
             )
             if (!wbPodnimaetsya && predohranitel.offer(line, teper)) {
-                Log.w(TAG, "шторм отказов в локальный сокс — увожу выход с мёртвой комнаты")
+                KLog.w(TAG, "шторм отказов в локальный сокс — увожу выход с мёртвой комнаты")
                 runCatching { Zapisi.perehod("predohranitel", "отказы в локальный сокс") }
                 // Переключение выхода — вызов в командный сервер; поток журнала им не держим.
                 thread(name = "socks-breaker", isDaemon = true) { AutoMode.roomLost("предохранитель") }
             }
-            if (shtorm(bystroOtkazov, bystroSoed)) {
-                // Шторм в коротком окне — и повод спросить режим сети. Поток журнала не держим.
-                thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("шторм за ${BYSTRO_OKNO_MS / 1000} с") }
-                podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${BYSTRO_OKNO_MS / 1000} с")
-            }
+            schestOtkaz(teper)
             val nizhnyaya = line.lowercase(Locale.US)
             val kod = PRICHINY.firstOrNull { nizhnyaya.contains(it.second) }?.first ?: "prochee"
             oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
@@ -219,6 +332,7 @@ object CoreLog {
             // адрес. Без имени ось «сайт» в журнале телефона отсутствует вовсе, и
             // диагноз 10.09.2026 приходилось ставить обратным запросом руками.
             val adres = RX_ADRES_OTKAZA.find(line)?.groupValues?.getOrNull(1).orEmpty()
+            if (golyyAdres(adres) && RX_VYHOD.find(line)?.groupValues?.getOrNull(1) == "direct") oknoPryamoIp++
             if (adres.isNotEmpty()) {
                 val imya = runCatching { ImenaSaytov.imya(adres) }.getOrDefault("")
                 if (imya.isNotEmpty()) {
@@ -243,6 +357,8 @@ object CoreLog {
     private fun zakrytOkno(teper: Long) {
         val soed = oknoSoedineniy
         val otk = oknoOtkazov
+        val tunnel = oknoTunnel
+        val pryamoIp = oknoPryamoIp
         val kody = oknoKody.entries.joinToString(",") { "${it.key}=${it.value}" }
         // Топ имён: пяти хватает, чтобы увидеть «ломается именно Яндекс», а не гадать.
         val topImen = oknoImena.entries.sortedByDescending { it.value }.take(5)
@@ -255,6 +371,8 @@ object CoreLog {
         oknoNachalo = teper
         oknoSoedineniy = 0
         oknoOtkazov = 0
+        oknoTunnel = 0
+        oknoPryamoIp = 0
         oknoKody.clear()
         oknoImena.clear()
         if (soed == 0 && otk == 0) return
@@ -263,7 +381,8 @@ object CoreLog {
             rotator?.append(
                 "${stampFormat.format(Date(teper))} -- сводка за 10 мин: соединений $soed, " +
                     "отказов $otk ($dolya%)${if (kody.isEmpty()) "" else ", причины $kody"}" +
-                    "${if (imena.isEmpty()) "" else ", имена $imena"}\n",
+                    "${if (imena.isEmpty()) "" else ", имена $imena"}" +
+                    ", из них туннеля $tunnel, прямых на голый адрес $pryamoIp\n",
             )
         }
         // Та же сводка записью с полями: по ней сервер считает норму, и разбирать
@@ -275,6 +394,8 @@ object CoreLog {
                 otkazy = otk,
                 kody = kodyDlyaZapisi,
                 imena = imenaDlyaZapisi,
+                tunnel = tunnel,
+                pryamoIp = pryamoIp,
             )
         }
         if (povodSprositRezhim(dolya, kodyDlyaZapisi)) {
@@ -316,7 +437,7 @@ object CoreLog {
     private fun podnyatTrevogu(teper: Long, dolya: Int, otk: Int, gde: String) {
         if (teper - trevogaBylaV <= TREVOGA_NE_CHASHCHE_MS) return
         trevogaBylaV = teper
-        Log.w(TAG, "отказов $dolya% $gde — отправляю журнал, не дожидаясь ночи")
+        KLog.w(TAG, "отказов $dolya% $gde — отправляю журнал, не дожидаясь ночи")
         runCatching { Zapisi.perehod("trevoga", "отказов $dolya% $gde, всего $otk") }
         sohranitOknoSyrya(teper, dolya, otk)
         LogUploadWork.otpravitSeychas("по тревоге")
@@ -418,12 +539,12 @@ object CoreLog {
                 "=== окно сырья: отказов $otkazov ($dolya%), строк ${stroki.size} ===\n" +
                     stroki.joinToString("\n") + "\n",
             )
-            Log.i(TAG, "окно сырья сохранено: $imya, строк ${stroki.size}")
+            KLog.i(TAG, "окно сырья сохранено: $imya, строк ${stroki.size}")
             val vse = papka.listFiles { f -> f.name.startsWith("kelevra-syrye-") }?.toList()
                 ?: return@runCatching
             staryeFajlyKUdaleniyu(vse.map { it.name }, otpravlennyeImena(vse))
                 .forEach { name -> runCatching { File(papka, name).delete() } }
-        }.onFailure { Log.w(TAG, "окно сырья не сохранилось: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "окно сырья не сохранилось: ${it.message}") }
     }
 
     private val handler = object : CommandClient.Handler {
@@ -436,7 +557,8 @@ object CoreLog {
                     if (line.isEmpty()) continue
                     runCatching { zapomnit(line) }
                     runCatching { uchest(line) }
-                    append(stamp).append(' ').append(line).append('\n')
+                    val stroki = runCatching { vFayl(entry.level, line) }.getOrDefault(listOf(line))
+                    for (stroka in stroki) append(stamp).append(' ').append(stroka).append('\n')
                 }
             }
             runCatching { target.append(text) }
@@ -454,7 +576,7 @@ object CoreLog {
         val started = runCatching {
             val folder = AppLog.dir(Application.application)
             if (!folder.isDirectory && !folder.mkdirs()) error("каталог журнала не создан: $folder")
-            rotator = LogRotator(folder, BASE_NAME, MAX_FILE_BYTES, MAX_FILES)
+            rotator = LogRotator(folder, BASE_NAME, MAX_FILE_BYTES, MAX_FILES, header = AppLog::shapkaFayla)
             val own = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             scope = own
             CommandClient(own, CommandClient.ConnectionType.Log, handler, localOnly = true)
@@ -462,9 +584,17 @@ object CoreLog {
         }
         started.onSuccess {
             client = it
-            Log.i(TAG, "журнал ядра пишется в $BASE_NAME")
+            // Пояс и состав — в сам файл: шапка ложится только в начало нового файла, а
+            // после перезапуска запись продолжает старый.
+            runCatching {
+                rotator?.append(
+                    "${stampFormat.format(Date())} === журнал ядра начат, пояс ${AppLog.poyas()}, " +
+                        "пишу INFO и выше, из DEBUG — нужное разбору ===\n",
+                )
+            }
+            KLog.i(TAG, "журнал ядра пишется в $BASE_NAME")
         }.onFailure {
-            Log.w(TAG, "журнал ядра не открылся: ${it.message}")
+            KLog.w(TAG, "журнал ядра не открылся: ${it.message}")
             rotator = null
             scope?.cancel()
             scope = null

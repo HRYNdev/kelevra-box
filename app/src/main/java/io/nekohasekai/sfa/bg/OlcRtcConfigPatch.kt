@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -626,6 +625,6 @@ object OlcRtcConfigPatch {
     }
 
     fun log(result: Result) {
-        Log.i(TAG, "olcRTC: ${result.note}")
+        KLog.i(TAG, "olcRTC: ${result.note}")
     }
 }

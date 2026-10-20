@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.utils.HTTPClient
@@ -80,13 +79,13 @@ object RuleSetCache {
                     if (!ok) {
                         val size = file.length()
                         file.delete()
-                        Log.w(TAG, "набор «${file.name.removeSuffix(SUFFIX)}» в кэше испорчен ($size б) — выкинул")
+                        KLog.w(TAG, "набор «${file.name.removeSuffix(SUFFIX)}» в кэше испорчен ($size б) — выкинул")
                     }
                 }
             }
             .associateBy { it.name.removeSuffix(SUFFIX) }
     }.getOrElse {
-        Log.w(TAG, "кэш наборов не прочитался: ${it.message}")
+        KLog.w(TAG, "кэш наборов не прочитался: ${it.message}")
         emptyMap()
     }
 
@@ -145,11 +144,11 @@ object RuleSetCache {
 
         val due = remotes.filter { stale(File(dir, it.tag + SUFFIX), now) }
         if (due.isEmpty()) {
-            Log.i(TAG, "наборы свежие, докачивать нечего ($reason)")
+            KLog.i(TAG, "наборы свежие, докачивать нечего ($reason)")
             return
         }
         val way = if (socksPort == DIRECT) "напрямую" else "через 127.0.0.1:$socksPort"
-        Log.i(TAG, "докачиваю наборы: ${due.size} из ${remotes.size} ($reason), $way")
+        KLog.i(TAG, "докачиваю наборы: ${due.size} из ${remotes.size} ($reason), $way")
 
         var ok = 0
         for (remote in due) {
@@ -157,7 +156,7 @@ object RuleSetCache {
         }
         val have = cached().keys
         _state.value = State(total = remotes.size, ready = remotes.count { it.tag in have })
-        Log.i(TAG, "докачано $ok из ${due.size}; в кэше ${_state.value.ready} из ${remotes.size}")
+        KLog.i(TAG, "докачано $ok из ${due.size}; в кэше ${_state.value.ready} из ${remotes.size}")
     }
 
     private const val SUFFIX = ".srs"
@@ -190,7 +189,7 @@ object RuleSetCache {
             }
             if (!looksLikeRuleSet(tmp, remote.format)) {
                 tmp.delete()
-                Log.w(TAG, "набор «${remote.tag}» скачался непохожим на набор (${tmp.length()} б) — не берём")
+                KLog.w(TAG, "набор «${remote.tag}» скачался непохожим на набор (${tmp.length()} б) — не берём")
                 return false
             }
             // Сначала содержимое на диск, потом имя. Без этого переименование могло дойти
@@ -202,13 +201,13 @@ object RuleSetCache {
             // котором набора нет вовсе — под работающим ядром, которое следит за папкой.
             if (!tmp.renameTo(target)) {
                 tmp.delete()
-                Log.w(TAG, "набор «${remote.tag}» не переименовался в кэше")
+                KLog.w(TAG, "набор «${remote.tag}» не переименовался в кэше")
                 return false
             }
             true
         }.getOrElse {
             tmp.delete()
-            Log.w(TAG, "набор «${remote.tag}» не скачался: ${it.message}")
+            KLog.w(TAG, "набор «${remote.tag}» не скачался: ${it.message}")
             false
         }
     }

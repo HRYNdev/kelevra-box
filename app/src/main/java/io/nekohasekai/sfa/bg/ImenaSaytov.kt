@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -148,7 +147,7 @@ object ImenaSaytov {
             return
         }
         runCatching { razobrat(telo) }.onFailure {
-            Log.w(TAG, "список соединений ядра не разобрался: ${it.message}")
+            KLog.w(TAG, "список соединений ядра не разобрался: ${it.message}")
         }
     }
 

@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -130,6 +129,6 @@ object LifelinePatch {
     }
 
     fun log(result: Result) {
-        if (result.patched) Log.i(TAG, result.note) else Log.w(TAG, result.note)
+        if (result.patched) KLog.i(TAG, result.note) else KLog.w(TAG, result.note)
     }
 }

@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import org.json.JSONObject
 
 /**
@@ -56,6 +55,6 @@ object CacheSelectPatch {
     }
 
     fun log(result: Result) {
-        if (result.patched) Log.i(TAG, result.note) else Log.i(TAG, result.note)
+        if (result.patched) KLog.i(TAG, result.note) else KLog.i(TAG, result.note)
     }
 }

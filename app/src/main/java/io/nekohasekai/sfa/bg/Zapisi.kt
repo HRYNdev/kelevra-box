@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import org.json.JSONObject
 
@@ -44,7 +43,7 @@ object Zapisi {
             val folder = AppLog.dir(Application.application)
             if (!folder.isDirectory && !folder.mkdirs()) error("каталог записей не создан: $folder")
             rotator = LogRotator(folder, BASE_NAME, MAX_FILE_BYTES, MAX_FILES)
-        }.onFailure { Log.w(TAG, "записи не открылись: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "записи не открылись: ${it.message}") }
     }
 
     @Synchronized
@@ -71,7 +70,7 @@ object Zapisi {
                 if (v != null) o.put(k, v)
             }
             target.append(o.toString() + "\n")
-        }.onFailure { Log.w(TAG, "запись $tip не легла: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "запись $tip не легла: ${it.message}") }
     }
 
     /** Отказ соединения: главная запись, по которой ставится диагноз. */
@@ -97,22 +96,35 @@ object Zapisi {
         otkazy: Int,
         kody: Map<String, Int>,
         imena: Map<String, Int>,
+        tunnel: Int = 0,
+        pryamoIp: Int = 0,
     ) {
         zapisat(
             "svodka",
             mapOf(
                 "okno" to okno,
                 "soed" to soed,
+                // Все отказы окна, в том числе туннеля; разбивка — в двух полях ниже.
                 "otkazy" to otkazy,
                 "kody" to JSONObject(kody as Map<*, *>),
                 "imena" to JSONObject(imena as Map<*, *>),
+                // Из otkazy: отказы самого туннеля (рукопожатие через узел, urltest) — с 20.10.2026.
+                "tunnel" to tunnel,
+                // Из otkazy: прямые соединения на голый адрес, без имени.
+                "pryamo_ip" to pryamoIp,
             ),
         )
     }
 
-    /** Переход состояния: туннель, сеть, разрешение, профиль. */
-    fun perehod(kod: String, podrobno: String? = null) {
-        zapisat("perehod", mapOf("kod" to kod, "podrobno" to podrobno))
+    /**
+     * Переход состояния: туннель, сеть, разрешение, профиль.
+     *
+     * @param kto кто его сделал: «человек: плитка» / «человек: кнопка» / «человек: уведомление»,
+     *   «система», «ядро», «автомат». До 20.10.2026 остановки туннеля в записи не попадали
+     *   вовсе, и «кто выключил» узнавалось только реконструкцией по журналу.
+     */
+    fun perehod(kod: String, podrobno: String? = null, kto: String? = null) {
+        zapisat("perehod", mapOf("kod" to kod, "podrobno" to podrobno, "kto" to kto))
     }
 
     /** Обстановка: что за сеть и как настроено. Пишется на старте и при смене сети. */

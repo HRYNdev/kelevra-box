@@ -1,7 +1,6 @@
 package io.nekohasekai.sfa.bg
 
 import android.os.SystemClock
-import android.util.Log
 
 /**
  * Держит ядро WB Chat ([WbChatCore]) запущенным, пока оно нужно.
@@ -62,7 +61,7 @@ object WbChatWatchdog {
                 isDaemon = true
                 start()
             }
-            Log.i(TAG, "присмотр WB Chat включён")
+            KLog.i(TAG, "присмотр WB Chat включён")
         }
     }
 
@@ -77,7 +76,7 @@ object WbChatWatchdog {
             t?.join(1_000)
             runCatching { WbChatCore.stop() }
             WbChatCore.markIdle()
-            Log.i(TAG, "присмотр WB Chat выключен (перезапусков за сессию: $restarts)")
+            KLog.i(TAG, "присмотр WB Chat выключен (перезапусков за сессию: $restarts)")
         }
     }
 
@@ -91,7 +90,7 @@ object WbChatWatchdog {
                 val params = if (need) WbChatParams.resolve() else null
                 if (params == null) {
                     if (WbChatCore.isRunning() || WbChatCore.state !is WbChatCore.State.Idle) {
-                        Log.i(TAG, if (need) "параметров WB Chat нет — гашу ядро" else "WB Chat сейчас не нужен — гашу ядро")
+                        KLog.i(TAG, if (need) "параметров WB Chat нет — гашу ядро" else "WB Chat сейчас не нужен — гашу ядро")
                         WbChatCore.stop()
                         WbChatCore.markIdle()
                     }
@@ -103,7 +102,7 @@ object WbChatWatchdog {
 
                 if (WbChatCore.isRunning()) {
                     if (WbChatCore.runningParams != params) {
-                        Log.i(TAG, "параметры WB Chat сменились — перезапускаю ядро")
+                        KLog.i(TAG, "параметры WB Chat сменились — перезапускаю ядро")
                         WbChatCore.stop()
                         notBefore = 0L
                     } else {
@@ -117,7 +116,7 @@ object WbChatWatchdog {
                     // Долгий звонок, кончившийся сам, — обычный перезапуск, не «неудача подряд».
                     fails = if (lived >= HEALTHY_MILLIS) 0 else fails + 1
                     notBefore = SystemClock.elapsedRealtime() + pauseAfter(fails)
-                    Log.i(TAG, "ядро WB Chat вышло, прожив ${lived / 1000} с — перезапуск через ${pauseAfter(fails) / 1000} с")
+                    KLog.i(TAG, "ядро WB Chat вышло, прожив ${lived / 1000} с — перезапуск через ${pauseAfter(fails) / 1000} с")
                 }
 
                 val wait = notBefore - SystemClock.elapsedRealtime()
@@ -128,7 +127,7 @@ object WbChatWatchdog {
 
                 if (startedOnce) {
                     restarts++
-                    Log.i(TAG, "поднимаю WB Chat заново (неудач подряд: $fails)")
+                    KLog.i(TAG, "поднимаю WB Chat заново (неудач подряд: $fails)")
                 }
                 startedOnce = true
                 val error = WbChatCore.start(params)
@@ -136,7 +135,7 @@ object WbChatWatchdog {
                 if (error != null) {
                     fails++
                     notBefore = SystemClock.elapsedRealtime() + pauseAfter(fails)
-                    Log.w(TAG, "WB Chat не поднят ($error) — следующая попытка через ${pauseAfter(fails) / 1000} с")
+                    KLog.w(TAG, "WB Chat не поднят ($error) — следующая попытка через ${pauseAfter(fails) / 1000} с")
                 } else {
                     notBefore = 0L
                     // Выбор «Комнаты WB» ждал готовности ядра — пусть автомат применит его сейчас.

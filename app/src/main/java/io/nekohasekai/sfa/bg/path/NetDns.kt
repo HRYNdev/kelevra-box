@@ -1,8 +1,8 @@
 package io.nekohasekai.sfa.bg.path
 
+import io.nekohasekai.sfa.bg.KLog
 import android.net.Network
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -78,7 +78,7 @@ internal object NetDns {
     fun resolve(network: Network, host: String, budgetMillis: Long): Outcome {
         val resolvers = resolversOf(network)
         if (resolvers.isEmpty()) {
-            Log.d(TAG, "$host: у сети нет своих резолверов")
+            KLog.d(TAG, "$host: у сети нет своих резолверов")
             return Outcome.Silent("у сети нет своих резолверов")
         }
         val startedAt = SystemClock.elapsedRealtime()
@@ -96,7 +96,7 @@ internal object NetDns {
         val reasons = race.silences.mapNotNull { (it as? Outcome.Silent)?.reason } +
             if (race.unfinished > 0) listOf("не ответили за $budgetMillis мс: ${race.unfinished}") else emptyList()
         val reason = reasons.joinToString("; ").ifBlank { "резолверы молчат" }
-        Log.d(TAG, "$host: $reason (резолверов ${resolvers.size}, за ${SystemClock.elapsedRealtime() - startedAt} мс)")
+        KLog.d(TAG, "$host: $reason (резолверов ${resolvers.size}, за ${SystemClock.elapsedRealtime() - startedAt} мс)")
         return Outcome.Silent(reason)
     }
 
@@ -144,12 +144,12 @@ internal object NetDns {
                             // getByAddress по готовым байтам в сеть не ходит — имя не спрашивается.
                             runCatching { InetAddress.getByAddress(bytes) }.getOrNull()
                         }
-                        Log.d(TAG, "$host у ${text(resolver)}: ${addresses.joinToString { it.hostAddress.orEmpty() }} (за $took мс)")
+                        KLog.d(TAG, "$host у ${text(resolver)}: ${addresses.joinToString { it.hostAddress.orEmpty() }} (за $took мс)")
                         return Outcome.Answered(addresses, text(resolver), took)
                     }
                     // Чужой или битый пакет ответом не считаем и ждём дальше, пока есть бюджет.
-                    is NetDnsWire.Reply.NotOurs -> Log.d(TAG, "чужой пакет от ${text(resolver)}: ${reply.reason}")
-                    is NetDnsWire.Reply.Broken -> Log.d(TAG, "битый пакет от ${text(resolver)}: ${reply.reason}")
+                    is NetDnsWire.Reply.NotOurs -> KLog.d(TAG, "чужой пакет от ${text(resolver)}: ${reply.reason}")
+                    is NetDnsWire.Reply.Broken -> KLog.d(TAG, "битый пакет от ${text(resolver)}: ${reply.reason}")
                 }
             }
             @Suppress("UNREACHABLE_CODE")

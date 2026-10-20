@@ -2,7 +2,6 @@ package io.nekohasekai.sfa.bg
 
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import java.io.File
 import java.net.InetSocketAddress
@@ -173,7 +172,7 @@ object WbChatCore {
             lastLine = ""
             secrets = listOf(params.token, params.cookies, params.key).filter { it.length >= 8 }
             state = State.Starting
-            Log.i(
+            KLog.i(
                 TAG,
                 "старт: socks=127.0.0.1:${params.socksPort} собеседник=${params.peer} бонд=${params.bond} " +
                     "ключ=${if (params.key.isBlank()) "нет" else "есть"}",
@@ -202,7 +201,7 @@ object WbChatCore {
                     readyAt = SystemClock.elapsedRealtime()
                     lastError = ""
                     state = State.Ready
-                    Log.i(TAG, "готов за ${readyAt - startedAt} мс")
+                    KLog.i(TAG, "готов за ${readyAt - startedAt} мс")
                     return null
                 }
                 Thread.sleep(250)
@@ -226,7 +225,7 @@ object WbChatCore {
             lastError = why
             state = State.Failed(why)
         }
-        Log.i(TAG, why)
+        KLog.i(TAG, why)
         return code
     }
 
@@ -238,7 +237,7 @@ object WbChatCore {
             if (state !is State.Failed) state = State.Idle
             current
         } ?: return
-        Log.i(TAG, "остановка")
+        KLog.i(TAG, "остановка")
         // SIGTERM: на нём ядро кладёт трубку WB, иначе на той стороне висит звонок.
         p.destroy()
         val until = SystemClock.elapsedRealtime() + STOP_TIMEOUT_MILLIS
@@ -252,7 +251,7 @@ object WbChatCore {
             }
         }
         if (alive(p)) {
-            Log.w(TAG, "не вышел за $STOP_TIMEOUT_MILLIS мс, добиваю")
+            KLog.w(TAG, "не вышел за $STOP_TIMEOUT_MILLIS мс, добиваю")
             // до API 26 destroy() в libcore Android и так шлёт SIGKILL
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) p.destroyForcibly()
         }
@@ -278,7 +277,7 @@ object WbChatCore {
             lastError = reason
             state = State.Failed(reason)
         }
-        Log.w(TAG, reason)
+        KLog.w(TAG, reason)
         return reason
     }
 
@@ -301,10 +300,10 @@ object WbChatCore {
                 if (line.isBlank()) return@forEachLine
                 if (READY_MARKERS.any { it in line }) readySeen = true
                 lastLine = line
-                Log.i(CORE_TAG, line)
+                KLog.i(CORE_TAG, line)
             }
         }
-        Log.i(TAG, "ядро WB Chat закрыло вывод")
+        KLog.i(TAG, "ядро WB Chat закрыло вывод")
     }
 
     private fun redact(line: String): String {

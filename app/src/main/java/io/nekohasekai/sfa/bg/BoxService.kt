@@ -15,7 +15,6 @@ import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
 import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -94,11 +93,19 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             ContextCompat.startForegroundService(Application.application, intent)
         }
 
-        fun stop() {
+        /** Кто попросил остановку — едет в записи перехода ([Zapisi.perehod]). */
+        const val EXTRA_KTO = "kelevra.kto"
+
+        /**
+         * @param kto кто выключает: «человек: кнопка», «человек: плитка», «приложение: смена
+         *   профиля»… Без этого в записях «человек нажал» и «приложение перезапустилось само»
+         *   выглядели одинаково.
+         */
+        fun stop(kto: String = "не указан") {
             Application.application.sendBroadcast(
                 Intent(Action.SERVICE_CLOSE).setPackage(
                     Application.application.packageName,
-                ),
+                ).putExtra(EXTRA_KTO, kto),
             )
         }
     }
@@ -125,7 +132,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.action) {
                     Action.SERVICE_CLOSE -> {
-                        stopService()
+                        stopService(intent.getStringExtra(EXTRA_KTO) ?: "не указан")
                     }
 
                     PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
@@ -247,7 +254,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Старт сервиса не писался вообще: в журнале не было ни «стартую», ни имени
             // профиля, ни того, чем старт кончился. Разобрать «перезапустилось само»
             // без этой строки нельзя — не с чем сверять время.
-            Log.i(TAG, "сервис стартует")
+            KLog.i(TAG, "сервис стартует")
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_starting)
             }
@@ -284,7 +291,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Смотрим ДО старта ядра: поднять туннель и через секунду погасить — хуже,
             // чем не поднимать вовсе.
             if (AutoMode.homeRightNow()) {
-                Log.i(TAG, "сервис запущен дома: профиль «$lastProfileName», ядро не поднимаем")
+                KLog.i(TAG, "сервис запущен дома: профиль «$lastProfileName», ядро не поднимаем")
                 tunnelSuspended = true
                 status.postValue(Status.Started)
                 withContext(Dispatchers.Main) {
@@ -318,12 +325,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // смотрел на «Подключаюсь» и считал, что приложение стало медленнее.
                 // Для sing-box комната — обычный socks-выход на петле: пока её нет, он
                 // просто не может через неё ходить, а круг честно пишет «Поднимаю комнату».
-                Log.i(TAG, "комната выбрана человеком — поднимаю её параллельно старту ядра")
+                KLog.i(TAG, "комната выбрана человеком — поднимаю её параллельно старту ядра")
                 thread(name = "olcrtc-warmup", isDaemon = true) { startOlcRtcIfEnabled() }
             }
 
             try {
-                startCore(content)
+                startCore(content, "старт сервиса")
             } catch (e: Exception) {
                 stopAndAlert(Alert.CreateService, e.message)
                 return
@@ -353,7 +360,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Записи с полями живут рядом с журналом ядра и тем же сроком: без
             // поднятого ядра писать в них нечего (см. Zapisi).
             runCatching { Zapisi.start() }
-            Log.i(TAG, "сервис запущен: профиль «$lastProfileName», ядро поднято")
+            KLog.i(TAG, "сервис запущен: профиль «$lastProfileName», ядро поднято")
             status.postValue(Status.Started)
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_started)
@@ -393,7 +400,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * выкидываем файл и стартуем снова — набор уйдёт удалённым, ядро дотянет его само.
      * Больше одного захода на набор не бывает: выкинутого файла в кэше уже нет.
      */
-    private fun startCore(content: String) {
+    private fun startCore(content: String, reason: String) {
         var dropped = 0
         while (true) {
             val config = effectiveConfig(content)
@@ -405,12 +412,24 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                         applyPerAppProxy(content)
                     },
                 )
+                // Конфиг объявляем работающим только после удачного старта: при неудаче ядро
+                // его не исполняет, и автомат не должен читать из него входы проб.
+                runningConfig = config
+                // Автомату — ровно здесь, в единственной двери всех пересборок. Входы пробы
+                // ([ProbeInboundPatch]) при каждой сборке получают новые свободные порты; кто
+                // пересобрал ядро и не сказал автомату, оставлял ему порты прошлой жизни ядра.
+                // 20.10.2026: перечитывание профиля ([serviceReload0]) не говорило — честная
+                // проба сутки стучала в старый порт («мёртв — локальный вход не отвечает»,
+                // 261 раз у одного телефона). Раньше уведомляли отдельные пути (подъём из
+                // погашенного, подъём комнаты, возврат после её неудачи), каждый сам; теперь
+                // ни один путь не может это забыть. До AutoMode.start() вызов пустой.
+                AutoMode.onCoreRebuilt("ядро собрано: $reason")
                 return
             } catch (e: Exception) {
                 val tag = RuleSetCache.brokenCachedTag(config, e.message)
                 if (tag == null || dropped >= RuleSetLocalPatch.MAX_SETS || !RuleSetCache.drop(tag)) throw e
                 dropped++
-                Log.w(TAG, "ядро споткнулось о набор «$tag» из кэша — выкинул его, стартую заново")
+                KLog.w(TAG, "ядро споткнулось о набор «$tag» из кэша — выкинул его, стартую заново")
             }
         }
     }
@@ -435,7 +454,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // вывести из tun себя, и то если этого требует комната.
             if (selfOutsideTun) {
                 excludePackage = PlatformInterfaceWrapper.StringArray(listOf(self).iterator())
-                Log.i(TAG, "olcRTC: $self выведен из tun (разделение по приложениям недоступно)")
+                KLog.i(TAG, "olcRTC: $self выведен из tun (разделение по приложениям недоступно)")
             }
             return
         }
@@ -451,7 +470,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 PlatformInterfaceWrapper.StringArray(
                     (if (selfOutsideTun) vybor - self else vybor + self).iterator(),
                 )
-            if (selfOutsideTun) Log.i(TAG, "olcRTC: $self выведен из tun")
+            if (selfOutsideTun) KLog.i(TAG, "olcRTC: $self выведен из tun")
             return
         }
 
@@ -471,8 +490,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         if (itog.isEmpty()) return
 
         excludePackage = PlatformInterfaceWrapper.StringArray(itog.iterator())
-        Log.i(TAG, "мимо сети: ${itog.size} приложений (с сервера ${bazovye.size}, выбрано ${vybor.size})")
-        if (selfOutsideTun) Log.i(TAG, "olcRTC: $self выведен из tun")
+        KLog.i(TAG, "мимо сети: ${itog.size} приложений (с сервера ${bazovye.size}, выбрано ${vybor.size})")
+        if (selfOutsideTun) KLog.i(TAG, "olcRTC: $self выведен из tun")
     }
 
 
@@ -498,7 +517,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
                 /** Незащищённая проба меряет наш же туннель — это должно быть видно в логе. */
                 private fun note(ok: Boolean): Boolean {
-                    if (!ok) Log.w(TAG, "проба: сокет защитить не вышло, замер пойдёт через наш же tun")
+                    if (!ok) KLog.w(TAG, "проба: сокет защитить не вышло, замер пойдёт через наш же tun")
                     return ok
                 }
             },
@@ -528,7 +547,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         val vpn = service as? VpnService
         if (vpn != null && VpnService.prepare(service) != null) {
-            Log.w(TAG, "olcRTC: разрешение на VPN не выдано, protect(fd) работать не будет")
+            KLog.w(TAG, "olcRTC: разрешение на VPN не выдано, protect(fd) работать не будет")
         }
         val protector: ((Int) -> Boolean)? = vpn?.let { { fd: Int -> it.protect(fd) } }
 
@@ -553,7 +572,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         when (result) {
             is OlcRtcCore.State.Ready -> {
-                Log.i(TAG, "olcRTC: выход поднят на 127.0.0.1:${params.socksPort}")
+                KLog.i(TAG, "olcRTC: выход поднят на 127.0.0.1:${params.socksPort}")
                 // Сразу спрашиваем канал: «поднят» без прошедших байтов — это ещё не выход.
                 OlcRtcCore.probe(params.socksPort)
                 // Комната умирает молча — дальше за каналом следит присмотр и поднимает
@@ -576,7 +595,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
             else ->
                 // Честно говорим и идём дальше без этого выхода.
-                Log.w(TAG, "olcRTC: выход не поднят (${OlcRtcCore.lastError}), продолжаем без него")
+                KLog.w(TAG, "olcRTC: выход не поднят (${OlcRtcCore.lastError}), продолжаем без него")
         }
     }
 
@@ -710,7 +729,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         ProbeInboundPatch.log(probe)
         result = probe.content
 
-        runningConfig = result
+        // runningConfig ставит startCore — после удачного старта, не здесь.
         return result
     }
 
@@ -748,7 +767,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val layout = AutoModeExits.parse(content, OlcRtcParams.socksPort)
         val entries = layout.probeEntries
         if (entries.isEmpty()) {
-            Log.w(TAG, "проверка путей ($reason): закреплённых входов нет, мерить нечем")
+            KLog.w(TAG, "проверка путей ($reason): закреплённых входов нет, мерить нечем")
             // Мерить нечем — но наборы правил всё равно нужны, и своя дорога у докачки
             // есть: socks самой комнаты. Раньше сюда доходила проба прямого выхода, и
             // докачка ехала на ней; выхода этого больше не меряем (см. измеряемые пути
@@ -763,13 +782,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // привязываем сами по тому же конфигу. Вызов безопасный: bindExits не трогает
         // уже собранные замеры, только имена (см. его комментарий).
         PathRegistry.bindExits(main = layout.main, room = layout.room)
-        // Автомату говорим, что конфиг сменился, ровно здесь. Проверочные входы занимают
-        // свободные порты, а свободные каждый раз разные — без этого он продолжал бы
-        // мерить основной канал по номеру из прошлой жизни ядра и показывать «Не отвечает»
-        // на живом канале (поймано на телефоне 11.08.2026).
-        AutoMode.onCoreRebuilt("ядро пересобрано: $reason")
+        // Автомату о новой раскладке уже сказал startCore: проверочные входы занимают
+        // свободные порты, и без этого он мерил бы основной канал по номеру из прошлой
+        // жизни ядра (поймано на телефоне 11.08.2026). Второй раз здесь не говорим.
         thread(name = "path-selfcheck", isDaemon = true) {
-            Log.i(TAG, "проверка путей ($reason): ${entries.size} шт., селектор не трогаем")
+            KLog.i(TAG, "проверка путей ($reason): ${entries.size} шт., селектор не трогаем")
             // Первый путь, который проба назвала живым: по нему пойдёт докачка наборов.
             var liveEntry: AutoModeExits.Endpoint? = null
             for ((exit, entry) in entries) {
@@ -779,14 +796,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // туннеля, а такой запрос — редкий и потому приметный: обычные
                 // проверки связи в трафике теряются, ifconfig.me нет.
                 val measurement = HonestProbe.measure(entry, exit)
-                Log.i(TAG, "путь «$exit»: $measurement")
+                KLog.i(TAG, "путь «$exit»: $measurement")
                 // Ядро могли пересобрать посреди опроса (подъём туннеля → отменённая комната →
                 // пересборка, 17.10.2026 23:54: две за 0,3 с), и тогда вход из прошлой его жизни
                 // молчит про путь, а не за него: «Финляндия … мёртв — локальный вход не отвечает»
                 // при живой Финляндии. Такой замер никуда не пишем.
                 val nowEntry = runningConfig?.let { AutoModeExits.probeEntries(it)[exit] }
                 if (nowEntry != entry) {
-                    Log.i(TAG, "путь «$exit»: ядро пересобрано во время опроса (вход ${entry.port} → ${nowEntry?.port}) — замер устарел, не пишу")
+                    KLog.i(TAG, "путь «$exit»: ядро пересобрано во время опроса (вход ${entry.port} → ${nowEntry?.port}) — замер устарел, не пишу")
                     continue
                 }
                 val id = PathRegistry.snapshot.value.byExit(exit)?.def?.id
@@ -799,7 +816,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                             // Вход не принял соединение — это про наше ядро, а не про узел.
                             measured = measurement.measured && measurement.reason != HonestProbe.ENTRY_REFUSED,
                         )) {
-                        Log.i(TAG, "путь «$exit»: другой узел очереди — замер отдал автомату")
+                        KLog.i(TAG, "путь «$exit»: другой узел очереди — замер отдал автомату")
                         if (measurement.live && liveEntry == null) liveEntry = entry
                         continue
                     }
@@ -807,7 +824,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                     // умеет помнить (см. [AutoModeExits.Layout.measurable]). Проверка
                     // остаётся сторожем — потраченная наружу проба, которую некуда
                     // положить, должна быть видна сразу, а не выясняться разбором.
-                    Log.w(TAG, "путь «$exit»: реестр не знает такого выхода, замер потерян")
+                    KLog.w(TAG, "путь «$exit»: реестр не знает такого выхода, замер потерян")
                     continue
                 }
                 if (measurement.live) {
@@ -842,7 +859,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val roomUp = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
         val port = liveProbePort ?: OlcRtcParams.socksPort.takeIf { roomUp && it > 0 }
         if (port == null) {
-            Log.i(TAG, "наборы правил не докачиваем ($reason): живого пути нет, комната не поднята")
+            KLog.i(TAG, "наборы правил не докачиваем ($reason): живого пути нет, комната не поднята")
             return
         }
         thread(name = "ruleset-refresh", isDaemon = true) {
@@ -888,9 +905,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             if (!TunnelFacts.suspendNeeded(tunnelSuspended, tunOpen, roomLive)) return false
             if (tunnelSuspended) {
                 val alive = listOfNotNull("tun".takeIf { tunOpen }, "комната".takeIf { roomLive })
-                Log.w(TAG, "туннель числился погашенным, а живо: ${alive.joinToString(", ")} — гашу по факту")
+                KLog.w(TAG, "туннель числился погашенным, а живо: ${alive.joinToString(", ")} — гашу по факту")
             }
-            Log.i(TAG, "туннель гасим: $reason")
+            KLog.i(TAG, "туннель гасим: $reason")
+            runCatching { Zapisi.perehod("tunnel_pogashen", reason, kto = "автомат") }
             // Комната без туннеля бессмысленна: дома обход делает роутер.
             roomWanted = false
             roomAhead = false
@@ -918,13 +936,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun resumeTunnel(reason: String, roomNext: Boolean): Boolean {
         synchronized(tunnelLock) {
             if (!tunnelSuspended) return false
-            Log.i(TAG, "туннель поднимаем: $reason" + if (roomNext) " (следом комната — приложение сразу вне tun)" else "")
+            KLog.i(TAG, "туннель поднимаем: $reason" + if (roomNext) " (следом комната — приложение сразу вне tun)" else "")
+            runCatching { Zapisi.perehod("tunnel_podnyat", reason, kto = "автомат") }
             roomAhead = roomNext
         }
         return try {
             // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно.
             if (roomWanted) startOlcRtcIfEnabled()
-            restartCore()
+            restartCore("подъём из погашенного: $reason")
             // Ядро только что поднялось начисто — реестр путей пуст или помнит прошлую
             // сессию. Тот же честный опрос, что и на холодном старте: без него реестр
             // оставался бы пустым до первого обычного захода автомата, а тот при ручном
@@ -941,7 +960,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             true
         } catch (e: Exception) {
             // Сервис не роняем: сеть могла ещё не устояться, следующий заход попробует снова.
-            Log.w(TAG, "туннель не поднялся ($reason): ${e.message}")
+            KLog.w(TAG, "туннель не поднялся ($reason): ${e.message}")
+            runCatching { Zapisi.perehod("tunnel_ne_podnyat", "$reason: ${e.message}", kto = "автомат") }
             false
         }
     }
@@ -960,7 +980,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * пробовали — стало ХУЖЕ: 3 утёкших интерфейса из 6 переходов против 1 из 6 без него,
      * поэтому его тут нет.
      */
-    private fun restartCore() {
+    private fun restartCore(reason: String) {
         // Последний рубеж для всех путей пересборки (подъём комнаты, её гашение, подъём
         // туннеля): после стопа командный сервер закрыт, и новое ядро осталось бы сиротой
         // на 127.0.0.1:2412.
@@ -977,14 +997,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Свою копию дескриптора снимаем ДО того, как ядро откроет новый интерфейс.
         fileDescriptor?.let { old ->
             val closed = runCatching { old.close() }.isSuccess
-            Log.i(TAG, "пересборка ядра: прежний tun отпущен (закрыт: $closed)")
+            KLog.i(TAG, "пересборка ядра: прежний tun отпущен (закрыт: $closed)")
         }
         fileDescriptor = null
-        startCore(content)
+        startCore(content, reason)
         // Файл прочитан заново — отложенному перечитыванию применять больше нечего.
         if (profileReloadPending) {
             profileReloadPending = false
-            Log.i(TAG, "отложенный конфиг применён при пересборке ядра")
+            KLog.i(TAG, "отложенный конфиг применён при пересборке ядра")
         }
     }
 
@@ -1026,13 +1046,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         if (now - tokenRefreshedAt < TOKEN_REFRESH_PAUSE_MILLIS) return false
         tokenRefreshedAt = now
         val bylo = OlcRtcParams.resolve().wbToken
-        Log.i(TAG, "комната не встала из-за токена — спрашиваю свежий у сервера")
+        KLog.i(TAG, "комната не встала из-за токена — спрашиваю свежий у сервера")
         runCatching { Zapisi.perehod("token_otvergnut", "носитель отверг токен комнаты") }
         runCatching { runBlocking { SubscriptionRefresh.loadInfo() } }
-            .onFailure { Log.w(TAG, "за токеном сходить не вышло: ${it.message}") }
+            .onFailure { KLog.w(TAG, "за токеном сходить не вышло: ${it.message}") }
         val stalo = OlcRtcParams.resolve().wbToken
         val smenilsya = !stalo.isNullOrBlank() && stalo != bylo
-        Log.i(TAG, if (smenilsya) "токен комнаты обновлён — пробую поднять ещё раз" else "токен прежний, второй заход не делаю")
+        KLog.i(TAG, if (smenilsya) "токен комнаты обновлён — пробую поднять ещё раз" else "токен прежний, второй заход не делаю")
         return smenilsya
     }
 
@@ -1061,12 +1081,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun startWbChat() {
         runCatching {
             WbChatWatchdog.start(wanted = { !serviceStopping && !tunnelSuspended && wbInConfig() })
-        }.onFailure { Log.w(TAG, "WB Chat: присмотр не запустился: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "WB Chat: присмотр не запустился: ${it.message}") }
     }
 
     private fun stopWbChat() {
         runCatching { WbChatWatchdog.stop() }
-            .onFailure { Log.w(TAG, "WB Chat: остановка сорвалась: ${it.message}") }
+            .onFailure { KLog.w(TAG, "WB Chat: остановка сорвалась: ${it.message}") }
     }
 
     /** Выводить ли приложение из tun, если собирать ядро прямо сейчас. */
@@ -1095,12 +1115,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         ) {
             return null
         }
-        Log.i(TAG, "ядро собрано не под то, что нужно сейчас ($reason) — пересобираю")
+        KLog.i(TAG, "ядро собрано не под то, что нужно сейчас ($reason) — пересобираю")
         return runCatching {
-            restartCore()
+            restartCore("под текущее состояние: $reason")
             AutoMode.RoomAck.Changed
         }.getOrElse {
-            Log.w(TAG, "пересборка ядра под текущее состояние не удалась: ${it.message}")
+            KLog.w(TAG, "пересборка ядра под текущее состояние не удалась: ${it.message}")
             AutoMode.RoomAck.Failed
         }
     }
@@ -1129,12 +1149,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         ) {
             return false
         }
-        Log.i(TAG, "ядро собрано не под комнату ($reason) — пересобираю до входа")
+        KLog.i(TAG, "ядро собрано не под комнату ($reason) — пересобираю до входа")
         return runCatching {
-            restartCore()
+            restartCore("под комнату ($reason)")
             true
         }.getOrElse {
-            Log.w(TAG, "пересборка ядра до входа не удалась: ${it.message}")
+            KLog.w(TAG, "пересборка ядра до входа не удалась: ${it.message}")
             false
         }
     }
@@ -1145,7 +1165,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Поднимать нечего, если параметров комнаты нет или человек нажал аварийный
         // выключатель. Гасить — можно всегда.
         if (wanted && !OlcRtcParams.roomAllowed) {
-            Log.i(TAG, "комната не поднимается ($reason): комната выключена или нет её параметров")
+            KLog.i(TAG, "комната не поднимается ($reason): комната выключена или нет её параметров")
             return AutoMode.RoomAck.Unavailable
         }
         synchronized(tunnelLock) {
@@ -1154,12 +1174,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // Причину пишем вслух: этот отказ выглядит в логе как «попробовал поднять
                 // и через семь миллисекунд не встала», и час разбирательств 08.08.2026
                 // ушёл ровно на то, чтобы понять — комнату никто и не пробовал поднимать.
-                Log.i(TAG, "комната не поднимается ($reason): туннель погашен")
+                KLog.i(TAG, "комната не поднимается ($reason): туннель погашен")
                 roomWanted = false
                 return AutoMode.RoomAck.NoTunnel
             }
             if (wanted && roomRaising) {
-                Log.i(TAG, "комната уже поднимается ($reason) — второй раз не прошу")
+                KLog.i(TAG, "комната уже поднимается ($reason) — второй раз не прошу")
                 // Просьбу подтверждаем: её могли отозвать, а подъём смотрит на этот флаг.
                 roomWanted = true
                 return AutoMode.RoomAck.Raising
@@ -1168,7 +1188,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // «комната не поднята» и запускал свой подъём параллельно, а `OlcRtcCore.start`
             // гасит чужой запуск — два подъёма рвали друг друга.
             if (wanted && (OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting)) {
-                Log.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
+                KLog.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
                 // roomWanted здесь не трогаем: подъём присмотра может провалиться, и флаг остался бы
                 // true при лежащей комнате. Присмотр отменяется собственным roomNeeded().
                 return AutoMode.RoomAck.Raising
@@ -1178,7 +1198,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             if (wanted == up) {
                 // Комната не встала или погашена раньше, а ядро осталось собранным под неё.
                 if (!wanted) resyncCore(reason)?.let { return it }
-                Log.i(TAG, "комната уже ${if (up) "поднята" else "погашена"} ($reason) — оставляю как есть")
+                KLog.i(TAG, "комната уже ${if (up) "поднята" else "погашена"} ($reason) — оставляю как есть")
                 return AutoMode.RoomAck.Unchanged
             }
 
@@ -1189,10 +1209,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 roomRaising = true
                 if (OlcRtcWatchdog.restarting) {
                     roomRaising = false
-                    Log.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
+                    KLog.i(TAG, "комнату сейчас поднимает присмотр ($reason) — второй подъём не запускаю")
                     return AutoMode.RoomAck.Raising
                 }
-                Log.i(TAG, "комната нужна ($reason) — поднимаю ядро отдельным потоком")
+                KLog.i(TAG, "комната нужна ($reason) — поднимаю ядро отдельным потоком")
                 // Реестр узнаёт про подъём сразу, а не когда автомат дойдёт до своей записи:
                 // на круге и в шторке это и есть «Поднимаю комнату».
                 RoomNote.raising()
@@ -1200,16 +1220,16 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 return AutoMode.RoomAck.Raising
             }
 
-            Log.i(TAG, "комната больше не нужна ($reason) — гашу ядро")
+            KLog.i(TAG, "комната больше не нужна ($reason) — гашу ядро")
             // Выход уводим до гашения: между остановкой ядра комнаты и пересборкой
             // основного ядра селектор ещё смотрел в её сокс.
             AutoMode.roomLost("комната больше не нужна: $reason")
             stopOlcRtc()
             return runCatching {
-                restartCore()
+                restartCore("комната больше не нужна: $reason")
                 AutoMode.RoomAck.Changed
             }.getOrElse {
-                Log.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
+                KLog.w(TAG, "пересборка ядра под комнату не удалась: ${it.message}")
                 AutoMode.RoomAck.Failed
             }
         }
@@ -1227,9 +1247,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // попадает в собранную сессию — ядро комнаты видит смену сети, LiveKit
         // перезапускает ICE, данные стоят десятки секунд (эмулятор, 2 входа из 6).
         // Обычно пересобирать нечего: подъём туннеля ради комнаты уже собрал ядро так же.
-        val prepared = synchronized(tunnelLock) { prepareCoreForRoom(reason) }
-        // Пересборка сбросила выбор в селекторе — автомату это знать сразу.
-        if (prepared) AutoMode.onCoreRebuilt("ядро собрано под комнату ($reason)")
+        // Пересборка сбрасывает выбор в селекторе — автомату об этом скажет сам startCore.
+        synchronized(tunnelLock) { prepareCoreForRoom(reason) }
 
         startOlcRtcIfEnabled()
         // Носитель отверг токен — пробуем забрать свежий у сервера и подняться ещё раз.
@@ -1245,18 +1264,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // об этом знать так же, как и на успешном пути (16.10.2026 на улице: без этого он
         // мерил основной канал по старому порту, «локальный вход не отвечает» → ложный
         // «основной мёртв» → новый круг подъёма комнаты в 14:08:35, 14:33:40, 14:33:52).
-        var resyncedAfterFail = false
         val rebuilt = synchronized(tunnelLock) {
             roomRaising = false
             when {
                 OlcRtcCore.state !is OlcRtcCore.State.Ready -> {
-                    Log.w(TAG, "комната не встала ($reason): ${OlcRtcCore.lastError}")
+                    KLog.w(TAG, "комната не встала ($reason): ${OlcRtcCore.lastError}")
                     roomWanted = false
                     // Ядро осталось собранным под комнату, которой нет: `final` уводил бы
                     // остатки трафика в её мёртвый сокс. Возвращаем к тому, что есть.
                     // Сервис останавливают или туннель погасили: пересборка подняла бы tun там, где его не ждут.
-                    resyncedAfterFail = !serviceStopping && !tunnelSuspended &&
-                        resyncCore("комната не встала: $reason") == AutoMode.RoomAck.Changed
+                    // Автомату о пересборке скажет сам startCore.
+                    if (!serviceStopping && !tunnelSuspended) resyncCore("комната не встала: $reason")
                     false
                 }
 
@@ -1264,14 +1282,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // Комната без туннеля бессмысленна, и оставить её висеть нельзя — это ровно
                 // тот круглосуточный чужой видеозвонок, которого схема избегает.
                 serviceStopping -> {
-                    Log.i(TAG, "комната встала, но сервис за это время остановили ($reason) — гашу её, ядро не пересобираю")
+                    KLog.i(TAG, "комната встала, но сервис за это время остановили ($reason) — гашу её, ядро не пересобираю")
                     roomWanted = false
                     stopOlcRtc()
                     false
                 }
 
                 tunnelSuspended -> {
-                    Log.i(TAG, "комната встала, но туннель за это время погасили ($reason) — гашу её")
+                    KLog.i(TAG, "комната встала, но туннель за это время погасили ($reason) — гашу её")
                     roomWanted = false
                     stopOlcRtc()
                     false
@@ -1283,7 +1301,6 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
         // Что бы ни вышло — реестр узнаёт об этом сразу, не дожидаясь круга автомата.
         RoomNote.note()
-        if (resyncedAfterFail) AutoMode.onCoreRebuilt("ядро возвращено после неудачи комнаты ($reason)")
         if (!rebuilt) return
         // Комната встала — в урезанной сети это единственная дорога наружу, и именно
         // сейчас появляется возможность дотянуть недостающие наборы правил.
@@ -1301,16 +1318,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     private fun stopOlcRtc() {
         runCatching { OlcRtcWatchdog.stop() }
-            .onFailure { Log.w(TAG, "olcRTC: присмотр не снялся: ${it.message}") }
+            .onFailure { KLog.w(TAG, "olcRTC: присмотр не снялся: ${it.message}") }
         runCatching { OlcRtcCore.stop() }
-            .onFailure { Log.w(TAG, "olcRTC: остановка сорвалась: ${it.message}") }
+            .onFailure { KLog.w(TAG, "olcRTC: остановка сорвалась: ${it.message}") }
     }
 
     override fun serviceStop() {
         // Это ядро само попросило остановиться — то есть внутри у него что-то кончилось.
         // Отличать это от выключения человеком обязательно, иначе «сеть отвалилась» и
         // «человек нажал» в журнале одно и то же.
-        Log.w(TAG, "ядро попросило остановить сервис")
+        KLog.w(TAG, "ядро попросило остановить сервис")
+        runCatching { Zapisi.perehod("yadro_ostanovilos", "ядро попросило остановить сервис", kto = "ядро") }
         notification.close()
         status.postValue(Status.Starting)
         val pfd = fileDescriptor
@@ -1362,7 +1380,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // и выглядело это как «сам включился и не выключается».
         // Новый конфиг не теряется: при следующем подъёме restartCore читает файл заново.
         if (synchronized(tunnelLock) { tunnelSuspended }) {
-            Log.i(TAG, "конфиг перечитан, но мы дома — ядро не поднимаем")
+            KLog.i(TAG, "конфиг перечитан, но мы дома — ядро не поднимаем")
             fillRuleSetsAtHome(content)
             return
         }
@@ -1376,19 +1394,19 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             val defer = TunnelFacts.reloadDeferred(roomLive, roomBusy, byHuman)
             if (defer) {
                 profileReloadPending = true
-                Log.i(
+                KLog.i(
                     TAG,
                     "конфиг перечитан, но комната ${if (roomLive) "работает" else "поднимается"} — " +
                         "ядро не пересобираю, применю при выходе из комнаты",
                 )
             } else if (byHuman && (roomLive || roomBusy)) {
-                Log.i(TAG, "конфиг перечитать попросил человек — пересобираю ядро при живой комнате")
+                KLog.i(TAG, "конфиг перечитать попросил человек — пересобираю ядро при живой комнате")
             }
             defer
         }
         if (deferred) return
         try {
-            startCore(content)
+            startCore(content, if (byHuman) "конфиг перечитан по просьбе человека" else "конфиг перечитан")
         } catch (e: Exception) {
             stopAndAlert(Alert.CreateService, e.message)
             return
@@ -1435,9 +1453,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     @OptIn(DelicateCoroutinesApi::class)
-    private fun stopService() {
+    private fun stopService(kto: String) {
         if (status.value != Status.Started) return
-        Log.i(TAG, "сервис останавливается")
+        KLog.i(TAG, "сервис останавливается (кто: $kto)")
+        runCatching { Zapisi.perehod("servis_ostanovlen", "сервис останавливается", kto = kto) }
         serviceStopping = true
         status.value = Status.Stopping
         if (receiverRegistered) {
@@ -1471,11 +1490,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             stopOlcRtc()
             stopWbChat()
             runCatching { CoreLog.stop() }
-        runCatching { Zapisi.stop() }
             runCatching { Zapisi.stop() }
             Settings.startedByUser = false
             withContext(Dispatchers.Main) {
-                Log.i(TAG, "сервис остановлен")
+                KLog.i(TAG, "сервис остановлен")
                 status.value = Status.Stopped
                 service.stopSelf()
             }
@@ -1494,7 +1512,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Аварийный останов уходил только всплывашкой в приложение. В журнале от него
         // не оставалось ни строки — то есть падение старта и падение ядра выглядели
         // одинаково: «сервис просто выключился».
-        Log.w(TAG, "аварийный останов: $type${message?.let { " — $it" }.orEmpty()}")
+        KLog.w(TAG, "аварийный останов: $type${message?.let { " — $it" }.orEmpty()}")
+        runCatching {
+            Zapisi.perehod("avariynyy_ostanov", "$type${message?.let { " — $it" }.orEmpty()}", kto = "приложение")
+        }
         serviceStopping = true
         Settings.startedByUser = false
         AutoMode.stop()
@@ -1548,8 +1569,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // перезагрузки) — здесь хранилище уже наверняка доступно. Живую запись повторный
         // вызов не трогает.
         runCatching { AppLog.start(Application.application) }
+        // Записи переходов нужны и дома, где ядра нет: «кто погасил / поднял туннель».
+        runCatching { Zapisi.start() }
         if (status.value != Status.Stopped) return Service.START_NOT_STICKY
-        Log.i(TAG, "команда на запуск сервиса")
+        KLog.i(TAG, "команда на запуск сервиса")
         serviceStopping = false
         status.value = Status.Starting
         // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
@@ -1587,19 +1610,20 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     internal fun onBind(): IBinder = binder
 
     internal fun onDestroy() {
-        Log.i(TAG, "сервис уничтожен системой")
+        KLog.i(TAG, "сервис уничтожен системой")
         binder.close()
     }
 
     internal fun onRevoke() {
         // Разрешение на VPN отобрали снаружи (другое VPN-приложение, политика, человек в
         // системных настройках). Со стороны это «оно само выключилось».
-        Log.w(TAG, "система отозвала разрешение на VPN — останавливаюсь")
+        KLog.w(TAG, "система отозвала разрешение на VPN — останавливаюсь")
         // Отметку кладём в настройки, чтобы она уехала на сервер в паспорте устройства
         // (см. Kelevra.deviceHeaders). Разбор 10.09.2026: туннель гасила сама
         // система, и узнать это можно было только вручную внутри архива журнала.
         runCatching { Settings.vpnRazreshenieOtozvanoV = System.currentTimeMillis() }
-        stopService()
+        runCatching { Zapisi.perehod("vpn_otozvan", "система отозвала разрешение на VPN", kto = "система") }
+        stopService("система: разрешение на VPN отозвано")
     }
 
     internal fun sendNotification(notification: Notification) {
@@ -1669,9 +1693,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     override fun writeDebugMessage(message: String?) {
         val text = message ?: return
-        Log.d("sing-box", text)
+        KLog.d("sing-box", text)
         if (LOUD_CORE_WORDS.any { text.contains(it, ignoreCase = true) }) {
-            Log.w(TAG, "ядро: ${text.take(500)}")
+            KLog.w(TAG, "ядро: ${text.take(500)}")
         }
     }
 

@@ -7,7 +7,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.Notification
 import io.nekohasekai.libbox.TunOptions
@@ -137,13 +136,13 @@ class VPNService :
         val started = SystemClock.elapsedRealtime()
         while (interfaceAlive(old)) {
             if (SystemClock.elapsedRealtime() - started >= OLD_TUN_WAIT_MILLIS) {
-                Log.w(TAG, "прежний tun $old не убран за $OLD_TUN_WAIT_MILLIS мс — поднимаю новый поверх")
+                KLog.w(TAG, "прежний tun $old не убран за $OLD_TUN_WAIT_MILLIS мс — поднимаю новый поверх")
                 return
             }
             Thread.sleep(20)
         }
         lastTunName = null
-        Log.i(TAG, "прежний tun $old убран ядром ОС за ${SystemClock.elapsedRealtime() - started} мс")
+        KLog.i(TAG, "прежний tun $old убран ядром ОС за ${SystemClock.elapsedRealtime() - started} мс")
     }
 
     override fun openTun(options: TunOptions): Int {
@@ -234,9 +233,9 @@ class VPNService :
                     try {
                         val nextPackage = includePackage.next()
                         builder.addAllowedApplication(nextPackage)
-                        Log.d("VPNService", "addAllowedApplication: $nextPackage")
+                        KLog.d("VPNService", "addAllowedApplication: $nextPackage")
                     } catch (e: NameNotFoundException) {
-                        Log.e("VPNService", "addAllowedApplication failed", e)
+                        KLog.e("VPNService", "addAllowedApplication failed", e)
                     }
                 }
             }
@@ -247,9 +246,9 @@ class VPNService :
                     try {
                         val nextPackage = excludePackage.next()
                         builder.addDisallowedApplication(nextPackage)
-                        Log.d("VPNService", "addDisallowedApplication: $nextPackage")
+                        KLog.d("VPNService", "addDisallowedApplication: $nextPackage")
                     } catch (e: NameNotFoundException) {
-                        Log.e("VPNService", "addDisallowedApplication failed", e)
+                        KLog.e("VPNService", "addDisallowedApplication failed", e)
                     }
                 }
             }
@@ -287,7 +286,7 @@ class VPNService :
             if (old !== pfd) {
                 val oldFd = runCatching { old.fd }.getOrNull()
                 val closed = runCatching { old.close() }.isSuccess
-                Log.i("VPNService", "прежний tun-дескриптор ($oldFd) закрыт: $closed, новый ${pfd.fd}")
+                KLog.i("VPNService", "прежний tun-дескриптор ($oldFd) закрыт: $closed, новый ${pfd.fd}")
             }
         }
         service.fileDescriptor = pfd

@@ -95,7 +95,7 @@ interface PlatformInterfaceWrapper : PlatformInterface {
         } catch (e: Exception) {
             promakhovVladeltsa++
             if (promakhovVladeltsa % 1000L == 1L) {
-                Log.i(
+                KLog.i(
                     "PlatformInterface",
                     "владелец соединения не найден, промах №$promakhovVladeltsa " +
                         "(штатная гонка, маршрут не меняет)",
@@ -138,7 +138,7 @@ interface PlatformInterfaceWrapper : PlatformInterface {
             runCatching {
                 boxInterface.mtu = networkInterface.mtu
             }.onFailure {
-                Log.e(
+                KLog.e(
                     "PlatformInterface",
                     "failed to get mtu for interface ${boxInterface.name}",
                     it,

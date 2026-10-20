@@ -1480,7 +1480,7 @@ class MainActivity :
             return
         }
 
-        BoxService.stop()
+        BoxService.stop("приложение: перезапуск для новых настроек")
         while (true) {
             when (currentServiceStatus) {
                 Status.Stopped -> {

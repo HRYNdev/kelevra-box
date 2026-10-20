@@ -4,7 +4,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.bg.path.Evidence
 import io.nekohasekai.sfa.bg.path.HonestProbe
@@ -925,7 +924,7 @@ object AutoMode {
                 isDaemon = true
                 start()
             }
-            Log.i(
+            KLog.i(
                 TAG,
                 "автомат включён (${if (Settings.autoModeEnabled) "сам" else "выключен человеком"}): " +
                     "выбор ${layout.chooser ?: "нет"}, основной ${layout.main ?: "нет"}, " +
@@ -951,7 +950,7 @@ object AutoMode {
         PathRegistry.reset()
         link = Link.Unknown
         publish(Settings.autoModeEnabled, Situation.Unknown)
-        Log.i(TAG, "автомат выключен")
+        KLog.i(TAG, "автомат выключен")
     }
 
     /**
@@ -990,9 +989,9 @@ object AutoMode {
         // Окно смены сети: пока оно идёт, провал узла — провал сети, на запасной не уходим.
         nodeWatch.networkChanged(SystemClock.elapsedRealtime())
         if (onlyResolvers) {
-            Log.i(TAG, "сеть та же, но резолверы сменились: ${describe(network)} — перепроверяю")
+            KLog.i(TAG, "сеть та же, но резолверы сменились: ${describe(network)} — перепроверяю")
         } else {
-            Log.i(TAG, "сеть сменилась: ${describe(network)}")
+            KLog.i(TAG, "сеть сменилась: ${describe(network)}")
         }
         noteLink(network, "смена сети")
         // Подсказка про режим сети привязана к объекту сети, и другую сеть она уже не
@@ -1044,7 +1043,7 @@ object AutoMode {
      */
     fun onCoreRebuilt(reason: String) {
         if (!active) return
-        Log.i(TAG, "ядро пересобрано ($reason) — выбор сбрасываю, иду на заход не дожидаясь ритма")
+        KLog.i(TAG, "ядро пересобрано ($reason) — выбор сбрасываю, иду на заход не дожидаясь ритма")
         selected = null
         // Комната стоит — подъём удался, штрафовать нечего.
         if (roomUp()) {
@@ -1079,7 +1078,7 @@ object AutoMode {
         if (!active) return
         val h = host ?: return
         val main = layout.main ?: return
-        Log.w(TAG, "комната пропала ($reason) — увожу выход на основной канал")
+        KLog.w(TAG, "комната пропала ($reason) — увожу выход на основной канал")
         runCatching { Zapisi.perehod("komnata_propala", reason) }
         selected = null
         choose(h, main, "комната пропала")
@@ -1144,7 +1143,7 @@ object AutoMode {
      */
     fun onRoomRaised(reason: String) {
         if (!active) return
-        Log.i(TAG, "комнату подняли заново ($reason) — иду на заход, не дожидаясь ритма")
+        KLog.i(TAG, "комнату подняли заново ($reason) — иду на заход, не дожидаясь ритма")
         wakeLoop()
     }
 
@@ -1161,7 +1160,7 @@ object AutoMode {
         nodeIndex = idx
         layout = fresh
         PathRegistry.bindExits(main = fresh.main, room = fresh.room)
-        Log.i(
+        KLog.i(
             TAG,
             "раскладка перечитана ($reason): вход основного ${fresh.localProxy?.port ?: "нет"}, " +
                 "адресов узла ${fresh.mainEndpoints.size}" +
@@ -1171,7 +1170,7 @@ object AutoMode {
 
     /** Ручной выбор больше ничего не значит, автомат снова сам. */
     private fun releaseManualHold(network: Network?, why: String = "сеть сменилась") {
-        Log.i(TAG, "$why — ручной выбор «${manualExit ?: "нет"}» отпущен, автомат снова сам")
+        KLog.i(TAG, "$why — ручной выбор «${manualExit ?: "нет"}» отпущен, автомат снова сам")
         holdNetwork = network
         holdKey = network?.let { networkKey(it) }
         holdAt = 0L
@@ -1212,7 +1211,7 @@ object AutoMode {
     fun setEnabled(enabled: Boolean) {
         // «Авто режим сам включает VPN на вайфае» разбирается только тогда, когда в
         // журнале видно, был ли автомат вообще включён и кто его переключил.
-        Log.i(TAG, "автомат ${if (enabled) "включён" else "выключен"} человеком")
+        KLog.i(TAG, "автомат ${if (enabled) "включён" else "выключен"} человеком")
         Settings.autoModeEnabled = enabled
         roomTrialPending = false
         if (enabled) {
@@ -1294,7 +1293,7 @@ object AutoMode {
         silentHoldAt = 0L
         mainFailures = 0
         idle = false
-        Log.i(
+        KLog.i(
             TAG,
             "выход выбран руками: «$tag» (комната: ${Settings.autoModeManualRoom}) — " +
                 "держим до смены сети",
@@ -1311,14 +1310,14 @@ object AutoMode {
         val roomChosen = Settings.autoModeManualRoom
         val roomUp = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
         if (roomChosen && !roomUp) {
-            Log.i(TAG, "комната ещё не стоит — выбор применю, когда поднимется")
+            KLog.i(TAG, "комната ещё не стоит — выбор применю, когда поднимется")
             return false
         }
         // То же для «Комнаты WB»: её ядро встаёт 3-10 с, а переставленный раньше селектор слал
         // весь трафик в неслушающий 127.0.0.1:порт (16.10: тысячи connection refused в минуту,
         // предохранитель, пересборки). Выбор применит заход, когда ядро скажет «готов».
         if (WbChatParams.isWbExit(tag) && !wbUp()) {
-            Log.i(TAG, "комната WB ещё не стоит — выбор применю, когда ядро скажет «готов»")
+            KLog.i(TAG, "комната WB ещё не стоит — выбор применю, когда ядро скажет «готов»")
             return false
         }
         return true
@@ -1329,7 +1328,7 @@ object AutoMode {
 
     /** Присмотр за WB Chat: ядро встало. Будим заход, чтобы выбор человека лёг в селектор сразу. */
     fun wbReady() {
-        Log.i(TAG, "ядро WB Chat готово — иду на заход, не дожидаясь ритма")
+        KLog.i(TAG, "ядро WB Chat готово — иду на заход, не дожидаясь ритма")
         wakeLoop()
     }
 
@@ -1347,7 +1346,7 @@ object AutoMode {
         // От этого ответа зависит, поднимется ли туннель при старте вообще. Раньше он
         // нигде не писался, и «сервис стартовал с туннелем» приходилось выводить из
         // того, чего в журнале НЕТ.
-        Log.i(TAG, "старт: ${if (it) "дома — ядро не поднимаю" else "не дома — поднимаю ядро"}")
+        KLog.i(TAG, "старт: ${if (it) "дома — ядро не поднимаю" else "не дома — поднимаю ядро"}")
     }
 
     private fun homeRightNow0(): Boolean {
@@ -1364,21 +1363,21 @@ object AutoMode {
         // Трафиком подтверждаем так же, как признак DNS.
         val saved = runCatching { Settings.autoModeHomeKey }.getOrNull()?.takeIf { it.isNotBlank() }
         if (!HomeSign.byFingerprint(sign, networkKey(network), saved)) return false
-        Log.i(TAG, "старт: резолверы молчат, но отпечаток сети совпал с последним домом — проверяю трафиком")
+        KLog.i(TAG, "старт: резолверы молчат, но отпечаток сети совпал с последним домом — проверяю трафиком")
         return homeCarriesTraffic(network) == true
     }
 
     private fun loop() {
         while (active) {
             val situation = runCatching { round() }.getOrElse {
-                Log.w(TAG, "заход сорвался: ${it.message}")
+                KLog.w(TAG, "заход сорвался: ${it.message}")
                 _state.value.situation
             }
             if (!active) return
             // Серия перепроверок после смены сети идёт вперёд обычного ритма и обрывается
             // сама, как только обстановка устоялась.
             val hurry = burst.next(settled)
-            if (hurry != null) Log.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
+            if (hurry != null) KLog.i(TAG, "серия после смены сети: следующая проверка через ${hurry / 1000.0} с")
             // Резолверы промолчали — перепроверяем скоро, но не бесконечно. Спешка серии и
             // набор подтверждений и так ближе, им эта перепроверка не нужна.
             val blind = observationBlind
@@ -1390,7 +1389,7 @@ object AutoMode {
             }
             if (recheck != null) {
                 silentRechecks++
-                Log.i(
+                KLog.i(
                     TAG,
                     "резолверы молчали — следующая проверка через ${recheck / 1000} с " +
                         "($silentRechecks из $SILENT_RECHECK_ROUNDS)",
@@ -1453,14 +1452,14 @@ object AutoMode {
                 val room = layout.room
                 if (room != null && Settings.autoModeManualRoom != (tag == room)) {
                     setManualRoom(tag == room)
-                    Log.i(TAG, "выбор «$tag» уточнён по раскладке: комната = ${Settings.autoModeManualRoom}")
+                    KLog.i(TAG, "выбор «$tag» уточнён по раскладке: комната = ${Settings.autoModeManualRoom}")
                 }
             }
             val wantRoom = Settings.autoModeManualRoom
             val ack = runCatching {
                 host.setRoomWanted(wantRoom, if (wantRoom) "комнату выбрал человек" else "человек выбрал обычный выход")
             }.getOrElse {
-                Log.w(TAG, "комнату переключить не вышло: ${it.message}")
+                KLog.w(TAG, "комнату переключить не вышло: ${it.message}")
                 RoomAck.Failed
             }
             if (ack.changed) {
@@ -1490,7 +1489,7 @@ object AutoMode {
                     manualTarget(tag, layout.room, layout.main, roomUp())
                 }
                 if (target != tag && target != null && selected != target) {
-                    Log.i(TAG, "комната выбрана человеком, но ещё не встала — держусь основного канала")
+                    KLog.i(TAG, "комната выбрана человеком, но ещё не встала — держусь основного канала")
                     // Сигнал по причине, а не по симптому: «выход выбран, но не поднят»
                     // говорит, что именно не так, раньше любого процента отказов.
                     runCatching { Zapisi.perehod("vyhod_ne_podnyat", "выбрана «$tag», не поднята — стою на «$target»") }
@@ -1505,7 +1504,7 @@ object AutoMode {
             if (!wantRoom) {
                 physicalNetwork()?.let { net ->
                     runCatching { mainWorks(net, host) }
-                        .onFailure { Log.w(TAG, "замер выбранного выхода не удался: ${it.message}") }
+                        .onFailure { KLog.w(TAG, "замер выбранного выхода не удался: ${it.message}") }
                 }
             }
             idle = true
@@ -1523,7 +1522,7 @@ object AutoMode {
             // Новая сеть — новая серия перепроверок на молчании, прошлая исчерпана не здесь.
             silentRechecks = 0
             burst.restart()
-            Log.i(TAG, "сеть сменилась — перепроверяю обстановку")
+            KLog.i(TAG, "сеть сменилась — перепроверяю обстановку")
         }
 
         val was = gate.current
@@ -1544,7 +1543,7 @@ object AutoMode {
             if (silentHoldAt == 0L) silentHoldAt = SystemClock.elapsedRealtime()
             pendingSwitch = false
             settled = false
-            Log.i(
+            KLog.i(
                 TAG,
                 "резолверы молчат ${silentHoldAge() / 1000} с — вижу ${name(observed)}, " +
                     "но это «не знаю», а не «${name(observed)}»: остаюсь на ${name(gate.current)}",
@@ -1568,7 +1567,16 @@ object AutoMode {
 
         when {
             changed -> {
-                Log.i(TAG, "обстановка сменилась: ${name(was)} → ${name(observed)}")
+                KLog.i(TAG, "обстановка сменилась: ${name(was)} → ${name(observed)}")
+                // Запись с полями: от смены обстановки зависит, погасит ли автомат туннель, —
+                // и «кто выключил» потом читается рядом с остановками сервиса (см. BoxService).
+                runCatching {
+                    Zapisi.perehod(
+                        "obstanovka",
+                        "${name(was)} → ${name(observed)}" + if (trustOnce) " (сразу после смены сети)" else "",
+                        kto = "автомат",
+                    )
+                }
                 situationNetwork = observedNetworkKey
                 publish(auto = true, situation = observed)
                 apply(host, observed, repeat = false)
@@ -1584,7 +1592,7 @@ object AutoMode {
                 apply(host, observed, repeat = true)
             }
 
-            else -> Log.i(TAG, "вижу ${name(observed)}, подтверждения не набраны — пока не трогаю")
+            else -> KLog.i(TAG, "вижу ${name(observed)}, подтверждения не набраны — пока не трогаю")
         }
         noteRound(observed)
         return gate.current
@@ -1650,7 +1658,7 @@ object AutoMode {
         val byFingerprint = canBeHome && hint != NetworkMode.Whitelist &&
             HomeSign.byFingerprint(dnsNow, observedNetworkKey, lastHomeKey)
         if (byFingerprint) {
-            Log.i(TAG, "резолверы молчат, но отпечаток сети совпал с последним домом — признак дома держу, проверяю трафиком")
+            KLog.i(TAG, "резолверы молчат, но отпечаток сети совпал с последним домом — признак дома держу, проверяю трафиком")
         }
         // Одна слепая сводка признак не отменяет — отменяет его только опровержение делом.
         val dnsHome = HomeSign.stands(
@@ -1724,7 +1732,7 @@ object AutoMode {
         if (canBeHome && (dnsHome || home)) {
             // Признак дома был — значит есть что объяснить: почему домом это считается
             // или почему нет. Без признака писать нечего, там и так обычная сеть.
-            Log.i(
+            KLog.i(
                 TAG,
                 "вердикт «дома»: ${if (home) "да" else "нет"} — признак DNS ${if (dnsHome) "есть" else "нет"}, " +
                     "трафик ${
@@ -1777,7 +1785,7 @@ object AutoMode {
             // основной путь не меряется вовсе, хотя он мог ожить в первую же минуту.
             hint == NetworkMode.Whitelist && !measuresMainDespiteHint(inRoom, layout.mainPinned) -> {
                 PathRegistry.dead(PathId.MAIN, WHITELIST_REASON, Evidence.Hint)
-                Log.i(TAG, "основной канал: $WHITELIST_REASON — пробу не тратим")
+                KLog.i(TAG, "основной канал: $WHITELIST_REASON — пробу не тратим")
                 // Канал похоронен подсказкой, а не замером. Вот это и опровергает
                 // приглядка между заходами — иначе ждать пришлось бы старости подсказки.
                 peekWanted = true
@@ -1795,7 +1803,7 @@ object AutoMode {
         if (!(home || main) && !mainSettled) {
             // Сеть только что сменилась (журнал 17.10.2026 про узел — здесь то же про канал):
             // заход «сети нет» не доказывает, что основной канал плох, поэтому счёт не растёт.
-            Log.i(TAG, "основной канал не поднялся, но сеть только что сменилась — заход в счёт провалов не идёт")
+            KLog.i(TAG, "основной канал не поднялся, но сеть только что сменилась — заход в счёт провалов не идёт")
         }
         mainFailures = nextMainFailures(mainFailures, ok = home || main, settled = mainSettled)
         if (home || main) {
@@ -1883,12 +1891,12 @@ object AutoMode {
             if (OlcRtcCore.lastError == OlcRtcCore.CANCELLED_REASON) {
                 // Подъём отменили мы же (остановка, смена выбора, уход с комнаты) — это не неудача.
                 roomTriedAt = 0L
-                Log.i(TAG, "подъём комнаты отменён сверху — штрафа нет")
+                KLog.i(TAG, "подъём комнаты отменён сверху — штрафа нет")
             } else {
                 roomTrialPause = nextTrialPause(roomTrialPause)
                 roomTriedAt = now
                 PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
-                Log.i(TAG, "комната не встала (подъём кончился ничем), следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
+                KLog.i(TAG, "комната не встала (подъём кончился ничем), следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
             }
         }
         if (roomTriedAt != 0L && now - roomTriedAt < roomTrialPause) return
@@ -1905,7 +1913,7 @@ object AutoMode {
         if (!roomGate) {
             if (!roomGateLogged) {
                 roomGateLogged = true
-                Log.i(
+                KLog.i(
                     TAG,
                     "комнату не пробую: только что замер показал тишину на всё или сети нет " +
                         "(система считает сеть рабочей: ${roomNet?.let(::validated)}) — попытки и штрафа нет",
@@ -1922,7 +1930,7 @@ object AutoMode {
         if (!host.tunnelLive()) {
             if (runCatching { host.resumeTunnel("комната нужна, а туннель погашен", roomNext = true) }
                     .getOrElse {
-                        Log.w(TAG, "туннель поднять не вышло: ${it.message}")
+                        KLog.w(TAG, "туннель поднять не вышло: ${it.message}")
                         false
                     }
             ) {
@@ -1931,17 +1939,17 @@ object AutoMode {
             if (!host.tunnelLive()) {
                 // Туннеля так и нет. Это обстоятельство туннеля, а не комнаты:
                 // ни попытки, ни штрафа.
-                Log.i(TAG, "туннель не поднялся — комнату в этом заходе не просим, паузу не растим")
+                KLog.i(TAG, "туннель не поднялся — комнату в этом заходе не просим, паузу не растим")
                 return
             }
         }
 
         roomTriedAt = now
         PathRegistry.raising(PathId.ROOM)
-        Log.i(TAG, "основной канал не поднимается $mainFailures заход(а) подряд — пробую поднять комнату")
+        KLog.i(TAG, "основной канал не поднимается $mainFailures заход(а) подряд — пробую поднять комнату")
         val ack = runCatching { host.setRoomWanted(true, "проверяю, встаёт ли комната") }
             .getOrElse {
-                Log.w(TAG, "комнату поднять не вышло: ${it.message}")
+                KLog.w(TAG, "комнату поднять не вышло: ${it.message}")
                 RoomAck.Failed
             }
         if (ack.changed) selected = null
@@ -1950,7 +1958,7 @@ object AutoMode {
             ack.untried -> {
                 roomTriedAt = 0L
                 PathRegistry.coolDown(PathId.ROOM, 0L)
-                Log.i(TAG, "комнату не спрашивали ($ack) — пауза не растёт")
+                KLog.i(TAG, "комнату не спрашивали ($ack) — пауза не растёт")
             }
 
             // Подъём идёт. Ответа тут ждать нельзя: он стоит до полутора минут, а автомат
@@ -1960,7 +1968,7 @@ object AutoMode {
                 // Паузу тут не сбрасываем: подъём идёт своим потоком, и удался ли он, видно
                 // только на следующем заходе ([roomTrialPending]).
                 roomTrialPending = true
-                Log.i(TAG, "комната поднимается, жду вердикта присмотра")
+                KLog.i(TAG, "комната поднимается, жду вердикта присмотра")
             }
 
             else -> {
@@ -1968,7 +1976,7 @@ object AutoMode {
                 // Остывание помнит реестр, но распоряжается им по-прежнему [roomTrialPause]:
                 // решения из общей памяти на этом шаге не принимает никто.
                 PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
-                Log.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
+                KLog.i(TAG, "комната не встала, следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
             }
         }
     }
@@ -2073,7 +2081,7 @@ object AutoMode {
     private fun apply(host: Host, situation: Situation, repeat: Boolean) {
         // Повтор не пишем: он идёт каждым заходом и говорит ровно то, что уже сказала
         // сводка захода. Пишем настоящий переход — это и есть момент «включил туннель».
-        if (!repeat) Log.i(TAG, "действую по обстановке «${name(situation)}»")
+        if (!repeat) KLog.i(TAG, "действую по обстановке «${name(situation)}»")
         when (situation) {
             Situation.Home -> {
                 // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
@@ -2146,10 +2154,10 @@ object AutoMode {
                 // обычный заход ([roomAlive]).
                 val target = searchingTarget(layout.room, selected, roomUp(), roomAlive())
                 if (target != null) {
-                    Log.i(TAG, "ищу путь, но комната уже везёт — иду ей, не дожидаясь подтверждений")
+                    KLog.i(TAG, "ищу путь, но комната уже везёт — иду ей, не дожидаясь подтверждений")
                     choose(host, target, "канала нет, через комнату прошёл запрос")
                 } else if (layout.room != null && selected != layout.room && roomUp()) {
-                    Log.i(TAG, "ищу путь: комната поднята, но проба через неё не прошла — выход не трогаю")
+                    KLog.i(TAG, "ищу путь: комната поднята, но проба через неё не прошла — выход не трогаю")
                 }
             }
 
@@ -2166,7 +2174,7 @@ object AutoMode {
     private fun setRoom(host: Host, wanted: Boolean, reason: String): RoomAck =
         runCatching { host.setRoomWanted(wanted, reason) }
             .getOrElse {
-                Log.w(TAG, "комнату переключить не вышло ($reason): ${it.message}")
+                KLog.w(TAG, "комнату переключить не вышло ($reason): ${it.message}")
                 RoomAck.Failed
             }
             .also {
@@ -2241,13 +2249,13 @@ object AutoMode {
                 // Старое значение и причина стоят в той же строке: «переключён на X»
                 // не отвечало ни на «откуда», ни на «зачем», а обрыв канала разбирается
                 // именно по этой паре.
-                Log.i(
+                KLog.i(
                     TAG,
                     "выход переключён: «${was ?: "не выбран"}» → «$target»" +
                         if (why.isBlank()) "" else " ($why)",
                 )
             }
-            .onFailure { Log.w(TAG, "не удалось переключить выход на «$target»: ${it.message}") }
+            .onFailure { KLog.w(TAG, "не удалось переключить выход на «$target»: ${it.message}") }
     }
 
     private fun delayFor(situation: Situation): Long = when (situation) {
@@ -2419,7 +2427,7 @@ object AutoMode {
         val note = linkNote(network)
         if (note == lastLinkNote) return
         lastLinkNote = note
-        Log.i(TAG, "связь ($why): $note")
+        KLog.i(TAG, "связь ($why): $note")
     }
 
     /**
@@ -2435,9 +2443,9 @@ object AutoMode {
         if (silentNow) {
             if (dnsSilentSince != 0L) return
             dnsSilentSince = now
-            Log.w(TAG, "резолверы сети замолчали (интернет при этом может быть живым): ${linkNote(network)}")
+            KLog.w(TAG, "резолверы сети замолчали (интернет при этом может быть живым): ${linkNote(network)}")
         } else if (dnsSilentSince != 0L) {
-            Log.i(TAG, "резолверы сети отвечают снова — молчали ${(now - dnsSilentSince) / 1000} с")
+            KLog.i(TAG, "резолверы сети отвечают снова — молчали ${(now - dnsSilentSince) / 1000} с")
             dnsSilentSince = 0L
         }
     }
@@ -2463,7 +2471,7 @@ object AutoMode {
         if (note == lastRoundNote && now - lastRoundNoteAt < ROUND_NOTE_REPEAT_MILLIS) return
         lastRoundNote = note
         lastRoundNoteAt = now
-        Log.i(TAG, note)
+        KLog.i(TAG, note)
     }
 
     /**
@@ -2550,7 +2558,7 @@ object AutoMode {
             val resolvers = runCatching {
                 Application.connectivity.getLinkProperties(network)?.dnsServers?.mapNotNull { it.hostAddress }
             }.getOrNull().orEmpty()
-            Log.i(
+            KLog.i(
                 TAG,
                 "признак дома по DNS в сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
                     "настоящих $misses, промолчали $silent, контрольный $HOME_CONTROL $control, " +
@@ -2643,8 +2651,8 @@ object AutoMode {
         if (value == lastHomeKey) return
         lastHomeKey = value
         runCatching { Settings.autoModeHomeKey = value.orEmpty() }
-            .onFailure { Log.w(TAG, "отпечаток дома не записался: ${it.message}") }
-        Log.i(
+            .onFailure { KLog.w(TAG, "отпечаток дома не записался: ${it.message}") }
+        KLog.i(
             TAG,
             if (value == null) {
                 "отпечаток дома забыт: на этой сети резолвер ответил без подмен"
@@ -2732,7 +2740,7 @@ object AutoMode {
             // «мёртв», что и настоящее «SYN ушёл, ответа нет», стирал память о доме и
             // отправлял человека в туннель на пять минут.
             if (measurement.measured) measured = true
-            Log.i(TAG, "дом трафиком не подтверждён (попытка ${attempt + 1}): $measurement")
+            KLog.i(TAG, "дом трафиком не подтверждён (попытка ${attempt + 1}): $measurement")
         }
         return if (measured) false else null
     }
@@ -2886,7 +2894,7 @@ object AutoMode {
         // Принятое TCP-соединение не опровергает белый список, который рвёт TLS: там TCP
         // принимают куда угодно ([NetworkModeDecision.survivesOpenPort]).
         if (portOnly && NetworkModeDecision.survivesOpenPort(NetworkModeDetector.reportFor(network))) {
-            Log.i(TAG, "$reason — но белый список здесь рвёт TLS, а не TCP: подсказку не забываю")
+            KLog.i(TAG, "$reason — но белый список здесь рвёт TLS, а не TCP: подсказку не забываю")
             return
         }
         nodeAnsweredAt = SystemClock.elapsedRealtime()
@@ -2910,7 +2918,7 @@ object AutoMode {
         if (!active) return
         val now = SystemClock.elapsedRealtime()
         massovyeOtkazyAt = now
-        Log.i(TAG, "реальные соединения массово падают ($prichina) — на заходе спрошу режим сети")
+        KLog.i(TAG, "реальные соединения массово падают ($prichina) — на заходе спрошу режим сети")
         val current = gate.current
         if (current != Situation.Main && current != Situation.Room) return
         if (massovyeBudilAt != 0L && now - massovyeBudilAt < HINT_TTL_MILLIS) return
@@ -2939,7 +2947,7 @@ object AutoMode {
         if (baseLayout.nodes.size < 2 || gate.current != Situation.Main || manualExit != null) return
         if (uzelBudilAt != 0L && now - uzelBudilAt < UZEL_BUDIT_MILLIS) return
         uzelBudilAt = now
-        Log.i(TAG, "соединения через «$teg» отказывают — проверяю узел сейчас, не дожидаясь захода")
+        KLog.i(TAG, "соединения через «$teg» отказывают — проверяю узел сейчас, не дожидаясь захода")
         wakeLoop()
     }
 
@@ -2967,10 +2975,10 @@ object AutoMode {
      */
     private fun askNetworkMode(network: Network): NetworkMode = runCatching {
         val report = runBlocking { NetworkModeDetector.detect(force = true, network = network) }
-        Log.i(TAG, "подсказка о сети: ${report.mode} — ${report.note} (${report.tookMillis} мс)")
+        KLog.i(TAG, "подсказка о сети: ${report.mode} — ${report.note} (${report.tookMillis} мс)")
         report.mode
     }.getOrElse {
-        Log.w(TAG, "режим сети определить не вышло: ${it.message}")
+        KLog.w(TAG, "режим сети определить не вышло: ${it.message}")
         NetworkMode.Unknown
     }
 
@@ -2987,10 +2995,10 @@ object AutoMode {
         thread(name = "auto-netmode", isDaemon = true) {
             try {
                 val report = runBlocking { NetworkModeDetector.detect(force = false, network = network) }
-                Log.i(TAG, "подсказка о сети (в фоне): ${report.mode} — ${report.note} (${report.tookMillis} мс)")
+                KLog.i(TAG, "подсказка о сети (в фоне): ${report.mode} — ${report.note} (${report.tookMillis} мс)")
                 if (report.mode == NetworkMode.Whitelist) wakeLoop()
             } catch (t: Throwable) {
-                Log.w(TAG, "режим сети в фоне определить не вышло: ${t.message}")
+                KLog.w(TAG, "режим сети в фоне определить не вышло: ${t.message}")
             } finally {
                 modeAskInFlight.set(false)
             }
@@ -3067,7 +3075,7 @@ object AutoMode {
             null
         } else {
             anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS).also { open ->
-                Log.i(
+                KLog.i(
                     TAG,
                     if (open) {
                         "основной канал: адрес узла принимает соединение"
@@ -3095,9 +3103,9 @@ object AutoMode {
             if (!canAsk || portSilenceConfirmed(prevSilentAt, nowMs)) {
                 return noteMain(mainVerdict(portOpen = false, trafficFlows = null), portOpen = false)
             }
-            Log.i(TAG, "основной канал: адрес узла молчит впервые — один пик не довод, спрашиваю канал целиком")
+            KLog.i(TAG, "основной канал: адрес узла молчит впервые — один пик не довод, спрашиваю канал целиком")
         } else if (portOpen == false) {
-            Log.i(TAG, "основной канал: адрес узла молчит, но мы в комнате — спрашиваю канал целиком")
+            KLog.i(TAG, "основной канал: адрес узла молчит, но мы в комнате — спрашиваю канал целиком")
         }
 
         val proxy = layout.localProxy
@@ -3113,7 +3121,7 @@ object AutoMode {
         // Поэтому у живого канала отдельно спрашиваем, сколько он тянет ([SpeedProbe]).
         val squeeze = if (trafficFlows == true) SpeedProbe.measure(proxy, "основной канал") else null
         val squeezed = squeeze?.let(SpeedProbe::squeezed) ?: false
-        if (squeezed) Log.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
+        if (squeezed) KLog.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
         return noteMain(mainVerdict(portOpen, trafficFlows, squeezed), portOpen, squeeze.takeIf { squeezed })
     }
 
@@ -3163,12 +3171,12 @@ object AutoMode {
     private fun checkNode(network: Network, host: Host, tag: String): NodeCheck {
         val endpoints = baseLayout.nodeEndpoints[tag].orEmpty()
         if (endpoints.isEmpty() || !anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS)) {
-            Log.i(TAG, "узел «$tag»: ни один адрес не отвечает")
+            KLog.i(TAG, "узел «$tag»: ни один адрес не отвечает")
             return NodeCheck.Dead
         }
         val entry = baseLayout.probeEntries[tag]
         if (entry == null || !host.tunnelLive()) {
-            Log.i(TAG, "узел «$tag»: адрес отвечает, канал целиком проверить нечем — по адресу жив")
+            KLog.i(TAG, "узел «$tag»: адрес отвечает, канал целиком проверить нечем — по адресу жив")
             return NodeCheck.ByAddress
         }
         val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
@@ -3210,11 +3218,11 @@ object AutoMode {
         val death = nodeWatch.nodeDead(tag, now, validated(network))
         when (death) {
             AutoModeNodeWatch.Death.Window -> {
-                Log.i(TAG, "узел «$tag» не ответил, но сеть только что сменилась — это не довод, на запасной не ухожу")
+                KLog.i(TAG, "узел «$tag» не ответил, но сеть только что сменилась — это не довод, на запасной не ухожу")
                 return false
             }
             AutoModeNodeWatch.Death.FirstMiss -> {
-                Log.i(
+                KLog.i(
                     TAG,
                     "узел «$tag» не ответил на рабочей сети — перепроверю не раньше чем через " +
                         "${AutoModeNodeWatch.CONFIRM_MILLIS / 1000} с, до того на запасной не ухожу",
@@ -3249,12 +3257,12 @@ object AutoMode {
                 return true
             }
             if (check == NodeCheck.ByAddress && deadRecently) {
-                Log.i(TAG, "узел «$tag» отвечает по адресу, но опрос путей только что назвал его мёртвым — не встаю")
+                KLog.i(TAG, "узел «$tag» отвечает по адресу, но опрос путей только что назвал его мёртвым — не встаю")
             } else if (check == NodeCheck.Unmeasured) {
-                Log.i(TAG, "узел «$tag»: замер не состоялся — не встаю на непроверенный")
+                KLog.i(TAG, "узел «$tag»: замер не состоялся — не встаю на непроверенный")
             }
         }
-        Log.i(TAG, "ни один узел очереди ${nodes} не отвечает ($why)")
+        KLog.i(TAG, "ни один узел очереди ${nodes} не отвечает ($why)")
         return false
     }
 
@@ -3271,7 +3279,7 @@ object AutoMode {
             return
         }
         when (nodeWatch.primaryAlive(now)) {
-            AutoModeNodeWatch.Return.Started -> Log.i(
+            AutoModeNodeWatch.Return.Started -> KLog.i(
                 TAG,
                 "первый узел «$primary» снова отвечает — вернусь, если продержится ${RETURN_AFTER_MILLIS / 60_000} мин",
             )
@@ -3303,7 +3311,7 @@ object AutoMode {
         layout = baseLayout
         portSilentAt = 0L
         PathRegistry.bindExits(main = layout.main, room = layout.room)
-        Log.i(TAG, "очередь узлов снова с первого: «$was» → «${layout.main}» ($why)")
+        KLog.i(TAG, "очередь узлов снова с первого: «$was» → «${layout.main}» ($why)")
     }
 
     /** Встать на узел очереди [idx]: весь автомат дальше считает основным его. */
@@ -3318,7 +3326,7 @@ object AutoMode {
         // Узел только что проверен ([nodeAlive]) — иначе экран до следующего захода показывал бы
         // отказ прежнего узла, то есть «связи нет» при живой связи.
         PathRegistry.alive(PathId.MAIN, reason = "узел «$tag»")
-        Log.i(TAG, "узел сменён: «$was» → «$tag» ($why)")
+        KLog.i(TAG, "узел сменён: «$was» → «$tag» ($why)")
         // На основном канале переставляем выбор сразу; из комнаты уходим обычным порядком —
         // вердиктом «основной жив» через задвижку. Выбор человека не трогаем.
         if (gate.current == Situation.Main && manualExit == null) choose(host, tag, "очередь узлов: $why")
@@ -3466,9 +3474,9 @@ object AutoMode {
             runCatching { host.selectExit(group, main) }
                 .onSuccess {
                     selected = main
-                    Log.i(TAG, "на время пробы переставил выход на «$main»")
+                    KLog.i(TAG, "на время пробы переставил выход на «$main»")
                 }
-                .onFailure { Log.w(TAG, "выход на «$main» переставить не вышло: ${it.message}") }
+                .onFailure { KLog.w(TAG, "выход на «$main» переставить не вышло: ${it.message}") }
         }
 
         val result = ProxyProbe.through(proxy, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
@@ -3488,9 +3496,9 @@ object AutoMode {
             runCatching { host.selectExit(group, restore) }
                 .onSuccess {
                     selected = restore
-                    Log.i(TAG, "основной канал не ожил — выход вернул на «$restore»")
+                    KLog.i(TAG, "основной канал не ожил — выход вернул на «$restore»")
                 }
-                .onFailure { Log.w(TAG, "выход вернуть на «$restore» не вышло: ${it.message}") }
+                .onFailure { KLog.w(TAG, "выход вернуть на «$restore» не вышло: ${it.message}") }
         }
         return if (unmeasured) null else alive
     }
@@ -3575,7 +3583,7 @@ object AutoMode {
         if (!connects(network, endpoint, ROOM_PEEK_TIMEOUT_MILLIS)) {
             // Молчание — обычный исход под запретом, и вслух о нём говорить незачем, кроме
             // как для разбора: без этой строки не видно, ходила приглядка вообще или нет.
-            Log.i(TAG, "приглядка из комнаты: узел ${endpoint.host}:${endpoint.port} молчит")
+            KLog.i(TAG, "приглядка из комнаты: узел ${endpoint.host}:${endpoint.port} молчит")
             return false
         }
         if (NetworkModeDecision.survivesOpenPort(NetworkModeDetector.reportFor(network))) {
@@ -3583,7 +3591,7 @@ object AutoMode {
             // этого полный заход каждые полминуты незачем.
             return false
         }
-        Log.i(TAG, "приглядка из комнаты: узел основного канала ответил — проверяю канал целиком")
+        KLog.i(TAG, "приглядка из комнаты: узел основного канала ответил — проверяю канал целиком")
         nodeAnswered("узел ответил на приглядку из комнаты")
         // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
         // изменилась ровно так же доказанно, а подтверждений задвижка при этом всё равно
@@ -3629,7 +3637,7 @@ object AutoMode {
         if (measured != null) noteMain(alive, portOpen = null)
         refreshLink()
         if (!alive) return false
-        Log.i(TAG, "приглядка из комнаты: основной путь ответил на честную пробу — проверяю обстановку целиком")
+        KLog.i(TAG, "приглядка из комнаты: основной путь ответил на честную пробу — проверяю обстановку целиком")
         // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
         // изменилась так же доказанно, а подтверждений задвижка всё равно требует —
         // переключение остаётся защищённым от одиночного везения.
@@ -3705,7 +3713,7 @@ object AutoMode {
             refreshLink()
             return false
         }
-        Log.i(TAG, "приглядка дома: наружу не проходит ($measurement) — проверяю обстановку целиком")
+        KLog.i(TAG, "приглядка дома: наружу не проходит ($measurement) — проверяю обстановку целиком")
         // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
         // изменилась так же доказанно, а подтверждений задвижка при этом всё равно
         // требует — переключение остаётся защищённым от одиночного невезения.

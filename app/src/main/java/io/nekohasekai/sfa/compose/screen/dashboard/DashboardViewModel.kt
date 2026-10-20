@@ -334,7 +334,7 @@ class DashboardViewModel :
     private fun stopService() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                BoxService.stop()
+                BoxService.stop("человек: кнопка")
                 // Status will be updated via updateServiceStatus callback
             } catch (e: Exception) {
                 sendError(e)
@@ -369,7 +369,7 @@ class DashboardViewModel :
                     val restart = Settings.rebuildServiceMode()
                     if (restart) {
                         // Need full restart
-                        BoxService.stop()
+                        BoxService.stop("приложение: смена профиля")
                         sendGlobalEvent(UiEvent.RequestReconnectService)
                         for (i in 0 until 30) {
                             if (_serviceStatus.value == Status.Stopped) {

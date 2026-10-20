@@ -2,7 +2,6 @@ package io.nekohasekai.sfa.bg
 
 import android.net.Network
 import android.os.Build
-import android.util.Log
 import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.sfa.Application
 import kotlinx.coroutines.CoroutineScope
@@ -126,7 +125,7 @@ object DefaultNetworkMonitor {
                 report(listener, iface)
                 return@launch
             }
-            Log.w(TAG, "свойства сети не появились за $CHASE_ATTEMPTS попыток, ядро осталось без интерфейса")
+            KLog.w(TAG, "свойства сети не появились за $CHASE_ATTEMPTS попыток, ядро осталось без интерфейса")
         }
     }
 
