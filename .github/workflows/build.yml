@@ -28,14 +28,16 @@ jobs:
           path: sing-box-for-android
           submodules: recursive
 
-      # Ядро зависит только от версии sing-box. Пока она та же — не пересобираем:
-      # это разница между 15 минутами и парой минут на каждую правку в Kotlin.
+      # Ядро зависит от версии sing-box И от нашего патча core-xhttp. Пока оба те же —
+      # не пересобираем: это разница между 15 минутами и парой минут на правку в Kotlin.
+      # Хеш патча в ключе обязателен: без него правка apply.py (например, ML-KEM для
+      # Reality) молча не попадала бы в ядро — кеш отдавал бы старое.
       - name: Кеш ядра
         id: libbox-cache
         uses: actions/cache@v5
         with:
           path: sing-box-for-android/app/libs
-          key: libbox-xhttp2-${{ github.event.inputs.core_ref || 'v1.14.1' }}
+          key: libbox-xhttp3-${{ github.event.inputs.core_ref || 'v1.14.1' }}-${{ hashFiles('sing-box-for-android/core-xhttp/**') }}
 
       - name: Checkout sing-box core
         if: steps.libbox-cache.outputs.cache-hit != 'true'
