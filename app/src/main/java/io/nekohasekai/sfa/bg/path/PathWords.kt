@@ -45,7 +45,7 @@ object PathWords {
         }
 
         PathStatus.Raising -> "поднимается"
-        PathStatus.Probing -> "проверяю"
+        PathStatus.Probing -> "проверка"
         PathStatus.Unavailable -> state.reason ?: "недоступен"
         PathStatus.Unknown -> "не проверяли"
     }
@@ -71,8 +71,8 @@ object PathWords {
 
         chosen == PathId.ROOM -> when (snapshot[PathId.ROOM].status) {
             PathStatus.Alive -> "Комната"
-            PathStatus.Raising, PathStatus.Probing -> "Поднимаю комнату"
-            PathStatus.Unknown -> "Поднимаю комнату"
+            PathStatus.Raising, PathStatus.Probing -> "Подъём комнаты"
+            PathStatus.Unknown -> "Подъём комнаты"
             else -> "Комната не отвечает"
         }
 
@@ -87,7 +87,7 @@ object PathWords {
         }
 
         chosen == PathId.MAIN -> when (snapshot[PathId.MAIN].status) {
-            PathStatus.Alive -> "Выход выбирается сам"
+            PathStatus.Alive -> "Выход выбирается автоматически"
             PathStatus.Dead, PathStatus.Unavailable -> "Связи нет"
             else -> "Проверка связи"
         }

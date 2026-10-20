@@ -131,7 +131,7 @@ fun AdvancedScreen(
                 // в приложении не было ни слова: человек не знал, что она вообще работает.
                 KRowItem(
                     title = "Блокировка рекламы",
-                    subtitle = "Включена сетью, списки приезжают с сервера",
+                    subtitle = "Включена сетью, списки загружаются с сервера",
                 )
                 KDivider()
                 KRowItem(
@@ -141,7 +141,7 @@ fun AdvancedScreen(
                 )
                 Spacer(Modifier.height(14.dp))
                 KButton(
-                    text = if (refresh is SubscriptionRefresh.State.Running) "Обновляю" else "Обновить",
+                    text = if (refresh is SubscriptionRefresh.State.Running) "Обновление" else "Обновить",
                     onClick = { SubscriptionRefresh.request() },
                     enabled = refresh !is SubscriptionRefresh.State.Running,
                 )
