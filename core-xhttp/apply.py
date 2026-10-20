@@ -218,6 +218,91 @@ def main():
 
     print("паника rule_set при пересборке ядра: правка наложена")
 
+    # --------------------------------------------------------------------------------
+    # 6. Reality: не вырезать X25519MLKEM768 из ClientHello.
+    #
+    # Xray-core с v26.9.8 (XTLS/REALITY 8cdf7bf9, 08.09.2026) отвергает ClientHello без
+    # ключа X25519MLKEM768 перед X25519: сервер молча уводит соединение на цель, клиент
+    # пишет `reality verification failed`. Апстрим sing-box (по v1.14.3 включительно)
+    # вырезает этот ключ из ClientHello ВСЕГДА — sing-box#4520, открыт с 11.09.2026.
+    # Пока это так, Xray на наших узлах выше 26.3.27 поднимать нельзя: отвалятся все
+    # клиенты разом.
+    #
+    # Правка — перенос коммита iskhakovt/sing-box@dfd19d104fd1dbed9428694e166bf79283c73686
+    # (предложен в #4520, апстрим не принял на 20.10.2026; взят по SHA, не по ветке):
+    # X25519MLKEM768 остаётся, только когда отпечаток шлёт И группу, И ключ (chrome:
+    # GREASE, X25519MLKEM768, X25519 — как настоящий Chrome и Xray). Если одно без
+    # другого (randomized выбирает их независимо) — вырезается, как раньше: группа без
+    # ключа даёт HelloRetryRequest, который REALITY не передаёт; ключ без группы
+    # запрещён RFC 8446 §4.2.8. Сессия по-прежнему запечатывается отдельным ключом
+    # X25519 (KeyShareKeys.Ecdhe), его понимают все версии сервера.
+    #
+    # Чем платим: сервер без поддержки X25519MLKEM768 (Xray до v25.5.16, sing-box до
+    # 1.12) с отпечатком chrome не пустит, если цель выберет ML-KEM. У нас Xray 26.3.27
+    # (замер 20.10.2026) — таблица в #4520: ✓ с правкой и без. firefox/safari/edge/ios/qq
+    # гибридного ключа в metacubex/utls не имеют — с Xray ≥26.9.8 не пойдут и с правкой.
+    #
+    # Опцию `support_x25519mlkem768` из sing-box-extended НЕ переносим намеренно: сервер
+    # отдавал бы её всем, а старое ядро на незнакомом поле падает целиком (опции
+    # разбираются с DisallowUnknownFields). Здесь правка без новых полей.
+    # --------------------------------------------------------------------------------
+    patch(
+        os.path.join(core, "common", "tls", "reality_client.go"),
+        [(
+            "\tfor _, extension := range uConn.Extensions {\n"
+            "\t\tif ce, ok := extension.(*utls.SupportedCurvesExtension); ok {\n"
+            "\t\t\tce.Curves = common.Filter(ce.Curves, func(curveID utls.CurveID) bool {\n"
+            "\t\t\t\treturn curveID != utls.X25519MLKEM768\n"
+            "\t\t\t})\n"
+            "\t\t}\n"
+            "\t\tif ks, ok := extension.(*utls.KeyShareExtension); ok {\n"
+            "\t\t\tks.KeyShares = common.Filter(ks.KeyShares, func(share utls.KeyShare) bool {\n"
+            "\t\t\t\treturn share.Group != utls.X25519MLKEM768\n"
+            "\t\t\t})\n"
+            "\t\t}\n"
+            "\t}\n"
+            "\terr = uConn.BuildHandshakeState()\n"
+            "\tif err != nil {\n"
+            "\t\treturn nil, err\n"
+            "\t}\n",
+            "\t// Kelevra (core-xhttp/apply.py, правка 6): X25519MLKEM768 остаётся, когда\n"
+            "\t// отпечаток шлёт и группу, и ключ, — без него Xray >= 26.9.8 не пускает.\n"
+            "\tvar mlkemCurve, mlkemKeyShare bool\n"
+            "\tfor _, extension := range uConn.Extensions {\n"
+            "\t\tswitch ext := extension.(type) {\n"
+            "\t\tcase *utls.SupportedCurvesExtension:\n"
+            "\t\t\tmlkemCurve = common.Contains(ext.Curves, utls.X25519MLKEM768)\n"
+            "\t\tcase *utls.KeyShareExtension:\n"
+            "\t\t\tmlkemKeyShare = common.Any(ext.KeyShares, func(share utls.KeyShare) bool {\n"
+            "\t\t\t\treturn share.Group == utls.X25519MLKEM768\n"
+            "\t\t\t})\n"
+            "\t\t}\n"
+            "\t}\n"
+            "\t// Группа без ключа даёт HelloRetryRequest, который REALITY не передаёт;\n"
+            "\t// ключ без группы запрещён RFC 8446 4.2.8 — тогда вырезаем, как апстрим.\n"
+            "\tif mlkemCurve != mlkemKeyShare {\n"
+            "\t\tfor _, extension := range uConn.Extensions {\n"
+            "\t\t\tif ce, ok := extension.(*utls.SupportedCurvesExtension); ok {\n"
+            "\t\t\t\tce.Curves = common.Filter(ce.Curves, func(curveID utls.CurveID) bool {\n"
+            "\t\t\t\t\treturn curveID != utls.X25519MLKEM768\n"
+            "\t\t\t\t})\n"
+            "\t\t\t}\n"
+            "\t\t\tif ks, ok := extension.(*utls.KeyShareExtension); ok {\n"
+            "\t\t\t\tks.KeyShares = common.Filter(ks.KeyShares, func(share utls.KeyShare) bool {\n"
+            "\t\t\t\t\treturn share.Group != utls.X25519MLKEM768\n"
+            "\t\t\t\t})\n"
+            "\t\t\t}\n"
+            "\t\t}\n"
+            "\t\terr = uConn.BuildHandshakeState()\n"
+            "\t\tif err != nil {\n"
+            "\t\t\treturn nil, err\n"
+            "\t\t}\n"
+            "\t}\n",
+        )],
+    )
+
+    print("reality: X25519MLKEM768 в ClientHello сохраняется: правка наложена")
+
 
 if __name__ == "__main__":
     main()
