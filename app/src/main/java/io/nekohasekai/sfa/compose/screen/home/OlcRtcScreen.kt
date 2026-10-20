@@ -243,10 +243,10 @@ private fun wbChatStatus(): String? {
 private fun sourceText(): String = when (OlcRtcParams.source) {
     OlcRtcParams.Source.Server -> "сеть"
     OlcRtcParams.Source.Manual ->
-        if (OlcRtcParams.serverOffers) "вручную (сеть тоже даёт, но перебито)" else "вручную"
+        if (OlcRtcParams.serverOffers) "вручную (значения сети переопределены)" else "вручную"
 
-    OlcRtcParams.Source.Mixed -> "сеть, часть перебита вручную"
-    OlcRtcParams.Source.None -> "нет: сеть комнату не раздаёт, руками тоже не задано"
+    OlcRtcParams.Source.Mixed -> "сеть, часть значений задана вручную"
+    OlcRtcParams.Source.None -> "нет: сеть комнату не раздаёт, вручную не задано"
 }
 
 /** Пропуск наружу не показываем: только откуда он и какой длины. */

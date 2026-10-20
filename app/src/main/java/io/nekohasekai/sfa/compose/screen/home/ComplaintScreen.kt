@@ -83,7 +83,7 @@ fun ComplaintScreen(onBack: () -> Unit, serviceRunning: Boolean, activeOutbound:
             )
             Spacer(Modifier.height(10.dp))
             Text(
-                text = "Обращение №${ticket}.\nРазберёмся и починим.",
+                text = "Обращение №${ticket} принято.",
                 fontFamily = Montserrat,
                 fontSize = 14.sp,
                 color = colors.Dim,

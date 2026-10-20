@@ -84,7 +84,7 @@ class PathWordsTest {
     @Test
     fun `меряем прямо сейчас`() {
         PathRegistry.probing(PathId.MAIN)
-        assertEquals("проверяю", PathWords.state(snapshot()[PathId.MAIN], now))
+        assertEquals("проверка", PathWords.state(snapshot()[PathId.MAIN], now))
     }
 
     @Test
@@ -130,7 +130,7 @@ class PathWordsTest {
         PathRegistry.dead(PathId.HOME, "подменных адресов нет")
 
         PathRegistry.raising(PathId.ROOM)
-        assertEquals("Поднимаю комнату", headline(chosen = PathId.ROOM))
+        assertEquals("Подъём комнаты", headline(chosen = PathId.ROOM))
 
         PathRegistry.alive(PathId.ROOM, latencyMs = 640)
         assertEquals("Комната", headline(chosen = PathId.ROOM))
@@ -144,7 +144,7 @@ class PathWordsTest {
         // Иначе в первые же секунды после выбора человек читает отказ, хотя вход
         // только начался.
         PathRegistry.dead(PathId.HOME, "подменных адресов нет")
-        assertEquals("Поднимаю комнату", headline(chosen = PathId.ROOM))
+        assertEquals("Подъём комнаты", headline(chosen = PathId.ROOM))
     }
 
     @Test
@@ -198,7 +198,7 @@ class PathWordsTest {
         assertEquals("Проверка связи", headline(chosen = PathId.MAIN))
 
         PathRegistry.alive(PathId.MAIN, latencyMs = 210)
-        assertEquals("Выход выбирается сам", headline(chosen = PathId.MAIN))
+        assertEquals("Выход выбирается автоматически", headline(chosen = PathId.MAIN))
 
         // Ровно та обстановка, ради которой всё писалось: автомат ещё стоит на основном
         // канале (подтверждений на смену не набрал), а канал уже мёртв. «Подключено»

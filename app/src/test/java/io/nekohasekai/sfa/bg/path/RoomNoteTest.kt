@@ -106,8 +106,8 @@ class RoomNoteTest {
         RoomNote.raising()
         assertEquals(PathStatus.Raising, room().status)
         assertEquals(
-            "круг обязан сказать «Поднимаю комнату»",
-            "Поднимаю комнату",
+            "круг обязан сказать «Подъём комнаты»",
+            "Подъём комнаты",
             PathWords.headline(
                 snapshot = PathRegistry.snapshot.value,
                 chosen = PathId.ROOM,
