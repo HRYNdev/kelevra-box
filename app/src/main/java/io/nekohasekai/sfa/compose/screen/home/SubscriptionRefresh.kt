@@ -140,11 +140,12 @@ object SubscriptionRefresh {
         }
         if (loaded != null) {
             loaded.bypassPackages.let { applyBypassPackages(it) }
-            // Сеть не ответила — старые параметры комнаты остаются; ответила без блока
-            // olcrtc — стираем, чтобы не держать протухшую комнату.
-            OlcRtcParams.applyServer(loaded.olcrtc)
-            // WB Chat — свой блок верхнего уровня, по тому же правилу: нет блока — стёрто.
-            io.nekohasekai.sfa.bg.WbChatParams.applyServer(loaded.wbchat)
+            // Комната и WB Chat (PULT.md, «Комната и WB Chat»): блок — применяем, явный null — сервер
+            // выключил, стираем; ключа нет — сервер молчит, держим прежнее. Раньше «нет блока» стирало,
+            // и один сбойный ответ обнулял комнату. Сеть не ответила или 503 — сюда не доходим вовсе.
+            primenitBlok(loaded.olcrtc, OlcRtcParams::applyServer)
+            // WB Chat — свой блок верхнего уровня, по тому же правилу.
+            primenitBlok(loaded.wbchat, io.nekohasekai.sfa.bg.WbChatParams::applyServer)
             // Внешний вид: ответ пришёл без блока — снят, с блоком — применяем и помним.
             io.nekohasekai.sfa.compose.theme.Vid.izSvodki(loaded.vid)
             _info.value = loaded

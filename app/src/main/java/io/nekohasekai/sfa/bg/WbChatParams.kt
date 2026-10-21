@@ -11,9 +11,9 @@ import org.json.JSONObject
  * сам кладёт в профиль sing-box socks-выход на 127.0.0.1:<socks_port> внутрь ручного
  * селектора. Ручных переопределений нет — всё приходит с сервера.
  *
- * Нет блока — всё про WB Chat стирается, и ядро не запускается: держать протухший звонок
- * вреднее, чем не иметь никакого. Сеть не ответила вовсе — параметры остаются как были
- * (то же правило, что у [OlcRtcParams.applyServer]).
+ * Явный `"wbchat": null` — сервер выключил WB Chat: всё про него стирается, и ядро не запускается
+ * (держать протухший звонок вреднее, чем не иметь никакого). Ключа нет, сеть не ответила или 503 —
+ * параметры остаются как были (то же правило, что у [OlcRtcParams.applyServer]).
  *
  * Токен, куки и ключ — секреты: в журнал не попадают ни целиком, ни частями.
  */
@@ -82,8 +82,8 @@ object WbChatParams {
     internal fun tcpCcFrom(raw: String?): String = if (raw == "reno") "reno" else ""
 
     /**
-     * Кладёт в настройки блок `wbchat` из /info. `null` — блока нет: стираем всё.
-     * Звать только когда ответ сервера пришёл (сеть не ответила — не звать).
+     * Кладёт в настройки блок `wbchat` из /info. `null` — сервер явно выключил WB Chat: стираем всё.
+     * Звать только когда в ответе сервера ключ `wbchat` есть (нет ключа или ответа — не звать).
      */
     fun applyServer(json: JSONObject?) {
         val port = json?.optInt("socks_port") ?: 0
@@ -92,7 +92,7 @@ object WbChatParams {
         val cookies = json?.optString("cookies").orEmpty()
         if (json == null || port !in 1..65535 || peer.isBlank() || token.isBlank() || cookies.isBlank()) {
             if (Settings.wbchatAvailable || Settings.wbchatToken.isNotEmpty()) {
-                KLog.i(TAG, if (json == null) "сервер не отдал блок wbchat — параметры WB Chat стёрты" else "блок wbchat неполный — параметры WB Chat стёрты")
+                KLog.i(TAG, if (json == null) "сервер выключил WB Chat — параметры стёрты" else "блок wbchat неполный — параметры WB Chat стёрты")
             }
             Settings.wbchatAvailable = false
             Settings.wbchatSocksPort = 0

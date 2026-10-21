@@ -13,6 +13,42 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Locale
 
+/**
+ * Что сводка сказала про блок комнаты (`olcrtc`) или WB Chat (`wbchat`) — KelevraServer/docs/PULT.md,
+ * «Провод», «Комната и WB Chat».
+ *
+ * Раньше «блока нет» значило «стереть», и один сбойный ответ сервера (битый файл на выдаче) обнулял
+ * комнату у всех. Теперь выдача клиенту пульта говорит «выключено» явным `null`, а при сбое отвечает 503;
+ * отсутствие ключа — «сервер про это молчит», держим прежнее.
+ */
+sealed interface BlokSvodki {
+    /** Ключа нет: не менять ничего. */
+    data object Molchit : BlokSvodki
+
+    /** `"klyuch": null` — функция выключена решением сервера: стереть серверные параметры. */
+    data object Vyklyuchen : BlokSvodki
+
+    /** Блок пришёл — применить. */
+    data class Est(val json: JSONObject) : BlokSvodki
+}
+
+/** Разобрать ключ сводки в [BlokSvodki]. Значение не объект и не null (мусор) — как молчание: стирать по мусору нельзя. */
+fun blokSvodki(json: JSONObject, klyuch: String): BlokSvodki = when {
+    !json.has(klyuch) -> BlokSvodki.Molchit
+    json.isNull(klyuch) -> BlokSvodki.Vyklyuchen
+    else -> json.optJSONObject(klyuch)?.let { BlokSvodki.Est(it) } ?: BlokSvodki.Molchit
+}
+
+/**
+ * Применить блок: [primenit] получает объект или null (стереть); на молчание не зовётся вовсе.
+ * Возвращает, звали ли [primenit].
+ */
+fun primenitBlok(blok: BlokSvodki, primenit: (JSONObject?) -> Unit): Boolean = when (blok) {
+    is BlokSvodki.Est -> { primenit(blok.json); true }
+    BlokSvodki.Vyklyuchen -> { primenit(null); true }
+    BlokSvodki.Molchit -> false
+}
+
 /** Сводка о подписке для главного экрана. */
 data class SubscriptionInfo(
     val name: String,
@@ -24,10 +60,10 @@ data class SubscriptionInfo(
     val transports: Map<String, String> = emptyMap(),
     /** приложения, которые сеть по умолчанию пускает мимо туннеля */
     val bypassPackages: List<String> = emptyList(),
-    /** параметры комнаты olcRTC, если сеть их раздаёт; токен внутри — только владельцу кода */
-    val olcrtc: JSONObject? = null,
-    /** второй носитель комнаты — WB Chat, отдельный выход; блока нет = WB Chat этому устройству не включён */
-    val wbchat: JSONObject? = null,
+    /** параметры комнаты olcRTC: есть / выключена сервером (null) / сервер молчит; токен внутри — только владельцу кода */
+    val olcrtc: BlokSvodki = BlokSvodki.Molchit,
+    /** второй носитель комнаты — WB Chat, отдельный выход; то же правило, что у [olcrtc] */
+    val wbchat: BlokSvodki = BlokSvodki.Molchit,
     /** ответ на жалобу, отправленную с этого устройства; null — отвечать нечего */
     val reply: ComplaintReply? = null,
     /**
@@ -245,9 +281,9 @@ fun razobratSvodku(json: JSONObject): SubscriptionInfo = SubscriptionInfo(
     deviceName = json.optJSONObject("device")?.optString("name")
         ?.takeIf { it.isNotBlank() && it != "null" },
     devices = parseDevices(json),
-    // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
-    olcrtc = json.optJSONObject("olcrtc"),
-    wbchat = json.optJSONObject("wbchat"),
+    // явный null = выключено сервером (стереть); ключа нет = сервер молчит (держать прежнее)
+    olcrtc = blokSvodki(json, "olcrtc"),
+    wbchat = blokSvodki(json, "wbchat"),
     sendLogNow = json.optBoolean("send_log_now"),
     panel = json.optBoolean("panel"),
     vid = json.opt("vid"),
