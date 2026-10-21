@@ -93,7 +93,7 @@ class PriglashenieTest {
     ): Itog = runBlocking {
         Priglashenie.vybratDver(
             dveri,
-            aktivaciya = { oprosheno += it; zaprosy += "POST $it"; otvety[it] },
+            aktivaciya = { dver, _ -> oprosheno += dver; zaprosy += "POST $dver"; otvety[dver] },
             znaetKod = { zaprosy += "GET $it"; it in znayut },
         )
     }
@@ -153,9 +153,83 @@ class PriglashenieTest {
             )
         }
         assertEquals(
-            Otvet.Ok("https://n.example:8443/u/Kl_yu-ch01/", null),
+            Otvet.Ok("https://n.example:8443/u/Kl_yu-ch01", null),
             Priglashenie.razobratOtvet(200, """{"profil":"https://n.example:8443/u/Kl_yu-ch01/"}"""),
         )
+    }
+
+    // Адрес устройства приводится к одному виду; отвергается только не https и путь не /u/<ключ>.
+    @Test
+    fun adres_klyucha_privoditsya_k_odnomu_vidu() {
+        val horoshie = mapOf(
+            "HTTPS://H.Example.COM/u/KEY123" to "https://h.example.com/u/KEY123",
+            "https://[2001:DB8::1]:8443/u/KEY123" to "https://[2001:db8::1]:8443/u/KEY123",
+            "https://[2001:db8::1]/u/KEY123/" to "https://[2001:db8::1]/u/KEY123",
+            "https://пример.рф/u/KEY123" to "https://xn--e1afmkfd.xn--p1ai/u/KEY123",
+            "https://Пример.РФ:443/u/KEY123" to "https://xn--e1afmkfd.xn--p1ai:443/u/KEY123",
+            "https://10.0.0.5:8443/u/KEY123?x=1#y" to "https://10.0.0.5:8443/u/KEY123",
+            "  https://h.example/u/AbC_123-xyz0/  " to "https://h.example/u/AbC_123-xyz0",
+        )
+        for ((vhod, ozhid) in horoshie) assertEquals(vhod, ozhid, Priglashenie.adresKlyucha(vhod))
+        val plohie = listOf(
+            "", "h.example/u/KEY123", "http://h.example/u/KEY123", "HTTP://h.example/u/KEY123",
+            "ftp://h.example/u/KEY123", "https://h.example/k/KEY123", "https://h.example/u/KEY123/info",
+            "https://h.example/u/KE/../y", "https://h.example/u/", "https://h.example", "https:///u/KEY123",
+            "https://user@h.example/u/KEY123", "https://h.example:port/u/KEY123", "https://[zz::1]/u/KEY123",
+        )
+        for (vhod in plohie) assertNull(vhod, Priglashenie.adresKlyucha(vhod))
+        assertEquals(
+            Otvet.Ok("https://xn--e1afmkfd.xn--p1ai/u/KEY123", null),
+            Priglashenie.razobratOtvet(200, """{"profil":"HTTPS://пример.рф/u/KEY123"}"""),
+        )
+    }
+
+    // Новая дверь висит на соединении (режут по дороге): вход человека старой системы не ждёт её
+    // полный срок — первый проход ограничен, и сразу идёт старый путь.
+    @Test
+    fun visyashchaya_dver_ne_derzhit_vhod() {
+        val zaprosy = mutableListOf<String>()
+        val nachalo = System.nanoTime()
+        val itog = runBlocking {
+            Priglashenie.vybratDver(
+                listOf("staraya", "novaya"),
+                aktivaciya = { dver, _ ->
+                    zaprosy += "POST $dver"
+                    if (dver == "novaya") kotlinx.coroutines.delay(60_000)
+                    Otvet.NetProtokola
+                },
+                znaetKod = { zaprosy += "GET $it"; it == "staraya" },
+                srokPervogoProhodaMs = 300,
+            )
+        }
+        val proshlo = (System.nanoTime() - nachalo) / 1_000_000
+        assertEquals(Itog.Staryj("staraya"), itog)
+        assertEquals(listOf("POST staraya", "POST novaya", "GET staraya"), zaprosy)
+        assertTrue("вход занял $proshlo мс", proshlo < 3_000)
+    }
+
+    // Второй проход: ответившие 404/405, затем не спрошенные за срок, последними не ответившие.
+    // Срок, который получает дверь, — остаток первого прохода.
+    @Test
+    fun poryadok_vtorogo_prohoda_i_ostatok_sroka() {
+        val zaprosy = mutableListOf<String>()
+        val sroki = mutableListOf<Long>()
+        val itog = runBlocking {
+            Priglashenie.vybratDver(
+                listOf("x", "visit", "b", "c"),
+                aktivaciya = { dver, srokMs ->
+                    zaprosy += "POST $dver"
+                    sroki += srokMs
+                    if (dver == "visit") kotlinx.coroutines.delay(60_000)
+                    Otvet.NetProtokola
+                },
+                znaetKod = { zaprosy += "GET $it"; false },
+                srokPervogoProhodaMs = 300,
+            )
+        }
+        assertEquals(Itog.NeNajden, itog)
+        assertEquals(listOf("POST x", "POST visit", "GET x", "GET b", "GET c", "GET visit"), zaprosy)
+        assertTrue(sroki.toString(), sroki.all { it in 1..300 })
     }
 
     @Test

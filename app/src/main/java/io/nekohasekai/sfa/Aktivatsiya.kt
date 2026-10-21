@@ -2,10 +2,16 @@ package io.nekohasekai.sfa
 
 import android.content.Context
 import io.nekohasekai.sfa.bg.KLog
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Сетевая часть входа по коду: справочник дверей и активация устройства.
@@ -53,24 +59,51 @@ object Aktivatsiya {
         Priglashenie.spisokDverej(SubscriptionLink.DEFAULT_HOST, keshSpravochnika(), zapomnennye())
     }
 
-    /** `POST /k/<код>/ustroystvo`; null, если дверь не ответила. */
-    private fun aktivirovat(dver: String, kod: String): Priglashenie.Otvet? = try {
-        val conn = URL(Kelevra.adresSeti("https://$dver/k/$kod/ustroystvo")).openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = "POST"
-            conn.connectTimeout = 10000
-            conn.readTimeout = 15000
-            conn.doOutput = true
-            conn.setFixedLengthStreamingMode(0)
-            conn.setRequestProperty("User-Agent", "kelevra")
-            Kelevra.deviceHeaders().forEach { (n, v) -> conn.setRequestProperty(n, v) }
-            conn.outputStream.close()
-            val status = conn.responseCode
-            val telo = (if (status in 200..299) conn.inputStream else conn.errorStream)
-                ?.bufferedReader()?.readText().orEmpty()
-            Priglashenie.razobratOtvet(status, telo)
-        } finally {
-            conn.disconnect()
+    /**
+     * `POST /k/<код>/ustroystvo`; null, если дверь не ответила. Сроки — [Priglashenie.SROK_SOEDINENIYA_MS]
+     * на соединение (TCP и TLS) и [Priglashenie.SROK_OTVETA_MS] на весь запрос, не больше [srokMs]:
+     * сторож обрывает соединение, если дверь не соединилась или не ответила вовремя. Отмена корутины
+     * тоже обрывает соединение.
+     */
+    private suspend fun aktivirovat(dver: String, kod: String, srokMs: Long): Priglashenie.Otvet? = try {
+        coroutineScope {
+            val conn = URL(Kelevra.adresSeti("https://$dver/k/$kod/ustroystvo")).openConnection() as HttpURLConnection
+            val srokVsego = minOf(Priglashenie.SROK_OTVETA_MS, srokMs)
+            val srokSoedineniya = minOf(Priglashenie.SROK_SOEDINENIYA_MS, srokVsego)
+            val soedineno = AtomicBoolean(false)
+            val storozh = launch {
+                delay(srokSoedineniya)
+                if (soedineno.get()) delay(srokVsego - srokSoedineniya)
+                conn.disconnect()
+            }
+            val zapros = async(Dispatchers.IO) {
+                try {
+                    conn.requestMethod = "POST"
+                    conn.connectTimeout = srokSoedineniya.toInt()
+                    conn.readTimeout = srokVsego.toInt()
+                    conn.doOutput = true
+                    conn.setFixedLengthStreamingMode(0)
+                    conn.setRequestProperty("User-Agent", "kelevra")
+                    Kelevra.deviceHeaders().forEach { (n, v) -> conn.setRequestProperty(n, v) }
+                    conn.connect()
+                    soedineno.set(true)
+                    conn.outputStream.close()
+                    val status = conn.responseCode
+                    val telo = (if (status in 200..299) conn.inputStream else conn.errorStream)
+                        ?.bufferedReader()?.readText().orEmpty()
+                    Priglashenie.razobratOtvet(status, telo)
+                } finally {
+                    conn.disconnect()
+                }
+            }
+            try {
+                zapros.await()
+            } catch (e: CancellationException) {
+                conn.disconnect()
+                throw e
+            } finally {
+                storozh.cancel()
+            }
         }
     } catch (e: java.io.IOException) {
         KLog.i(TAG, "дверь $dver не ответила: ${Kelevra.maskCode(e.javaClass.simpleName)}")
@@ -105,7 +138,7 @@ object Aktivatsiya {
             kod = variant
             itog = Priglashenie.vybratDver(
                 dveri,
-                aktivaciya = { aktivirovat(it, variant) },
+                aktivaciya = { dver, srokMs -> aktivirovat(dver, variant, srokMs) },
                 znaetKod = { znaetKod(it, variant) },
             )
             if (itog !is Priglashenie.Itog.NeNajden) break
