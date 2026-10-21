@@ -265,6 +265,19 @@ class MainActivity :
         if (intent.categories?.contains("de.robv.android.xposed.category.MODULE_SETTINGS") == true) {
             pendingNavigationRoute.value = "settings/privilege"
         }
+        if (intent.action == io.nekohasekai.sfa.bg.AvtoVozvrat.ACTION_VKLYUCHIT) {
+            // Тап по «Kelevra не включилась»: действие человека — отсюда Android запуск
+            // службы пускает всегда; разрешения (уведомления, VPN) спросит обычный путь.
+            intent.action = null
+            io.nekohasekai.sfa.bg.AvtoVozvrat.ubratUvedomlenie(this)
+            if (io.nekohasekai.sfa.bg.BoxService.zhiva) {
+                KLog.i("KelevraVozvrat", "тап по уведомлению: служба уже работает")
+            } else {
+                KLog.i("KelevraVozvrat", "тап по уведомлению «не включилась» — включаю службу")
+                startService()
+            }
+            return
+        }
         if (intent.action == io.nekohasekai.sfa.update.ObnovleniyaPult.ACTION_USTANOVIT) {
             KLog.i("KelevraObnovlenie", "тап по «Обновление готово» — передаю файл системе")
             zaprosUstanovki.value = true
