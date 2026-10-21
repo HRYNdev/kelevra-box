@@ -216,25 +216,36 @@ suspend fun loadSubscription(uslovno: Boolean = false): SubscriptionInfo? = with
         val remote = io.nekohasekai.sfa.SubscriptionLink.baseUrl(profile.typed.remoteURL) ?: return@runCatching null
 
         // Своё устройство называем: по нему сервер найдёт ответ на нашу же жалобу.
-        val conn = URL(Kelevra.adresSeti("$remote/info?device=${Kelevra.deviceId}")).openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        conn.connectTimeout = 10000
-        conn.readTimeout = 10000
-        conn.setRequestProperty("User-Agent", "kelevra")
+        val sohranyonnaya = if (uslovno) SvodkaDisk.prochest()?.takeIf { it.baza == remote } else null
+        val infoUrl = Kelevra.adresSeti("$remote/info?device=${Kelevra.deviceId}")
         // Те же заголовки, что и у запроса конфига: сервер по ним заводит
         // устройство и возвращает в этой же сводке person.name и device.name.
-        Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
-        val sohranyonnaya = if (uslovno) SvodkaDisk.prochest()?.takeIf { it.baza == remote } else null
-        sohranyonnaya?.etag?.let { conn.setRequestProperty("If-None-Match", it) }
-        val code = conn.responseCode
+        val dop = listOfNotNull(sohranyonnaya?.etag?.let { "If-None-Match" to it })
+        // Прямой путь рвётся (reset/EOF/таймаут) — тот же запрос через туннель и по другим дверям.
+        val (code, text, etag) = io.nekohasekai.sfa.ZapasnoyPut.poluchit(
+            infoUrl,
+            io.nekohasekai.sfa.ZapasnoyPut.dveriDlyaPerebora(),
+            io.nekohasekai.sfa.ZapasnoyPut.tunnelIliNull { u -> io.nekohasekai.sfa.ZapasnoyPut.otvetCherezTunnel(u, dop) },
+        ) { u ->
+            val conn = URL(u).openConnection() as HttpURLConnection
+            try {
+                conn.requestMethod = "GET"
+                conn.connectTimeout = 10000
+                conn.readTimeout = 10000
+                conn.setRequestProperty("User-Agent", "kelevra")
+                Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
+                dop.forEach { (n, v) -> conn.setRequestProperty(n, v) }
+                val c = conn.responseCode
+                val t = if (c == 304) "" else (if (c in 200..299) conn.inputStream else conn.errorStream)
+                    ?.bufferedReader()?.readText().orEmpty()
+                Triple(c, t, conn.getHeaderField("ETag"))
+            } finally {
+                conn.disconnect()
+            }
+        }
         if (code == 304 && sohranyonnaya != null) {
-            conn.disconnect()
             return@runCatching razobratSvodku(JSONObject(sohranyonnaya.tekst)).copy(izKesha = true)
         }
-        val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
-            ?.bufferedReader()?.readText().orEmpty()
-        val etag = conn.getHeaderField("ETag")
-        conn.disconnect()
         if (code !in 200..299) return@runCatching null
 
         val json = JSONObject(text)

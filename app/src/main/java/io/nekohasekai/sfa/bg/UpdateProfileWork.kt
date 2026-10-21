@@ -110,9 +110,9 @@ class UpdateProfileWork {
                     continue
                 }
                 try {
-                    val content = HTTPClient().use {
-                        it.getString(io.nekohasekai.sfa.Kelevra.adresSeti(profile.typed.remoteURL))
-                    }
+                    val content = io.nekohasekai.sfa.ZapasnoyPut.tekst(
+                        io.nekohasekai.sfa.Kelevra.adresSeti(profile.typed.remoteURL),
+                    )
                     Libbox.checkConfig(content)
                     val file = File(profile.typed.path)
                     if (file.readText() != content) {

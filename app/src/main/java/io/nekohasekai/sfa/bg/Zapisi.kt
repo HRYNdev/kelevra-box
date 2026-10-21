@@ -98,6 +98,7 @@ object Zapisi {
         imena: Map<String, Int>,
         tunnel: Int = 0,
         pryamoIp: Int = 0,
+        bezV6: Int = 0,
     ) {
         zapisat(
             "svodka",
@@ -112,6 +113,8 @@ object Zapisi {
                 "tunnel" to tunnel,
                 // Из otkazy: прямые соединения на голый адрес, без имени.
                 "pryamo_ip" to pryamoIp,
+                // НЕ входит в otkazy: «сеть недоступна» на IPv6-адрес, у сети нет v6-маршрута.
+                "bez_v6" to bezV6,
             ),
         )
     }
