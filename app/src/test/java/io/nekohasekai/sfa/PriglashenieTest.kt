@@ -89,11 +89,72 @@ class PriglashenieTest {
         otvety: Map<String, Otvet?>,
         znayut: Set<String> = emptySet(),
         oprosheno: MutableList<String> = mutableListOf(),
+        zaprosy: MutableList<String> = mutableListOf(),
     ): Itog = runBlocking {
         Priglashenie.vybratDver(
             dveri,
-            aktivaciya = { oprosheno += it; otvety[it] },
-            znaetKod = { it in znayut },
+            aktivaciya = { oprosheno += it; zaprosy += "POST $it"; otvety[it] },
+            znaetKod = { zaprosy += "GET $it"; it in znayut },
+        )
+    }
+
+    // Переехавший человек: старая дверь входа устройства не знает (404), но старый путь пересылает в новую
+    // сеть и «знает» код; вторая дверь (новая сеть) заводит устройство. Берётся ключ, старым путём не ходим.
+    @Test
+    fun vybor_pereehavshij_poluchaet_klyuch() {
+        val zaprosy = mutableListOf<String>()
+        val itog = vybor(
+            listOf("staraya", "novaya"),
+            mapOf("staraya" to Otvet.NetProtokola, "novaya" to Otvet.Ok("https://novaya/u/KLYUCH01", "01-3")),
+            znayut = setOf("staraya"),
+            zaprosy = zaprosy,
+        )
+        assertEquals(Itog.Novyj("novaya", "https://novaya/u/KLYUCH01"), itog)
+        assertEquals(listOf("POST staraya", "POST novaya"), zaprosy)
+    }
+
+    // Ни одна дверь устройство не завела: старый путь — только после входа устройства у всех дверей,
+    // по порядку, до первой знающей код.
+    @Test
+    fun vybor_staryj_put_tolko_posle_vseh_dverej() {
+        val zaprosy = mutableListOf<String>()
+        val itog = vybor(
+            listOf("a", "b", "c"),
+            mapOf("a" to Otvet.NetProtokola, "b" to null, "c" to Otvet.NetProtokola),
+            znayut = setOf("a", "c"),
+            zaprosy = zaprosy,
+        )
+        assertEquals(Itog.Staryj("a"), itog)
+        assertEquals(listOf("POST a", "POST b", "POST c", "GET a"), zaprosy)
+    }
+
+    // 200 без адреса https://…/u/<ключ> — не вход: дверь пропускается, адрес не сохраняется.
+    @Test
+    fun vybor_200_bez_klyucha_ne_vhod() {
+        val plohie = listOf(
+            "{}",
+            """{"profil":""}""",
+            """{"profil":"https://n.example/k/OBSHCHIYKOD1"}""",
+            """{"profil":"http://n.example/u/KLYUCH01"}""",
+            """{"profil":"ftp://n.example/u/KLYUCH01"}""",
+            """{"profil":"https://n.example/u/KL/../x"}""",
+            """{"profil":"https://n.example/u/KLYUCH01/info"}""",
+            """{"profil":"https://n.example/u/ab"}""",
+            """{"profil":"https://n.example/s/KLYUCH01"}""",
+        )
+        for (telo in plohie) {
+            val o = Priglashenie.razobratOtvet(200, telo)
+            assertEquals(telo, Otvet.Sboy, o)
+            assertEquals(telo, Itog.NetSvyazi, vybor(listOf("a"), mapOf("a" to o)))
+            assertEquals(
+                telo,
+                Itog.Novyj("b", "https://b.example/u/KLYUCH02"),
+                vybor(listOf("a", "b"), mapOf("a" to o, "b" to Otvet.Ok("https://b.example/u/KLYUCH02", null))),
+            )
+        }
+        assertEquals(
+            Otvet.Ok("https://n.example:8443/u/Kl_yu-ch01/", null),
+            Priglashenie.razobratOtvet(200, """{"profil":"https://n.example:8443/u/Kl_yu-ch01/"}"""),
         )
     }
 

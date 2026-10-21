@@ -63,6 +63,11 @@ object Priglashenie {
 
     fun dverGodna(dver: String): Boolean = DVER.matches(dver)
 
+    private val ADRES_KLYUCHA = Regex("^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:\\d{1,5})?/u/[A-Za-z0-9_-]{4,64}/?$")
+
+    /** Адрес устройства из ответа входа: ровно `https://<хост>/u/<ключ>`. */
+    fun adresKlyuchaGoden(profil: String): Boolean = ADRES_KLYUCHA.matches(profil)
+
     private fun ochistit(spisok: List<String>): List<String> =
         spisok.map { it.trim().lowercase() }.filter { dverGodna(it) }
 
@@ -95,8 +100,9 @@ object Priglashenie {
         200 -> {
             val j = runCatching { JSONObject(telo) }.getOrNull()
             val profil = j?.optString("profil")?.trim().orEmpty()
-            val razobrano = SubscriptionLink.parse(profil)
-            if (razobrano == null || razobrano.kind != 'u') {
+            // 200 без адреса https://<хост>/u/<ключ> (пусто, общий /k/, другая схема, лишние части пути) —
+            // сбой двери, а не вход: такой адрес не сохраняется.
+            if (!adresKlyuchaGoden(profil)) {
                 Otvet.Sboy
             } else {
                 Otvet.Ok(profil, j?.optString("slot")?.takeIf { it.isNotBlank() })
@@ -130,9 +136,18 @@ object Priglashenie {
     }
 
     /**
-     * Обходит двери по очереди. [aktivaciya] возвращает ответ двери либо null, если дверь не ответила;
-     * [znaetKod] проверяет `GET /k/<код>/info` на двери, ответившей 404/405.
-     * Успех и лимит завершают обход сразу; дверь, знающая код по старому пути, даёт старый путь.
+     * Вход в два прохода. [aktivaciya] возвращает ответ двери на `POST /k/<код>/ustroystvo` либо null,
+     * если дверь не ответила; [znaetKod] проверяет старый путь `GET /k/<код>/info`.
+     *
+     * Первый проход — вход устройства у всех дверей по порядку: адрес /u/<ключ> или лимит завершают
+     * обход сразу. Только если ни одна дверь устройство не завела, второй проход — старый путь у дверей,
+     * ответивших 404/405, в том же порядке.
+     *
+     * Почему не дверь за дверью. Старый сервер пересылает старый путь переехавшего человека в новую
+     * сеть, а вход устройства не пересылает (404). При обходе по одной двери первая же отдала бы
+     * переехавшему общий /k/<код>, и телефон жил бы мимо ключа устройства — без лимита устройств и
+     * отключения по одному. Человек старой системы новой дверью не узнан (404) и остаётся, где был.
+     *
      * 404 хотя бы от одной двери и ни одной знающей: код не найден; ответов нет вовсе: нет связи.
      */
     suspend fun vybratDver(
@@ -140,19 +155,19 @@ object Priglashenie {
         aktivaciya: suspend (String) -> Otvet?,
         znaetKod: suspend (String) -> Boolean,
     ): Itog {
-        var otvetili404 = false
+        val starymPutem = mutableListOf<String>()
         for (dver in dveri) {
             when (val o = aktivaciya(dver)) {
                 null, Otvet.Sboy -> {}
                 is Otvet.Ok -> return Itog.Novyj(dver, o.profil)
                 is Otvet.Limit -> return Itog.Limit(o.tekst)
-                Otvet.NetProtokola -> {
-                    if (znaetKod(dver)) return Itog.Staryj(dver)
-                    otvetili404 = true
-                }
+                Otvet.NetProtokola -> starymPutem += dver
             }
         }
-        return if (otvetili404) Itog.NeNajden else Itog.NetSvyazi
+        for (dver in starymPutem) {
+            if (znaetKod(dver)) return Itog.Staryj(dver)
+        }
+        return if (starymPutem.isNotEmpty()) Itog.NeNajden else Itog.NetSvyazi
     }
 
     // ---- устройство и профили ----
