@@ -18,6 +18,7 @@ import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -676,19 +677,91 @@ object LogUploadWork {
     }
 
     /**
+     * Чем кончилась одна попытка целиком. Нужна и работе (повторять или нет), и квитанции
+     * пульта (принял ли сервер журнал).
+     */
+    internal enum class ИтогПопытки {
+        /** Сервер ответил {"ok":true}: всё, что было, у него. */
+        Отправлено,
+
+        /** Новых строк нет: всё прежнее сервер уже принял раньше. */
+        Нечего,
+
+        /** Сервер отказал по содержимому; хвост ещё не безнадёжен — повторить. */
+        Отвергнуто,
+
+        /** Сервер отказал тот же хвост [STUCK_LIMIT] раз подряд — хвост выброшен, повторять незачем. */
+        Выброшено,
+
+        /** Пятисотый ответ: серверу сейчас плохо, хвост не судим — повторить. */
+        Сбой,
+
+        /** До сервера не доехали: нет сети, DNS, таймаут — повторить. */
+        НетСвязи,
+    }
+
+    /** Повторять ли работу: false — не получилось, имеет смысл повторить. */
+    internal fun razobrano(i: ИтогПопытки): Boolean =
+        i == ИтогПопытки.Отправлено || i == ИтогПопытки.Нечего || i == ИтогПопытки.Выброшено
+
+    /**
+     * Слово квитанции пульта для `prishli_zhurnal`/`diagnostika` — тот же смысл, что у Desktop:
+     * `ok` — журнал принят сервером (или новых строк нет, всё прежнее он уже принял);
+     * `oshibka-set` — до сервера не доехали (или не уложились в срок команды);
+     * `oshibka-otkaz` — сервер ответил, но не принял. При ошибке журнал всё равно уходит позже
+     * обычной очередью — квитанция говорит только про эту попытку.
+     */
+    internal fun slovoKvitancii(i: ИтогПопытки?): String = when (i) {
+        ИтогПопытки.Отправлено, ИтогПопытки.Нечего -> "ok"
+        ИтогПопытки.НетСвязи, null -> "oshibka-set"
+        ИтогПопытки.Отвергнуто, ИтогПопытки.Выброшено, ИтогПопытки.Сбой -> "oshibka-otkaz"
+    }
+
+    /** Сколько команда пульта ждёт приёма журнала — как у Desktop (3 мин на команду). */
+    internal const val SROK_KOMANDY_MS = 3 * 60_000L
+
+    private val fon = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Отправить журнал сейчас и дождаться ответа сервера — для квитанции пульта.
+     *
+     * Раньше команда отвечала `ok`, как только просьба вставала в очередь WorkManager: сервер
+     * считал журнал пришедшим, а он мог не уехать вовсе. Теперь попытка идёт сразу, и `ok`
+     * значит «сервер принял». Попытка живёт отдельно от ожидания: если не уложилась в
+     * [srokMs], она доезжает сама (отметки сдвинутся по факту), а квитанция — `oshibka-set`.
+     * Не принято — просьба встаёт в обычную очередь с повтором, как раньше.
+     */
+    suspend fun otpravitDlyaPulta(prichina: String, srokMs: Long = SROK_KOMANDY_MS): String {
+        val zadacha = fon.async {
+            runCatching { popytka() }
+                .onFailure { KLog.w(TAG, "журнал $prichina: попытка упала", it) }
+                .getOrDefault(ИтогПопытки.НетСвязи)
+        }
+        val itog = kotlinx.coroutines.withTimeoutOrNull(srokMs) { zadacha.await() }
+        if (itog == null) KLog.w(TAG, "журнал $prichina: сервер не ответил за ${srokMs / 1000} с")
+        if (itog == null || !razobrano(itog)) otpravitSeychas(prichina, srazu = true)
+        val slovo = slovoKvitancii(itog)
+        KLog.i(TAG, "журнал $prichina: ${itog ?: "не дождался"} → $slovo")
+        return slovo
+    }
+
+    /**
      * Одна попытка целиком. Возвращает:
-     *  - true  — отправлять было нечего или отправилось;
+     *  - true  — отправлять было нечего, отправилось или хвост выброшен как безнадёжный;
      *  - false — не получилось, имеет смысл повторить.
      */
-    internal suspend fun runOnce(): Boolean = withContext(Dispatchers.IO) {
-        // Замок: часовая работа, otpravitSeychas и povtorPozzhe не должны слать одну посылку разом.
-        // Вторая дожидается первой и, прочитав уже сдвинутые отметки, находит только новое.
+    internal suspend fun runOnce(): Boolean = razobrano(popytka())
+
+    internal suspend fun popytka(): ИтогПопытки = withContext(Dispatchers.IO) {
+        // Замок: часовая работа, otpravitSeychas, povtorPozzhe и команда пульта не должны слать
+        // одну посылку разом. Вторая дожидается первой и, прочитав уже сдвинутые отметки,
+        // находит только новое.
         zamokOtpravki.withLock { runOnceLocked() }
     }
 
     private val zamokOtpravki = kotlinx.coroutines.sync.Mutex()
 
-    private suspend fun runOnceLocked(): Boolean {
+    private suspend fun runOnceLocked(): ИтогПопытки {
         val marks = loadMarks()
         // Отчёты о падениях идут первыми: если посылка упрётся в потолок, обрежется
         // обычный журнал, а не разбор падения.
@@ -696,13 +769,13 @@ object LogUploadWork {
         val parts = collectReports(reportRoots, marks) + sbor.parts
         if (parts.isEmpty()) {
             KLog.i(TAG, "отправлять нечего: новых логов нет")
-            return true
+            return ИтогПопытки.Нечего
         }
 
         val (archive, taken) = buildArchive(parts)
         if (archive.isEmpty() || taken.isEmpty()) {
             KLog.i(TAG, "архив пустой, отправка отменена")
-            return true
+            return ИтогПопытки.Нечего
         }
 
         KLog.i(TAG, "отправляю логи: ${taken.size} шт., ${archive.size / 1024} КБ сжатыми")
@@ -712,12 +785,12 @@ object LogUploadWork {
         // о хвосте это не говорит ничего, судить его нельзя. Уходим как раньше, счётчик
         // безнадёжности не трогаем — иначе телефон без сети 7 часов (бэкофф 1ч+2ч+4ч при
         // неизменном хвосте) выбросил бы совершенно целые логи.
-        if (popytka.isFailure) return false
+        if (popytka.isFailure) return ИтогПопытки.НетСвязи
         val ishod = popytka.getOrDefault(ИсходОтправки.ВременныйСбой)
         // Пятисотый ответ значит «серверу сейчас плохо», а не «архив негодный»: он
         // приходит при нехватке места под журналы и при сбое записи. Уходим как при
         // отсутствии сети, счётчик безнадёжности не трогаем.
-        if (ishod == ИсходОтправки.ВременныйСбой) return false
+        if (ishod == ИсходОтправки.ВременныйСбой) return ИтогПопытки.Сбой
         if (ishod == ИсходОтправки.Отвергнуто) {
             // Сюда доходит только РЕАЛЬНЫЙ ответ сервера с отказом. Протокол не говорит,
             // отказ временный или архив навсегда битый (см. STUCK_LIMIT) — единственный
@@ -734,9 +807,9 @@ object LogUploadWork {
                 clearStuckState()
                 // true — не «отправлено», а «разобрано»: WorkManager не должен
                 // долбить в этот же битый хвост ещё сутки, блокируя новые логи.
-                return true
+                return ИтогПопытки.Выброшено
             }
-            return false
+            return ИтогПопытки.Отвергнуто
         }
         clearStuckState()
 
@@ -745,7 +818,7 @@ object LogUploadWork {
         saveMarks(marks)
         Settings.logUploadLastOk = System.currentTimeMillis()
         KLog.i(TAG, "логи отправлены")
-        return true
+        return ИтогПопытки.Отправлено
     }
 
     class UploadTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
