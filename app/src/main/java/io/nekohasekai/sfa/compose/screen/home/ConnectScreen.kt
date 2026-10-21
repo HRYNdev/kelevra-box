@@ -25,11 +25,13 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,12 +45,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Aktivatsiya
-import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.KodPole
-import io.nekohasekai.sfa.Priglashenie
-import io.nekohasekai.sfa.SubscriptionLink
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.base.GlobalEventBus
 import io.nekohasekai.sfa.compose.base.UiEvent
@@ -57,15 +55,6 @@ import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KDim
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
-import io.nekohasekai.sfa.database.Profile
-import io.nekohasekai.sfa.database.ProfileManager
-import io.nekohasekai.sfa.database.TypedProfile
-import io.nekohasekai.sfa.utils.HTTPClient
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.util.Date
 
 /**
  * Первый запуск: код -> предупреждение о системном вопросе -> готово.
@@ -82,43 +71,40 @@ fun ConnectScreen(
 ) {
     val colors = K
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val vhod = Vhod.vhod
+    val sostoyanie by vhod.sostoyanie.collectAsState()
+
+    // Вход живёт в [Vhod], а не здесь: уход с экрана его не обрывает. Экран отмечается,
+    // чтобы вход, завершённый без человека, применился при нём (см. [VhodPoKodu]).
+    DisposableEffect(Unit) {
+        vhod.ekranOtkryt()
+        onDispose { vhod.ekranZakryt() }
+    }
 
     var step by remember { mutableIntStateOf(1) }
-    // Код из приглашения kelevra://import?kod= подставляется один раз.
+    // Идущий вход показывает свой код; иначе код из приглашения kelevra://import?kod=
+    // подставляется один раз.
     var input by remember {
         mutableStateOf(
-            Aktivatsiya.ozhidayushchijKod?.also { Aktivatsiya.ozhidayushchijKod = null }
-                ?.let { KodPole.syroe(it) } ?: "",
+            (vhod.sostoyanie.value as? VhodPoKodu.Sostoyanie.Idet)?.vvod?.let { KodPole.syroe(it) }
+                ?: Aktivatsiya.ozhidayushchijKod?.also { Aktivatsiya.ozhidayushchijKod = null }
+                    ?.let { KodPole.syroe(it) } ?: "",
         )
     }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var limit by remember { mutableStateOf<String?>(null) }
+    val busy = sostoyanie is VhodPoKodu.Sostoyanie.Idet
+    val oshibka = (sostoyanie as? VhodPoKodu.Sostoyanie.Oshibka)?.prichina
+    val limit = (oshibka as? LimitUstroystv)?.tekst
+    // Текст ошибки считается один раз на ошибку: он спрашивает систему, есть ли сеть.
+    val error = remember(oshibka) { oshibka?.takeIf { it !is LimitUstroystv }?.let { humanError(it, context) } }
+
+    LaunchedEffect(sostoyanie) {
+        if (sostoyanie is VhodPoKodu.Sostoyanie.Gotovo && step == 1) step = 2
+    }
 
     fun connect() {
         if (input.isBlank() || busy) return
-        busy = true
-        error = null
-        scope.launch {
-            val result = runCatching {
-                withContext(Dispatchers.IO) { importByCode(input.trim()) }
-            }
-            busy = false
-            result.fold(
-                onSuccess = { step = 2 },
-                onFailure = {
-                    if (it is LimitUstroystv) {
-                        limit = it.tekst
-                        return@fold
-                    }
-                    // Адрес, который запрашивали, содержит код доступа целиком —
-                    // в лог он маскированным идёт, не как есть.
-                    io.nekohasekai.sfa.bg.KLog.w("KelevraConnect", "подключение по коду не удалось", Kelevra.maskThrowable(it))
-                    error = humanError(it, context)
-                },
-            )
-        }
+        // Второе нажатие во время входа не стартует новый: экран и так показывает идущий.
+        vhod.nachat(input.trim())
     }
 
     Column(
@@ -135,7 +121,7 @@ fun ConnectScreen(
             1 -> if (limit != null) {
                 StepLimit(
                     tekst = limit.orEmpty(),
-                    onAnother = { limit = null; input = ""; error = null },
+                    onAnother = { vhod.sbrositOshibku(); input = "" },
                     onBack = onBack,
                 )
             } else StepCode(
@@ -144,7 +130,7 @@ fun ConnectScreen(
                 error = error,
                 onInput = {
                     input = KodPole.syroe(it)
-                    error = null
+                    vhod.sbrositOshibku()
                 },
                 onPaste = { input = clipboardText(context)?.let { KodPole.vstavka(it) } ?: input },
                 onNext = { connect() },
@@ -154,6 +140,7 @@ fun ConnectScreen(
             2 -> StepPermission(
                 onNext = {
                     GlobalEventBus.tryEmit(UiEvent.RequestStartService)
+                    vhod.zabratGotovo()
                     step = 3
                 },
             )
@@ -440,90 +427,5 @@ private fun humanError(e: Throwable, context: Context): String {
             "Нет связи с сервером"
         "404" in text || "not found" in text -> "Код не найден"
         else -> "Подключение не выполнено"
-    }
-}
-
-class LimitUstroystv(val tekst: String) : Exception(tekst)
-
-class KodNeNajden : Exception("код не найден")
-
-/**
- * Вход по коду: ищет дверь, активирует устройство и делает профиль активным. Ссылка и QR идут
- * прежним путём. Повторный ввод обновляет уже существующий профиль, а не заводит второй.
- */
-private suspend fun importByCode(vvod: String) {
-    val varianty = Priglashenie.varianty(vvod)
-    if (varianty.isEmpty()) {
-        zagruzitProfil(Kelevra.normalizeSubscription(vvod), emptyList())
-        return
-    }
-    val (itog, kod) = Aktivatsiya.voyti(vvod)
-    when (itog) {
-        is Priglashenie.Itog.Novyj ->
-            zagruzitProfil(SubscriptionLink.baseUrl(itog.profil) ?: itog.profil, varianty)
-        is Priglashenie.Itog.Staryj ->
-            zagruzitProfil(SubscriptionLink.configUrl(kod, itog.dver), varianty)
-        is Priglashenie.Itog.Limit -> throw LimitUstroystv(itog.tekst)
-        Priglashenie.Itog.NeNajden -> throw KodNeNajden()
-        Priglashenie.Itog.NetSvyazi -> throw java.io.IOException("двери не ответили")
-    }
-}
-
-/** Скачивает настройки по адресу профиля; профиль этого кода уже есть: обновляется он. */
-private suspend fun zagruzitProfil(url: String, vvedennyeKody: List<String>) {
-    val content = HTTPClient().use { it.getString(Kelevra.adresSeti(url)) }
-    Libbox.checkConfig(content)
-
-    val imeyushijsya = ProfileManager.list().firstOrNull {
-        it.typed.type == TypedProfile.Type.Remote && Priglashenie.totZhe(url, it.typed.remoteURL, vvedennyeKody)
-    }
-    if (imeyushijsya != null && imeyushijsya.typed.path.isNotBlank()) {
-        File(imeyushijsya.typed.path).apply { parentFile?.mkdirs() }.writeText(content)
-        imeyushijsya.typed.remoteURL = url
-        imeyushijsya.typed.lastUpdated = Date()
-        ProfileManager.update(imeyushijsya)
-        io.nekohasekai.sfa.database.Settings.selectedProfile = imeyushijsya.id
-        io.nekohasekai.sfa.bg.UpdateProfileWork.reconfigureUpdater()
-        perezagruzitServis()
-        return
-    }
-
-    val typed =
-        TypedProfile().apply {
-            type = TypedProfile.Type.Remote
-            remoteURL = url
-            autoUpdate = true
-            autoUpdateInterval = 60
-            lastUpdated = Date()
-        }
-    // Имя отличает новый профиль от уже имеющихся: при втором профиле к нему добавляется сервер.
-    val imya = Priglashenie.imyaProfilya(
-        url,
-        ProfileManager.list().map { it.name },
-        java.text.SimpleDateFormat("dd.MM", java.util.Locale.ROOT).format(Date()),
-    )
-    val profile = Profile(name = imya, typed = typed).apply { userOrder = ProfileManager.nextOrder() }
-
-    val app = io.nekohasekai.sfa.Application.application
-    val dir = File(app.filesDir, "configs").also { it.mkdirs() }
-    val file = File(dir, "${ProfileManager.nextFileID()}.json")
-    typed.path = file.path
-    file.writeText(content)
-
-    ProfileManager.create(profile, andSelect = true)
-    io.nekohasekai.sfa.bg.UpdateProfileWork.reconfigureUpdater()
-    perezagruzitServis()
-}
-
-/**
- * Повторная активация выдаёт новый ключ устройства, старый умирает: запущенное ядро надо
- * пересобрать с новым профилем (как после UpdateProfileWork). Не запущено — команда молча не уйдёт.
- */
-private suspend fun perezagruzitServis() {
-    withContext(Dispatchers.IO) {
-        runCatching {
-            io.nekohasekai.sfa.bg.BoxService.markReloadByHuman()
-            Libbox.newStandaloneCommandClient().serviceReload()
-        }
     }
 }
