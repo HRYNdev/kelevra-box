@@ -131,7 +131,7 @@ object Kelevra {
                 chasti += "bat_iskl=" + if (iskl) "1" else "0"
             }
         }
-        chasti += "logcat=" + io.nekohasekai.sfa.bg.KLog.priznak()
+        chasti += "logcat=" + io.nekohasekai.sfa.bg.AppLog.priznakLogcat()
         runCatching { chasti += "set=" + tipSeti() }
         runCatching {
             val tm = Application.application.getSystemService(android.content.Context.TELEPHONY_SERVICE)

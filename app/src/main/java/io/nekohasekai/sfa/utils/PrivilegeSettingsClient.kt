@@ -2,7 +2,7 @@ package io.nekohasekai.sfa.utils
 
 import android.content.Context
 import android.os.RemoteException
-import android.util.Log
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.bg.PackageEntry
 import io.nekohasekai.sfa.bg.ParceledListSlice
 import io.nekohasekai.sfa.bg.RootClient
@@ -38,15 +38,15 @@ object PrivilegeSettingsClient {
                 reply.readException()
                 if (!ok) {
                     val error = RemoteException()
-                    Log.w(TAG, "Privilege settings sync failed: transaction not handled", error)
+                    KLog.w(TAG, "Privilege settings sync failed: transaction not handled", error)
                     return@withParcel error
                 }
                 return@withParcel null
             } catch (e: RemoteException) {
-                Log.w(TAG, "Privilege settings sync failed: remote exception", e)
+                KLog.w(TAG, "Privilege settings sync failed: remote exception", e)
                 return@withParcel e
             } catch (e: RuntimeException) {
-                Log.w(TAG, "Privilege settings sync failed: bad reply", e)
+                KLog.w(TAG, "Privilege settings sync failed: bad reply", e)
                 return@withParcel e
             }
         }
@@ -57,7 +57,7 @@ object PrivilegeSettingsClient {
         val path = service.exportDebugInfo(outputPath)
         ExportResult(path, null)
     } catch (e: Throwable) {
-        Log.e(TAG, "Export debug info failed", e)
+        KLog.e(TAG, "Export debug info failed", e)
         ExportResult(null, e.message ?: "export failed")
     }
 

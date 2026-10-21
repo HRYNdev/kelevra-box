@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.compose.screen.tools
 
-import android.util.Log
 import androidx.lifecycle.viewModelScope
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient

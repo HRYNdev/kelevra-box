@@ -2,88 +2,103 @@ package io.nekohasekai.sfa.bg
 
 import android.os.Process
 import android.util.Log
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.system.exitProcess
 
 /**
- * Запись журнала, которая доходит до файла и там, где прошивка режет logcat.
+ * Запись журнала, которая доходит до файла на любом телефоне, что бы прошивка ни делала
+ * с logcat.
  *
- * Повод. Свой журнал ([AppLog]) собирается из logcat процесса. 20.10.2026 в журнале
- * телефона Honor были только строки уровня E: прошивка выбрасывает из logcat всё, что
- * ниже ошибки, и решения автомата, старты сервиса, пробы до файла не доезжали вовсе.
+ * Повод. Свой журнал ([AppLog]) собирался из logcat процесса. 20.10.2026 у Honor в файле
+ * были только строки уровня E (прошивка режет всё ниже ошибки), а у Huawei чтение logcat
+ * каждые несколько минут «прерывалось» и не приносило ничего: восемь дней журнала из одних
+ * строк «чтение logcat прервалось». В #52 KLog дописывал в файл сам только те уровни,
+ * которые самопроверка на старте сочла режущимися, — но logcat, живой на старте, умирал
+ * позже, а опоздавший маркер снимал прямую запись обратно, и журнал снова слеп.
  *
- * Как устроено. Каждый вызов пишет в [android.util.Log] как раньше, а строку тех
- * уровней, которые logcat до нас не доносит, кладёт в файл журнала ещё и напрямую —
- * тем же форматом `threadtime`, так что разбор на сервере разницы не видит. Какие уровни
- * режутся, узнаёт самопроверка [AppLog]: на старте записи она пишет по маркеру каждого
- * уровня и смотрит, какие вернулись из logcat. Пока самопроверка не кончилась, строки
- * ждут в памяти ([OZHIDANIE_MAX]) и потом либо дописываются (уровень режется), либо
- * выбрасываются (logcat их и так донёс) — живой logcat поэтому дублей не даёт.
+ * Как устроено теперь. Каждый вызов пишет строку в файл журнала НАПРЯМУЮ, всегда и на всех
+ * уровнях, тем же форматом `threadtime`, — от logcat запись больше не зависит вовсе.
+ * В [android.util.Log] строка уходит тоже, как раньше: её видно по adb при отладке.
+ * Чтобы живой logcat не давал дублей, KLog запоминает свои теги ([tegi]), и чтение logcat
+ * в [AppLog] выбрасывает строки своего процесса с этими тегами: они уже в файле. Всё
+ * остальное, что logcat приносит из процесса (чужие библиотеки, падения AndroidRuntime,
+ * WebView), по-прежнему пишется из logcat — там, где он жив.
  */
 object KLog {
-    /** Сколько строк держим до решения самопроверки. Старше — вытесняются. */
-    private const val OZHIDANIE_MAX = 2000
-
-    /** Уровни, которые проверяет самопроверка. V идёт вслед за D: отдельно её не мерим. */
-    internal val PROVERYAEMYE = listOf('D', 'I', 'W', 'E')
-
-    private val lock = Any()
-
-    /** Уровни, которые logcat режет; null — самопроверка ещё не решила. */
-    @Volatile
-    private var rezhet: Set<Char>? = null
-
-    private val ozhidanie = ArrayDeque<Pair<Char, String>>()
+    /** Тег записи о необработанном исключении процесса. */
+    const val TEG_PADENIE = "KelevraPadenie"
 
     private val stampFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
-    /**
-     * Для паспорта устройства: «ok» — logcat доносит всё, «rezhet_DIW» — какие уровни
-     * пишем сами, «?» — самопроверка ещё не кончилась или не запускалась.
-     */
-    fun priznak(): String = opisanie(rezhet)
+    private val tegiMap = ConcurrentHashMap<String, Boolean>()
 
-    internal fun opisanie(cut: Set<Char>?): String = when {
-        cut == null -> "?"
-        cut.isEmpty() -> "ok"
-        else -> "rezhet_" + cut.filter { it in PROVERYAEMYE }.sorted().joinToString("")
+    /**
+     * Теги, которыми KLog хоть раз писал. Строка с таким тегом из logcat своего процесса —
+     * дубль уже записанной напрямую. Тег попадает сюда ДО записи в logcat, поэтому чтение
+     * logcat не может увидеть строку раньше, чем узнает её тег.
+     */
+    val tegi: Set<String> get() = tegiMap.keys
+
+    @JvmStatic
+    @JvmOverloads
+    fun v(tag: String, msg: String, tr: Throwable? = null): Int = zapisat('V', tag, msg, tr)
+
+    @JvmStatic
+    @JvmOverloads
+    fun d(tag: String, msg: String, tr: Throwable? = null): Int = zapisat('D', tag, msg, tr)
+
+    @JvmStatic
+    @JvmOverloads
+    fun i(tag: String, msg: String, tr: Throwable? = null): Int = zapisat('I', tag, msg, tr)
+
+    @JvmStatic
+    @JvmOverloads
+    fun w(tag: String, msg: String, tr: Throwable? = null): Int = zapisat('W', tag, msg, tr)
+
+    @JvmStatic
+    @JvmOverloads
+    fun e(tag: String, msg: String, tr: Throwable? = null): Int = zapisat('E', tag, msg, tr)
+
+    private fun zapisat(level: Char, tag: String, msg: String, tr: Throwable?): Int {
+        tegiMap.putIfAbsent(tag, true)
+        // В logcat — для adb. Сбой здесь (юнит-тест без android.jar, экзотика) не должен
+        // стоить строки в файле.
+        val rc = runCatching {
+            if (tr == null) Log.println(prioritet(level), tag, msg) else logcat(level, tag, msg, tr)
+        }.getOrDefault(0)
+        pryamo(level, tag, msg, tr, polnyStek = false)
+        return rc
     }
 
-    fun v(tag: String, msg: String, tr: Throwable? = null): Int =
-        (if (tr == null) Log.v(tag, msg) else Log.v(tag, msg, tr)).also { pryamo('V', tag, msg, tr) }
+    private fun logcat(level: Char, tag: String, msg: String, tr: Throwable): Int = when (level) {
+        'V' -> Log.v(tag, msg, tr)
+        'D' -> Log.d(tag, msg, tr)
+        'I' -> Log.i(tag, msg, tr)
+        'W' -> Log.w(tag, msg, tr)
+        else -> Log.e(tag, msg, tr)
+    }
 
-    fun d(tag: String, msg: String, tr: Throwable? = null): Int =
-        (if (tr == null) Log.d(tag, msg) else Log.d(tag, msg, tr)).also { pryamo('D', tag, msg, tr) }
+    private fun prioritet(level: Char): Int = when (level) {
+        'V' -> Log.VERBOSE
+        'D' -> Log.DEBUG
+        'I' -> Log.INFO
+        'W' -> Log.WARN
+        else -> Log.ERROR
+    }
 
-    fun i(tag: String, msg: String, tr: Throwable? = null): Int =
-        (if (tr == null) Log.i(tag, msg) else Log.i(tag, msg, tr)).also { pryamo('I', tag, msg, tr) }
-
-    fun w(tag: String, msg: String, tr: Throwable? = null): Int =
-        (if (tr == null) Log.w(tag, msg) else Log.w(tag, msg, tr)).also { pryamo('W', tag, msg, tr) }
-
-    fun e(tag: String, msg: String, tr: Throwable? = null): Int =
-        (if (tr == null) Log.e(tag, msg) else Log.e(tag, msg, tr)).also { pryamo('E', tag, msg, tr) }
-
-    private fun pryamo(level: Char, tag: String, msg: String, tr: Throwable?) {
-        val cut = rezhet
-        // Logcat доносит этот уровень — второй раз писать нечего.
-        if (cut != null && level !in cut) return
+    private fun pryamo(level: Char, tag: String, msg: String, tr: Throwable?, polnyStek: Boolean) {
+        // Шумные теги из logcat в файл не возили никогда — и напрямую не возим.
+        if (AppLog.shumnyTeg(tag)) return
         val text = runCatching {
-            stroka(synchronized(stampFormat) { stampFormat.format(Date()) }, Process.myPid(), Process.myTid(), level, tag, msg, tr)
+            val pid = runCatching { Process.myPid() }.getOrDefault(0)
+            val tid = runCatching { Process.myTid() }.getOrDefault(0)
+            stroka(synchronized(stampFormat) { stampFormat.format(Date()) }, pid, tid, level, tag, msg, tr, polnyStek)
         }.getOrNull() ?: return
-        if (cut == null) {
-            synchronized(lock) {
-                // Решение могло прийти, пока собирали строку.
-                val now = rezhet
-                if (now == null) {
-                    if (ozhidanie.size >= OZHIDANIE_MAX) ozhidanie.removeFirst()
-                    ozhidanie.addLast(level to text)
-                    return
-                }
-                if (level !in now) return
-            }
-        }
         AppLog.pryamo(text)
     }
 
@@ -92,46 +107,81 @@ object KLog {
      *
      * Многострочное сообщение logcat режет на строки с тем же началом — так же и здесь,
      * иначе продолжение без метки разбор приклеил бы к чужой записи. Из исключения берём
-     * одну строку (класс и текст): стек в журнале и так отсекается ([AppLog.shumnaya]).
+     * класс с текстом и цепочку причин («Caused by: …»), без строк стека — их журнал не
+     * возил и из logcat ([AppLog.shumnaya]). Целиком стек пишется только для падения
+     * процесса ([polnyStek]).
      */
-    internal fun stroka(stamp: String, pid: Int, tid: Int, level: Char, tag: String, msg: String, tr: Throwable?): String {
+    internal fun stroka(
+        stamp: String,
+        pid: Int,
+        tid: Int,
+        level: Char,
+        tag: String,
+        msg: String,
+        tr: Throwable?,
+        polnyStek: Boolean = false,
+    ): String {
         val prefix = "$stamp ${pid.toString().padStart(5)} ${tid.toString().padStart(5)} $level $tag: "
         val lines = msg.split('\n').toMutableList()
-        if (tr != null) lines += tr.toString()
+        if (tr != null) {
+            if (polnyStek) {
+                lines += stek(tr).trimEnd().split('\n')
+            } else {
+                lines += tr.toString()
+                var cause = tr.cause
+                var depth = 0
+                while (cause != null && cause !== tr && depth < 8) {
+                    lines += "Caused by: $cause"
+                    cause = cause.cause
+                    depth++
+                }
+            }
+        }
         return lines.joinToString("") { prefix + it.trimEnd('\r') + "\n" }
     }
 
+    private fun stek(tr: Throwable): String {
+        val writer = StringWriter()
+        PrintWriter(writer).use { tr.printStackTrace(it) }
+        return writer.toString()
+    }
+
     /**
-     * Самопроверка решила: [cut] — уровни, которые не вернулись из logcat. Ждавшие строки
-     * этих уровней уходят в файл, остальные выбрасываются.
+     * Запись падения: заголовок и стек целиком, сразу на диск. Отдельно от [ustanovitLovushku],
+     * чтобы проверялось тестом без подмены обработчика процесса.
      */
-    internal fun reshit(cut: Set<Char>) {
-        val flush = synchronized(lock) {
-            rezhet = cut
-            val keep = ozhidanie.filter { it.first in cut }.map { it.second }
-            ozhidanie.clear()
-            keep
+    internal fun padenie(thread: Thread, tr: Throwable) {
+        val msg = "FATAL EXCEPTION: поток ${thread.name}, процесс завершается"
+        tegiMap.putIfAbsent(TEG_PADENIE, true)
+        runCatching { Log.e(TEG_PADENIE, msg, tr) }
+        pryamo('E', TEG_PADENIE, msg, tr, polnyStek = true)
+        AppLog.sbrosit()
+    }
+
+    @Volatile
+    private var lovushka = false
+
+    /**
+     * Ловушка необработанного исключения процесса: стек целиком — в файл журнала напрямую
+     * (logcat может быть мёртв, а системная запись AndroidRuntime идёт только туда), и уже
+     * потом — прежний обработчик (сборщик крашей, системное «приложение остановлено»).
+     * Повторный вызов ничего не делает.
+     */
+    @Synchronized
+    fun ustanovitLovushku() {
+        if (lovushka) return
+        lovushka = true
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching { padenie(thread, throwable) }
+            if (previous != null) {
+                previous.uncaughtException(thread, throwable)
+            } else {
+                // Так же поступает системный обработчик: без этого упавший главный поток
+                // оставил бы процесс висеть.
+                runCatching { Process.killProcess(Process.myPid()) }
+                exitProcess(10)
+            }
         }
-        flush.forEach { AppLog.pryamo(it) }
-    }
-
-    /**
-     * Маркер уровня вернулся из logcat уже после решения (медленный телефон, logcat
-     * поднимался долго) — значит уровень не режется, писать его самим больше не надо.
-     * @return true, если признак изменился.
-     */
-    internal fun vernulsya(level: Char): Boolean = synchronized(lock) {
-        val cut = rezhet ?: return false
-        if (level !in cut) return false
-        val now = cut - level - (if (level == 'D') setOf('V') else emptySet())
-        rezhet = now
-        true
-    }
-
-    /** Что режется по итогам самопроверки: всё проверенное, чего не видели, и V вслед за D. */
-    internal fun rezhetsyaPo(uvideli: Set<Char>): Set<Char> {
-        val cut = PROVERYAEMYE.filter { it !in uvideli }.toMutableSet()
-        if ('D' in cut) cut += 'V'
-        return cut
     }
 }

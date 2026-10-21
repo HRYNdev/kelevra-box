@@ -3,7 +3,6 @@ package io.nekohasekai.sfa.compose.screen.qrscan
 import android.app.Application
 import android.net.Uri
 import android.util.Base64
-import android.util.Log
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -15,6 +14,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.qrs.QRSDecoder
 import io.nekohasekai.sfa.qrs.readIntLE
 import io.nekohasekai.sfa.vendor.Vendor
@@ -108,9 +108,11 @@ class QRScanViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun handleScanSuccess(rawValue: String) {
-        Log.d(TAG, "Scanned: ${rawValue.take(100)}...")
+        // Содержимое QR в журнал не пишем: там бывает приглашение с кодом человека или ключ
+        // подключения, а журнал уезжает на сервер. Для разбора хватает длины и схемы.
+        KLog.d(TAG, "Scanned: ${rawValue.length} симв., схема «${rawValue.substringBefore("://", "нет").take(12)}»")
         val qrsPayload = extractQRSPayload(rawValue)
-        Log.d(TAG, "extractQRSPayload result: ${qrsPayload?.size ?: "null"}")
+        KLog.d(TAG, "extractQRSPayload result: ${qrsPayload?.size ?: "null"}")
         if (qrsPayload != null) {
             handleQRSFrame(qrsPayload)
         } else {
@@ -267,53 +269,53 @@ class QRScanViewModel(application: Application) : AndroidViewModel(application) 
         val decoded = try {
             Base64.decode(base64Data, Base64.DEFAULT)
         } catch (e: Exception) {
-            Log.d(TAG, "Base64 decode failed: ${e.message}")
+            KLog.d(TAG, "Base64 decode failed: ${e.message}")
             return null
         }
 
-        Log.d(TAG, "Decoded size: ${decoded.size}")
+        KLog.d(TAG, "Decoded size: ${decoded.size}")
         if (decoded.size < 20) {
-            Log.d(TAG, "Too small: ${decoded.size} < 20")
+            KLog.d(TAG, "Too small: ${decoded.size} < 20")
             return null
         }
 
         val degree = decoded.readIntLE(0)
-        Log.d(TAG, "degree: $degree")
+        KLog.d(TAG, "degree: $degree")
         if (degree <= 0 || degree > 1000) {
-            Log.d(TAG, "Invalid degree: $degree")
+            KLog.d(TAG, "Invalid degree: $degree")
             return null
         }
 
         val headerSize = 4 + 4 * degree + 12
         if (decoded.size < headerSize) {
-            Log.d(TAG, "Too small for header: ${decoded.size} < $headerSize")
+            KLog.d(TAG, "Too small for header: ${decoded.size} < $headerSize")
             return null
         }
 
         val k = decoded.readIntLE(4 + 4 * degree)
-        Log.d(TAG, "k: $k")
+        KLog.d(TAG, "k: $k")
         if (k <= 0 || k > 100000) {
-            Log.d(TAG, "Invalid k: $k")
+            KLog.d(TAG, "Invalid k: $k")
             return null
         }
 
-        Log.d(TAG, "Valid QRS block detected!")
+        KLog.d(TAG, "Valid QRS block detected!")
         return decoded
     }
 
     private fun handleQRSFrame(payload: ByteArray) = synchronized(qrsLock) {
-        Log.d(TAG, "Processing QRS frame")
+        KLog.d(TAG, "Processing QRS frame")
         if (qrsDecoder == null) {
             qrsDecoder = QRSDecoder()
             _uiState.update { it.copy(qrsMode = true) }
             (imageAnalyzer as? ZxingQRCodeAnalyzer)?.qrsMode = true
-            Log.d(TAG, "Created new QRSDecoder, entered QRS mode")
+            KLog.d(TAG, "Created new QRSDecoder, entered QRS mode")
         }
 
         val progress = qrsDecoder!!.processFrame(payload)
-        Log.d(TAG, "processFrame result: $progress")
+        KLog.d(TAG, "processFrame result: $progress")
         if (progress == null) {
-            Log.d(TAG, "processFrame returned null!")
+            KLog.d(TAG, "processFrame returned null!")
             return@synchronized
         }
 
@@ -323,11 +325,11 @@ class QRScanViewModel(application: Application) : AndroidViewModel(application) 
 
         if (progress.isComplete) {
             if (progress.error != null) {
-                Log.e(TAG, "QRS complete with error: ${progress.error}, retrying...")
+                KLog.e(TAG, "QRS complete with error: ${progress.error}, retrying...")
                 resetQRSState()
             } else if (progress.data != null) {
                 imageAnalysis?.clearAnalyzer()
-                Log.d(TAG, "QRS complete! Data size: ${progress.data.size}")
+                KLog.d(TAG, "QRS complete! Data size: ${progress.data.size}")
                 importQRSProfile(progress.data)
             }
         }
@@ -365,10 +367,10 @@ class QRScanViewModel(application: Application) : AndroidViewModel(application) 
             val actualData = try {
                 parseQRSFileFormat(data)
             } catch (e: Exception) {
-                Log.d(TAG, "Not official QRS format, using raw data")
+                KLog.d(TAG, "Not official QRS format, using raw data")
                 data
             }
-            Log.d(TAG, "Decoding profile content, size: ${actualData.size}")
+            KLog.d(TAG, "Decoding profile content, size: ${actualData.size}")
             Libbox.decodeProfileContent(actualData)
             _uiState.update { it.copy(result = QRScanResult.QRSData(actualData)) }
         } catch (e: Exception) {

@@ -8,7 +8,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.text.format.Formatter
-import android.util.Log
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -97,6 +96,7 @@ import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.compose.base.UiEvent
 import io.nekohasekai.sfa.compose.base.rememberApplyServiceChangeNotifier
 import io.nekohasekai.sfa.compose.component.UpdateAvailableDialog
@@ -430,7 +430,7 @@ fun AppSettingsScreen(
                         }
                         showDownloadDialog = false
                     } catch (e: Exception) {
-                        Log.e("AppSettingsScreen", "Error downloading update", e)
+                        KLog.e("AppSettingsScreen", "Error downloading update", e)
                         downloadError = humanUpdateError(e, context, R.string.update_download_failed)
                     }
                 }
@@ -1323,7 +1323,7 @@ fun AppSettingsScreen(
                                         UpdateState.setUpdate(null)
                                         showErrorDialog = context.getString(R.string.update_track_not_supported)
                                     } catch (e: Exception) {
-                                        Log.e("AppSettingsScreen", "checkUpdateAsync failed", e)
+                                        KLog.e("AppSettingsScreen", "checkUpdateAsync failed", e)
                                         UpdateState.setUpdate(null)
                                         showErrorDialog = humanUpdateError(e, context)
                                     }

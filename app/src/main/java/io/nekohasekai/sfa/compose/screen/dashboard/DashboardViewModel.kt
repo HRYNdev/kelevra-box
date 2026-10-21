@@ -7,6 +7,7 @@ import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.sfa.bg.AutoModeExits
 import io.nekohasekai.sfa.bg.AutoModeSticky
 import io.nekohasekai.sfa.bg.BoxService
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.bg.WbChatParams
 import io.nekohasekai.sfa.compose.base.BaseViewModel
@@ -19,7 +20,6 @@ import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.database.TypedProfile
 import io.nekohasekai.sfa.utils.AppLifecycleObserver
 import io.nekohasekai.sfa.utils.CommandClient
-import android.util.Log
 import io.nekohasekai.sfa.utils.CommandTarget
 import io.nekohasekai.sfa.utils.HTTPClient
 import io.nekohasekai.sfa.utils.RemoteControlManager
@@ -483,7 +483,7 @@ class DashboardViewModel :
             } catch (e: Exception) {
                 // Адрес подписки несёт код доступа целиком — в журнал он идёт
                 // замаскированным, а человеку вместо стектрейса — русский текст.
-                Log.w("DashboardViewModel", "update profile", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
+                KLog.w("DashboardViewModel", "update profile", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
                 val humanError = humanProfileError(e)
                 sendErrorMessage(humanError)
                 // Clear updating state on error
@@ -796,7 +796,7 @@ class DashboardViewModel :
                 // Выбор сделан руками — залипшего выбора автомата тут больше нет.
                 AutoModeSticky.forget()
             } catch (e: Exception) {
-                Log.w("DashboardViewModel", "select outbound: ${e.message}")
+                KLog.w("DashboardViewModel", "select outbound: ${e.message}")
             }
         }
     }

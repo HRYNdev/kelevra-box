@@ -114,7 +114,7 @@ fun ConnectScreen(
                     }
                     // Адрес, который запрашивали, содержит код доступа целиком —
                     // в лог он маскированным идёт, не как есть.
-                    android.util.Log.w("KelevraConnect", "подключение по коду не удалось", Kelevra.maskThrowable(it))
+                    io.nekohasekai.sfa.bg.KLog.w("KelevraConnect", "подключение по коду не удалось", Kelevra.maskThrowable(it))
                     error = humanError(it, context)
                 },
             )

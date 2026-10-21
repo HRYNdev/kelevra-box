@@ -1,21 +1,41 @@
 package io.nekohasekai.sfa.bg
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.nio.file.Files
 
 /**
- * Свой журнал мимо logcat (прошивка Honor режет всё ниже E) и пояс в шапке файла.
+ * Свой журнал мимо logcat (Huawei режет logcat приложения в ноль, Honor — до E) и пояс
+ * в шапке файла.
  *
  * Разбор на сервере (netmon `razbor_zhurnalov.py`) берёт тег регулярным выражением
  * `RX_TEG` и время — `СТАМП`; строка, записанная напрямую, обязана читаться им так же,
  * как строка из logcat.
+ *
+ * В юнит-тестах android.util.Log и Process — заглушки, которые бросают: KLog обязан
+ * писать в файл и тогда (на телефоне это тот же случай — logcat недоступен).
  */
 class KLogTest {
     /** Тот же образец, что у разборщика netmon. */
     private val rxTeg = Regex("""^\d\d-\d\d \d\d:\d\d:\d\d\.\d+\s+\d+\s+\d+\s+[VDIWEF]\s+([A-Za-z0-9_.\-]+):\s""")
+
+    private val zhurnaly = mutableListOf<File>()
+
+    private fun novyZhurnal(): LogRotator {
+        val dir = Files.createTempDirectory("kelevra-klog").toFile()
+        zhurnaly += dir
+        return LogRotator(dir, "kelevra-app.log", maxFileBytes = 1024 * 1024, maxFiles = 2)
+    }
+
+    @After
+    fun ubrat() {
+        AppLog.otklyuchit()
+        zhurnaly.forEach { it.deleteRecursively() }
+    }
 
     @Test
     fun `прямая строка читается разбором как строка logcat`() {
@@ -36,26 +56,71 @@ class KLogTest {
     }
 
     @Test
-    fun `режется то, чей маркер не вернулся, и V вслед за D`() {
-        assertEquals(setOf('D', 'I', 'W', 'V'), KLog.rezhetsyaPo(setOf('E')))
-        assertEquals(emptySet<Char>(), KLog.rezhetsyaPo(setOf('D', 'I', 'W', 'E')))
-        assertEquals(setOf('D', 'I', 'W', 'E', 'V'), KLog.rezhetsyaPo(emptySet()))
+    fun `цепочка причин исключения — без строк стека`() {
+        val tr = RuntimeException("сверху", java.io.IOException("снизу"))
+        val lines = KLog.stroka("10-20 13:12:12.280", 1, 2, 'E', "BoxService", "сорвалось", tr).trimEnd('\n').split('\n')
+        assertEquals(3, lines.size)
+        assertTrue(lines[2].endsWith("Caused by: java.io.IOException: снизу"))
+        assertTrue(lines.none { it.contains("\tat ") })
     }
 
     @Test
-    fun `признак для паспорта`() {
-        assertEquals("?", KLog.opisanie(null))
-        assertEquals("ok", KLog.opisanie(emptySet()))
-        assertEquals("rezhet_DIW", KLog.opisanie(setOf('W', 'V', 'D', 'I')))
+    fun `KLog пишет в файл напрямую всегда и на всех уровнях`() {
+        val journal = novyZhurnal()
+        AppLog.podklyuchit(journal)
+        KLog.v("KLogTestV", "уровень v")
+        KLog.d("KLogTestD", "уровень d")
+        KLog.i("KLogTestI", "уровень i")
+        KLog.w("KLogTestW", "уровень w", IllegalStateException("беда"))
+        KLog.e("KLogTestE", "уровень e")
+        val lines = journal.head.readLines()
+        for ((level, tag) in listOf('V' to "KLogTestV", 'D' to "KLogTestD", 'I' to "KLogTestI", 'W' to "KLogTestW", 'E' to "KLogTestE")) {
+            val line = lines.single { it.contains(" $level $tag: уровень ") }
+            assertEquals(tag, rxTeg.find(line)?.groupValues?.get(1))
+        }
+        assertTrue(lines.any { it.endsWith("KLogTestW: java.lang.IllegalStateException: беда") })
+        // Теги запомнены — чтение logcat такие строки своего процесса отбросит.
+        assertTrue(KLog.tegi.containsAll(listOf("KLogTestV", "KLogTestD", "KLogTestI", "KLogTestW", "KLogTestE")))
     }
 
     @Test
-    fun `опоздавший маркер снимает уровень с прямой записи`() {
-        KLog.reshit(setOf('D', 'I', 'W', 'V'))
-        assertTrue(KLog.vernulsya('I'))
-        assertFalse(KLog.vernulsya('I'))
-        assertEquals("rezhet_DW", KLog.priznak())
-        KLog.reshit(emptySet())
+    fun `строки до открытия файла ждут и дописываются при открытии`() {
+        AppLog.otklyuchit()
+        KLog.i("KLogTestRano", "до открытия журнала")
+        val journal = novyZhurnal()
+        AppLog.podklyuchit(journal)
+        KLog.i("KLogTestRano", "после открытия")
+        val lines = journal.head.readLines()
+        val rano = lines.indexOfFirst { it.endsWith("KLogTestRano: до открытия журнала") }
+        val pozzhe = lines.indexOfFirst { it.endsWith("KLogTestRano: после открытия") }
+        assertTrue(rano >= 0)
+        assertTrue(pozzhe > rano)
+    }
+
+    @Test
+    fun `шумный тег напрямую не пишется`() {
+        val journal = novyZhurnal()
+        AppLog.podklyuchit(journal)
+        KLog.w("PrivilegeSettingsClient", "шум")
+        KLog.i("KLogTestTiho", "дело")
+        val text = journal.head.readText()
+        assertFalse(text.contains("PrivilegeSettingsClient"))
+        assertTrue(text.contains("KLogTestTiho: дело"))
+    }
+
+    @Test
+    fun `падение — стек целиком в файле`() {
+        val journal = novyZhurnal()
+        AppLog.podklyuchit(journal)
+        KLog.padenie(Thread.currentThread(), RuntimeException("наверху", IllegalStateException("причина")))
+        val lines = journal.head.readLines().filter { it.contains(" E ${KLog.TEG_PADENIE}: ") }
+        assertTrue(lines.first().contains("FATAL EXCEPTION: поток "))
+        assertTrue(lines.any { it.endsWith("java.lang.RuntimeException: наверху") })
+        assertTrue(lines.any { it.contains("\tat io.nekohasekai.sfa.bg.KLogTest") })
+        assertTrue(lines.any { it.contains("Caused by: java.lang.IllegalStateException: причина") })
+        // Каждая строка стека — со своим началом: разбор не приклеит её к чужой записи.
+        assertTrue(lines.size > 4)
+        assertTrue(lines.all { rxTeg.containsMatchIn(it) })
     }
 
     @Test

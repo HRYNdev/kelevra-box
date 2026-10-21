@@ -9,13 +9,13 @@ import android.content.IntentFilter
 import android.net.ConnectivityManager
 import android.net.wifi.WifiManager
 import android.os.PowerManager
-import android.util.Log
 import androidx.core.content.getSystemService
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.sfa.bg.AppChangeReceiver
 import io.nekohasekai.sfa.bg.AppLog
 import io.nekohasekai.sfa.bg.CrashReportManager
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.bg.LogUploadWork
 import io.nekohasekai.sfa.bg.OOMReportManager
 import io.nekohasekai.sfa.bg.UpdateProfileWork
@@ -63,6 +63,10 @@ class Application : Application() {
         // ровно старт процесса и интересен, когда разбираешь «оно само включилось».
         // Ни разрешений, ни Room это не трогает — можно и до разблокировки телефона.
         runCatching { AppLog.start(this) }
+        // Падение процесса — стеком целиком в свой журнал напрямую: системная запись
+        // AndroidRuntime идёт только в logcat, а его прошивки Huawei/Honor режут.
+        // Ставится поверх сборщика крашей и зовёт его следом.
+        KLog.ustanovitLovushku()
 
         AppLifecycleObserver.register(this)
 
@@ -70,7 +74,7 @@ class Application : Application() {
         runCatching {
             Libbox.setLocale(Locale.getDefault().toLanguageTag())
         }.onFailure {
-            Log.d("Application", "set locale: ${it.message}")
+            KLog.d("Application", "set locale: ${it.message}")
         }
 
         // Не трогает Room — только IPC до системного биндера, до CE-хранилища

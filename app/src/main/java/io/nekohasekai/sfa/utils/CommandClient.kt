@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.utils
 
-import android.util.Log
 import io.nekohasekai.libbox.CommandClientHandler
 import io.nekohasekai.libbox.CommandClientOptions
 import io.nekohasekai.libbox.ConnectionEvents
@@ -12,6 +11,7 @@ import io.nekohasekai.libbox.OutboundGroupItemIterator
 import io.nekohasekai.libbox.OutboundGroupIterator
 import io.nekohasekai.libbox.StatusMessage
 import io.nekohasekai.libbox.StringIterator
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.ktx.toList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -158,7 +158,7 @@ open class CommandClient(
                     }
                 newClient.connect()
             } catch (e: Exception) {
-                Log.d("CommandClient", "connect failed", e)
+                KLog.d("CommandClient", "connect failed", e)
                 if (isActiveEpoch(epoch)) {
                     handler.onConnectionError(
                         ConnectionErrorKind.ConnectFailed,
@@ -210,7 +210,7 @@ open class CommandClient(
         override fun connected() {
             if (!isActiveEpoch(epoch)) return
             getAllHandlers().forEach { it.onConnected() }
-            Log.d("CommandClient", "connected")
+            KLog.d("CommandClient", "connected")
         }
 
         override fun disconnected(message: String?) {
@@ -219,7 +219,7 @@ open class CommandClient(
             if (message != null) {
                 handler.onConnectionError(ConnectionErrorKind.ConnectionLost, message)
             }
-            Log.d("CommandClient", "disconnected: $message")
+            KLog.d("CommandClient", "disconnected: $message")
         }
 
         override fun writeGroups(message: OutboundGroupIterator?) {

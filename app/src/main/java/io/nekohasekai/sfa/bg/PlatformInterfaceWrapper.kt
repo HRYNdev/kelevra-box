@@ -7,7 +7,6 @@ import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.provider.Settings
 import android.system.OsConstants
-import android.util.Log
 import androidx.annotation.RequiresApi
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession

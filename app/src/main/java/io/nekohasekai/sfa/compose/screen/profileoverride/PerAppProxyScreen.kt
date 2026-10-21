@@ -3,7 +3,6 @@ package io.nekohasekai.sfa.compose.screen.profileoverride
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -77,6 +76,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.compose.base.UiEvent
 import io.nekohasekai.sfa.compose.base.rememberApplyServiceChangeNotifier
 import io.nekohasekai.sfa.compose.shared.AppSelectionCard
@@ -219,7 +219,7 @@ fun PerAppProxyScreen(
                         }.awaitAll()
                     }
                 }
-            Log.d(
+            KLog.d(
                 "PerAppProxyScanner",
                 "Scan China apps took ${(System.currentTimeMillis() - startTime).toDouble() / 1000}s",
             )
@@ -1328,32 +1328,32 @@ object PerAppProxyScanner {
         }
 
         if (packageName.matches(chinaAppRegex)) {
-            Log.d("PerAppProxyScanner", "Match package name: $packageName")
+            KLog.d("PerAppProxyScanner", "Match package name: $packageName")
             return true
         }
         try {
             val appInfo = packageInfo.applicationInfo ?: return false
             packageInfo.services?.forEach {
                 if (it.name.matches(chinaAppRegex)) {
-                    Log.d("PerAppProxyScanner", "Match service ${it.name} in $packageName")
+                    KLog.d("PerAppProxyScanner", "Match service ${it.name} in $packageName")
                     return true
                 }
             }
             packageInfo.activities?.forEach {
                 if (it.name.matches(chinaAppRegex)) {
-                    Log.d("PerAppProxyScanner", "Match activity ${it.name} in $packageName")
+                    KLog.d("PerAppProxyScanner", "Match activity ${it.name} in $packageName")
                     return true
                 }
             }
             packageInfo.receivers?.forEach {
                 if (it.name.matches(chinaAppRegex)) {
-                    Log.d("PerAppProxyScanner", "Match receiver ${it.name} in $packageName")
+                    KLog.d("PerAppProxyScanner", "Match receiver ${it.name} in $packageName")
                     return true
                 }
             }
             packageInfo.providers?.forEach {
                 if (it.name.matches(chinaAppRegex)) {
-                    Log.d("PerAppProxyScanner", "Match provider ${it.name} in $packageName")
+                    KLog.d("PerAppProxyScanner", "Match provider ${it.name} in $packageName")
                     return true
                 }
             }
@@ -1370,7 +1370,7 @@ object PerAppProxyScanner {
                         continue
                     }
                     if (packageEntry.size > 15000000) {
-                        Log.d(
+                        KLog.d(
                             "PerAppProxyScanner",
                             "Confirm $packageName due to large dex file",
                         )
@@ -1381,7 +1381,7 @@ object PerAppProxyScanner {
                         try {
                             DexBackedDexFile.fromInputStream(null, input)
                         } catch (e: Exception) {
-                            Log.e("PerAppProxyScanner", "Error reading dex file", e)
+                            KLog.e("PerAppProxyScanner", "Error reading dex file", e)
                             return false
                         }
                     for (clazz in dexFile.classes) {
@@ -1389,14 +1389,14 @@ object PerAppProxyScanner {
                             clazz.type.substring(1, clazz.type.length - 1).replace("/", ".")
                                 .replace("$", ".")
                         if (clazzName.matches(chinaAppRegex)) {
-                            Log.d("PerAppProxyScanner", "Match $clazzName in $packageName")
+                            KLog.d("PerAppProxyScanner", "Match $clazzName in $packageName")
                             return true
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("PerAppProxyScanner", "Error scanning package $packageName", e)
+            KLog.e("PerAppProxyScanner", "Error scanning package $packageName", e)
         }
         return false
     }

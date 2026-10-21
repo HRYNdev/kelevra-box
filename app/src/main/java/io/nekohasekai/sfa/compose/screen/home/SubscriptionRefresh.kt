@@ -1,8 +1,8 @@
 package io.nekohasekai.sfa.compose.screen.home
 
-import android.util.Log
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.bg.OlcRtcParams
 import io.nekohasekai.sfa.compose.theme.plural
 import io.nekohasekai.sfa.database.Profile
@@ -146,7 +146,7 @@ object SubscriptionRefresh {
             // просьбы он снимает по факту приёма файла, поэтому повторить её он сможет,
             // если отправка не дойдёт (см. SubscriptionInfo.sendLogNow).
             if (loaded.sendLogNow) {
-                Log.i(TAG, "сервер просит журнал сейчас — отправляю, не дожидаясь ночи")
+                KLog.i(TAG, "сервер просит журнал сейчас — отправляю, не дожидаясь ночи")
                 io.nekohasekai.sfa.bg.LogUploadWork.otpravitSeychas()
             }
         }
@@ -160,7 +160,7 @@ object SubscriptionRefresh {
             _state.value = State.Running
             val profile = selectedRemote()
             if (profile == null) {
-                Log.i(TAG, "обновление подписки: подписка не подключена")
+                KLog.i(TAG, "обновление подписки: подписка не подключена")
                 _state.value = State.Failed("Подписка не подключена.")
                 return
             }
@@ -168,22 +168,22 @@ object SubscriptionRefresh {
             migrateToOwnBuilder(profile)
 
             val content = try {
-                Log.i(TAG, "обновление подписки: запрашиваю настройки у сервера")
+                KLog.i(TAG, "обновление подписки: запрашиваю настройки у сервера")
                 val text = HTTPClient().use { it.getString(Kelevra.adresSeti(profile.typed.remoteURL)) }
                 Libbox.checkConfig(text)
                 text
             } catch (e: Exception) {
                 // Текст ошибки от HTTP-клиента/ядра часто повторяет запрошенный URL —
                 // с кодом доступа внутри, поэтому в лог идёт замаскированная копия.
-                Log.w(TAG, "обновление подписки: настройки не получены", Kelevra.maskThrowable(e))
+                KLog.w(TAG, "обновление подписки: настройки не получены", Kelevra.maskThrowable(e))
                 _state.value = State.Failed(humanError(e))
                 return
             }
 
             // Сводка отдельным запросом: конфиг про состояние подписки и комнату молчит.
-            Log.i(TAG, "обновление подписки: запрашиваю сводку")
+            KLog.i(TAG, "обновление подписки: запрашиваю сводку")
             val loaded = runCatching { loadInfo() }.getOrNull()
-            Log.i(
+            KLog.i(
                 TAG,
                 "обновление подписки: сводка ${if (loaded == null) "не пришла" else "получена"}, " +
                     "комната ${if (OlcRtcParams.serverOffers) "раздаётся сетью" else "сетью не раздаётся"}",
@@ -202,7 +202,7 @@ object SubscriptionRefresh {
                 exits = exits,
                 room = OlcRtcParams.hasRoom,
             )
-            Log.i(TAG, "обновление подписки: выходов $exits, настройки ${if (changed) "изменились" else "прежние"}")
+            KLog.i(TAG, "обновление подписки: выходов $exits, настройки ${if (changed) "изменились" else "прежние"}")
 
             // Ядро перечитывает конфиг само; выключенное ядро об этом просто не узнает.
             var reloaded = false
@@ -210,9 +210,9 @@ object SubscriptionRefresh {
                 runCatching { Libbox.newStandaloneCommandClient().serviceReload() }
                     .onSuccess {
                         reloaded = true
-                        Log.i(TAG, "обновление подписки: ядро перечитало настройки")
+                        KLog.i(TAG, "обновление подписки: ядро перечитало настройки")
                     }
-                    .onFailure { Log.i(TAG, "обновление подписки: ядро не запущено, применится при включении") }
+                    .onFailure { KLog.i(TAG, "обновление подписки: ядро не запущено, применится при включении") }
             }
 
             // Говорим ровно то, что произошло: обещать «уже работает» выключенному ядру нельзя.
@@ -223,7 +223,7 @@ object SubscriptionRefresh {
             }
             _state.value = State.Ok(profile.typed.lastUpdated, note)
         } catch (e: Exception) {
-            Log.w(TAG, "обновление подписки: сорвалось", Kelevra.maskThrowable(e))
+            KLog.w(TAG, "обновление подписки: сорвалось", Kelevra.maskThrowable(e))
             _state.value = State.Failed(humanError(e))
         } finally {
             lock.unlock()
@@ -243,7 +243,7 @@ object SubscriptionRefresh {
         if (profile.typed.remoteURL.trimEnd('/') == fresh) return
         // Адрес содержит код доступа человека — в лог целиком его не пишем,
         // только домен и длину кода: этого хватает, чтобы понять, что перевод случился.
-        Log.i(TAG, "подписка переведена на свой сборщик: $host (код ${code.length} симв.)")
+        KLog.i(TAG, "подписка переведена на свой сборщик: $host (код ${code.length} симв.)")
         profile.typed.remoteURL = fresh
         ProfileManager.update(profile)
     }
