@@ -44,7 +44,7 @@ object PereydiNaKlyuch {
         val dveri = (listOf(p.host) + set.dveri()).map { it.trim().lowercase() }.distinct()
         val itog = Priglashenie.vybratDver(
             dveri,
-            aktivaciya = { set.aktivirovat(it, p.code) },
+            aktivaciya = { dver, _ -> set.aktivirovat(dver, p.code) },
             znaetKod = { set.znaetKod(it, p.code) },
         )
         return when (itog) {
