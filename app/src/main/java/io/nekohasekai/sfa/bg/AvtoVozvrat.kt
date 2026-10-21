@@ -13,6 +13,11 @@ import android.os.SystemClock
 import android.os.UserManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequest
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.MainActivity
@@ -21,9 +26,11 @@ import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -236,29 +243,70 @@ object AvtoVozvrat {
      * Процесс поднялся (фоновая работа, плитка, экран) — через [PROVERKA_PROCESSA_MS]
      * проверить, на месте ли служба, которую человек включал. Пропадает она без следа,
      * когда система убивает процесс: служба не «липкая» и сама не возвращается.
+     *
+     * Проверка — отдельной фоновой работой, а не задержкой внутри процесса: фоновый
+     * процесс после своей работы замораживается (эмулятор Android 14, 22.10.2026:
+     * задержка в 20 с не кончилась и через минуту), и проверка не случилась бы никогда.
      */
     @OptIn(DelicateCoroutinesApi::class)
     fun proveritPosleStartaProcessa(context: Context) {
         GlobalScope.launch(Dispatchers.IO) {
-            delay(PROVERKA_PROCESSA_MS)
             // До первой разблокировки настроек не прочитать — тогда проверит следующий процесс.
             val unlocked = runCatching {
                 (context.getSystemService(Context.USER_SERVICE) as UserManager).isUserUnlocked
             }.getOrDefault(false)
-            if (!unlocked || zakhodBylo || BoxService.zhiva) return@launch
+            if (!unlocked) return@launch
             if (!runCatching { Settings.startedByUser }.getOrDefault(false)) return@launch
-            KLog.w(TAG, "процесс поднят, а включённой человеком службы нет — она остановлена без команды")
-            vernut(Povod.UBITA)
+            runCatching {
+                WorkManager.getInstance(context).enqueueUniqueWork(
+                    WORK_PROVERKA,
+                    ExistingWorkPolicy.KEEP,
+                    OneTimeWorkRequest.Builder(ProverkaTask::class.java)
+                        .setInitialDelay(PROVERKA_PROCESSA_MS, TimeUnit.MILLISECONDS)
+                        .build(),
+                )
+            }.onFailure { KLog.w(TAG, "проверка службы не поставилась: ${it.message}") }
         }
     }
 
-    /** Служба уничтожена без нашей остановки, процесс жив. */
-    @OptIn(DelicateCoroutinesApi::class)
+    private const val WORK_PROVERKA = "KelevraProverkaSluzhby"
+
+    /** Фоновая работа: служба, которую человек включал, на месте? Нет — поднять или позвать. */
+    class ProverkaTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+        override suspend fun doWork(): Result {
+            if (zakhodBylo || BoxService.zhiva) return Result.success()
+            if (!runCatching { Settings.startedByUser }.getOrDefault(false)) return Result.success()
+            KLog.w(TAG, "включённой человеком службы нет, хотя её не останавливали — поднимаю")
+            // Не отменяемо: WorkManager на Android 14 снимал работу ровно в момент, когда
+            // служба поднималась (эмулятор, 22.10.2026), и заход обрывался посреди ожидания.
+            // Заход ограничен сам (две попытки по 15 с).
+            withContext(NonCancellable) { vernut(Povod.UBITA) }
+            return Result.success()
+        }
+    }
+
+    /**
+     * Служба уничтожена без нашей остановки, процесс жив. Через фоновую работу, а не
+     * задержкой: процесс без службы система вправе тут же заморозить.
+     */
     fun posleGibeli() {
-        GlobalScope.launch(Dispatchers.IO) {
-            delay(3_000)
-            if (BoxService.zhiva) return@launch
-            vernut(Povod.UBITA)
+        runCatching {
+            WorkManager.getInstance(Application.application).enqueueUniqueWork(
+                WORK_PROVERKA,
+                ExistingWorkPolicy.REPLACE,
+                OneTimeWorkRequest.Builder(ProverkaPosleGibeliTask::class.java)
+                    .setInitialDelay(3, TimeUnit.SECONDS)
+                    .build(),
+            )
+        }.onFailure { KLog.w(TAG, "проверка после гибели службы не поставилась: ${it.message}") }
+    }
+
+    /** Как [ProverkaTask], но без оглядки на прошлый заход в этом процессе. */
+    class ProverkaPosleGibeliTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
+        override suspend fun doWork(): Result {
+            if (BoxService.zhiva) return Result.success()
+            withContext(NonCancellable) { vernut(Povod.UBITA) }
+            return Result.success()
         }
     }
 
