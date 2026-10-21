@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import java.io.EOFException
 import java.net.ConnectException
 import java.net.NoRouteToHostException
@@ -285,8 +287,8 @@ object NetworkModeDecision {
      * контроля не доказывает ничего — окно он не переходит.
      */
     private fun bulkWhitelist(signals: NetworkSignals): Boolean =
-        brokenTls(signals.bulkUnlisted) && signals.bulkUnlistedBytes < FREEZE_PROOF_BYTES &&
-            signals.bulkAllowed == ProbeOutcome.Ok && signals.bulkAllowedBytes >= FREEZE_PROOF_BYTES
+        brokenTls(signals.bulkUnlisted) && signals.bulkUnlistedBytes < Pult.int("rezhim_seti.freeze_proof_bytes", FREEZE_PROOF_BYTES) &&
+            signals.bulkAllowed == ProbeOutcome.Ok && signals.bulkAllowedBytes >= Pult.int("rezhim_seti.freeze_proof_bytes", FREEZE_PROOF_BYTES)
 
     /**
      * Белый список по TLS: к неразрешённому, но нигде не заблокированному адресу
@@ -306,7 +308,7 @@ object NetworkModeDecision {
      * (не TCP, не непонятной ошибкой) на нескольких адресах подряд.
      */
     private fun controlSurelyBroken(signals: NetworkSignals): Boolean =
-        brokenTls(signals.tlsAllowed) && signals.tlsAllowedTries >= CONTROL_CONFIDENT_TRIES
+        brokenTls(signals.tlsAllowed) && signals.tlsAllowedTries >= Pult.int("rezhim_seti.control_confident_tries", CONTROL_CONFIDENT_TRIES)
 
     /**
      * Итог контроля по попыткам к разным разрешённым адресам, по порядку.

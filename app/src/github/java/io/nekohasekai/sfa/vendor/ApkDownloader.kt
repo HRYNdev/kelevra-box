@@ -135,7 +135,9 @@ class ApkDownloader : Closeable {
     private fun skachat(url: String, target: File) {
         val request = client.newRequest()
         request.setUserAgent(HTTPClient.userAgent)
-        request.setURL(url)
+        // В debug адрес подменяется стендом (files/debug-server-url.txt): сборку из пульта
+        // качаем с локальной выдачи; в релизе adresSeti возвращает адрес как есть.
+        request.setURL(io.nekohasekai.sfa.Kelevra.adresSeti(url))
 
         val response = request.execute()
         response.writeToWithProgress(

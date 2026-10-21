@@ -25,6 +25,9 @@ interface VendorInterface {
 
     fun scheduleAutoUpdate() {}
 
+    /** Проверить обновление сейчас (команда пульта `proverit_obnovlenie`, новый блок `obnovlenie`). */
+    fun proveritObnovlenieSeychas() {}
+
     suspend fun verifySilentInstallMethod(method: String): Boolean = false
 
     suspend fun downloadAndInstall(context: android.content.Context, downloadUrl: String): Unit = throw UnsupportedOperationException("Not supported in this flavor")

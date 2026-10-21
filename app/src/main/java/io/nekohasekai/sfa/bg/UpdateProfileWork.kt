@@ -23,6 +23,30 @@ class UpdateProfileWork {
     companion object {
         private const val WORK_NAME = "UpdateProfile"
         private const val TAG = "UpdateProfileWork"
+        private const val WORK_NAME_SEYCHAS = "UpdateProfileSeychas"
+        private const val KLYUCH_SILA = "sila"
+
+        /**
+         * Интервал профиля в минутах: свой у профиля, а если пульт задал `opros.info_min` —
+         * его значение для всех наших профилей. Ключа нет — ровно как раньше.
+         */
+        internal fun intervalMinut(svoy: Int): Int =
+            if (io.nekohasekai.sfa.bg.pult.Pult.zadan("opros.info_min")) io.nekohasekai.sfa.bg.pult.Pult.int("opros.info_min") else svoy
+
+        /**
+         * Перечитать профиль и сводку сейчас, не глядя на интервал (команда пульта `obnovi_profil`).
+         * Отдельной разовой работой: экран тут ни при чём, а движок обновления живёт вне него.
+         */
+        fun seychas() {
+            WorkManager.getInstance(Application.application).enqueueUniqueWork(
+                WORK_NAME_SEYCHAS,
+                androidx.work.ExistingWorkPolicy.KEEP,
+                androidx.work.OneTimeWorkRequest.Builder(UpdateTask::class.java)
+                    .setInputData(androidx.work.Data.Builder().putBoolean(KLYUCH_SILA, true).build())
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    .build(),
+            )
+        }
 
         suspend fun reconfigureUpdater() {
             runCatching {
@@ -42,10 +66,10 @@ class UpdateProfileWork {
             }
 
             var minDelay =
-                remoteProfiles.minByOrNull { it.typed.autoUpdateInterval }!!.typed.autoUpdateInterval.toLong()
+                intervalMinut(remoteProfiles.minByOrNull { it.typed.autoUpdateInterval }!!.typed.autoUpdateInterval).toLong()
             val nowSeconds = System.currentTimeMillis() / 1000L
             val minInitDelay =
-                remoteProfiles.minOf { (it.typed.autoUpdateInterval * 60) - (nowSeconds - (it.typed.lastUpdated.time / 1000L)) }
+                remoteProfiles.minOf { (intervalMinut(it.typed.autoUpdateInterval) * 60) - (nowSeconds - (it.typed.lastUpdated.time / 1000L)) }
             if (minDelay < 15) minDelay = 15
             WorkManager.getInstance(Application.application).enqueueUniquePeriodicWork(
                 WORK_NAME,
@@ -70,6 +94,7 @@ class UpdateProfileWork {
 
     class UpdateTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
         override suspend fun doWork(): Result {
+            io.nekohasekai.sfa.bg.pult.Pult.zagruzitEsliNado()
             var selectedProfileUpdated = false
             val remoteProfiles =
                 ProfileManager.list()
@@ -77,10 +102,11 @@ class UpdateProfileWork {
             if (remoteProfiles.isEmpty()) return Result.success()
             var success = true
             val selectedProfile = Settings.selectedProfile
+            val sila = inputData.getBoolean(KLYUCH_SILA, false)
             for (profile in remoteProfiles) {
                 val lastSeconds =
                     (System.currentTimeMillis() - profile.typed.lastUpdated.time) / 1000L
-                if (lastSeconds < profile.typed.autoUpdateInterval * 60) {
+                if (!sila && lastSeconds < intervalMinut(profile.typed.autoUpdateInterval) * 60) {
                     continue
                 }
                 try {

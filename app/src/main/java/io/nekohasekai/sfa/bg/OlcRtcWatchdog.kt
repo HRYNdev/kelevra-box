@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import android.os.SystemClock
 import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.database.Settings
@@ -83,8 +85,8 @@ object OlcRtcWatchdog {
      * после [MAX_RESTARTS] — редкие.
      */
     internal fun pauseBeforeRaise(attempt: Int): Long =
-        if (attempt > MAX_RESTARTS) {
-            RARE_RETRY_MILLIS
+        if (attempt > Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)) {
+            Pult.long("komnata.storozh.rare_retry_millis", RARE_RETRY_MILLIS)
         } else {
             BACKOFF_MILLIS[(attempt - 1).coerceIn(0, BACKOFF_MILLIS.size - 1)]
         }
@@ -122,7 +124,7 @@ object OlcRtcWatchdog {
         // Idle — ядро погасили нарочно (остановка сервиса, уход домой, комната больше не
         // нужна); Unavailable — olcRTC в этой сборке нет. Подъёмом не лечится ни то, ни другое.
         state !is OlcRtcCore.State.Failed -> Step.Wait
-        sinceLastRaiseMillis >= (if (permanent) RARE_RETRY_MILLIS else pauseBeforeRaise(raisesInARow + 1)) -> Step.Raise
+        sinceLastRaiseMillis >= (if (permanent) Pult.long("komnata.storozh.rare_retry_millis", RARE_RETRY_MILLIS) else pauseBeforeRaise(raisesInARow + 1)) -> Step.Raise
         else -> Step.Wait
     }
 
@@ -166,7 +168,7 @@ object OlcRtcWatchdog {
      * Присмотр вынес приговор: канал не отвечает столько раз подряд, что это уже не
      * пересборка на той стороне, — либо частые подъёмы кончились.
      */
-    val condemned: Boolean get() = gaveUp || deadInARow >= FAILURES_BEFORE_RESTART
+    val condemned: Boolean get() = gaveUp || deadInARow >= Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)
 
     private var protector: ((Int) -> Boolean)? = null
     private var requireProtector: Boolean = false
@@ -207,7 +209,7 @@ object OlcRtcWatchdog {
                 isDaemon = true
                 start()
             }
-            KLog.i(TAG, "присмотр включён: проверка раз в $CHECK_INTERVAL_MILLIS мс")
+            KLog.i(TAG, "присмотр включён: проверка раз в ${Pult.long("komnata.storozh.check_interval_millis", CHECK_INTERVAL_MILLIS)} мс")
         }
     }
 
@@ -257,7 +259,7 @@ object OlcRtcWatchdog {
      * выход уводится в пределах секунды, а проба дальше решает, поднимать ли заново.
      */
     private fun sleepWatchingSocks(): Boolean {
-        var left = CHECK_INTERVAL_MILLIS
+        var left = Pult.long("komnata.storozh.check_interval_millis", CHECK_INTERVAL_MILLIS)
         while (left > 0) {
             val step = minOf(SOCKS_WATCH_STEP_MILLIS, left)
             if (!sleepQuietly(step)) return false
@@ -286,8 +288,8 @@ object OlcRtcWatchdog {
 
             // Тумблер выключили посреди сессии: работающий канал не рвём, но и
             // поднимать его больше не наше дело.
-            if (!Settings.olcrtcEnabled) {
-                KLog.i(TAG, "комната выключена тумблером — присмотр отходит")
+            if (!Settings.olcrtcEnabled || !OlcRtcParams.komnataRazreshenaPultom) {
+                KLog.i(TAG, "комната выключена тумблером или пультом — присмотр отходит")
                 note = ""
                 active = false
                 return
@@ -311,12 +313,12 @@ object OlcRtcWatchdog {
                 Step.Wait -> continue
 
                 Step.Raise -> {
-                    if (restarts >= MAX_RESTARTS && !gaveUp) {
+                    if (restarts >= Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS) && !gaveUp) {
                         gaveUp = true
                         KLog.w(
                             TAG,
-                            "подняли $MAX_RESTARTS раз подряд, канал не встал — дальше пробую раз в " +
-                                "${RARE_RETRY_MILLIS / 1000} с, пока комната нужна",
+                            "подняли ${Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)} раз подряд, канал не встал — дальше пробую раз в " +
+                                "${Pult.long("komnata.storozh.rare_retry_millis", RARE_RETRY_MILLIS) / 1000} с, пока комната нужна",
                         )
                     }
                     // Ядро уже лежит, гасить нечего и ждать внутри подъёма тоже: пауза
@@ -346,9 +348,9 @@ object OlcRtcWatchdog {
                 socksLostReported = false
                 gaveUp = false
                 if (restarts > 0 && lastRestartAt > 0 &&
-                    SystemClock.elapsedRealtime() - lastRestartAt > HEALTHY_RESET_MILLIS
+                    SystemClock.elapsedRealtime() - lastRestartAt > Pult.long("komnata.storozh.healthy_reset_millis", HEALTHY_RESET_MILLIS)
                 ) {
-                    KLog.i(TAG, "канал держится дольше ${HEALTHY_RESET_MILLIS / 1000} с — счётчик подъёмов обнулён")
+                    KLog.i(TAG, "канал держится дольше ${Pult.long("komnata.storozh.healthy_reset_millis", HEALTHY_RESET_MILLIS) / 1000} с — счётчик подъёмов обнулён")
                     restarts = 0
                     lastRestartAt = 0L
                     note = ""
@@ -359,17 +361,17 @@ object OlcRtcWatchdog {
             failures++
             deadInARow = failures
             val reason = (health as? OlcRtcCore.Health.Dead)?.reason ?: "неизвестно"
-            if (failures < FAILURES_BEFORE_RESTART) {
-                KLog.i(TAG, "канал не отвечает ($reason), отказ $failures из $FAILURES_BEFORE_RESTART")
+            if (failures < Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)) {
+                KLog.i(TAG, "канал не отвечает ($reason), отказ $failures из ${Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)}")
                 continue
             }
 
-            if (restarts >= MAX_RESTARTS) {
+            if (restarts >= Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)) {
                 gaveUp = true
                 if (!runCatching { roomNeeded() }.getOrDefault(false)) {
                     // Комната никому не нужна — редкие попытки держать незачем, отходим,
                     // как и раньше.
-                    note = "подняли $MAX_RESTARTS раз подряд, канал не встал, комната не нужна — больше не пробуем"
+                    note = "подняли ${Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)} раз подряд, канал не встал, комната не нужна — больше не пробуем"
                     KLog.w(TAG, note)
                     // Выход мог вернуться на неё заходом автомата, пока ядро числилось
                     // поднятым: уводим, иначе он там и останется.
@@ -377,7 +379,7 @@ object OlcRtcWatchdog {
                     active = false
                     return
                 }
-                KLog.w(TAG, "подняли $MAX_RESTARTS раз подряд, канал не встал — дальше пробую раз в ${RARE_RETRY_MILLIS / 1000} с")
+                KLog.w(TAG, "подняли ${Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)} раз подряд, канал не встал — дальше пробую раз в ${Pult.long("komnata.storozh.rare_retry_millis", RARE_RETRY_MILLIS) / 1000} с")
             }
 
             if (!restartCore(reason, pauseBeforeRaise(restarts + 1), channelWasUp = true)) return
@@ -414,10 +416,10 @@ object OlcRtcWatchdog {
         }
 
         restarts++
-        note = if (restarts > MAX_RESTARTS) {
-            "канал не встаёт ($reason) — редкая попытка, раз в ${RARE_RETRY_MILLIS / 1000} с (подъём $restarts)"
+        note = if (restarts > Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)) {
+            "канал не встаёт ($reason) — редкая попытка, раз в ${Pult.long("komnata.storozh.rare_retry_millis", RARE_RETRY_MILLIS) / 1000} с (подъём $restarts)"
         } else {
-            "канал упал ($reason), поднимаю заново — попытка $restarts из $MAX_RESTARTS"
+            "канал упал ($reason), поднимаю заново — попытка $restarts из ${Pult.int("komnata.storozh.max_restarts", MAX_RESTARTS)}"
         }
         KLog.w(TAG, "$note, пауза $pauseMillis мс")
 

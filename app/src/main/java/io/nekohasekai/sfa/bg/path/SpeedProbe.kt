@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg.path
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import io.nekohasekai.sfa.bg.KLog
 import android.os.SystemClock
 import io.nekohasekai.sfa.bg.AutoModeExits
@@ -77,19 +79,19 @@ object SpeedProbe {
     }
 
     /** Задушен ли путь. Отдельная чистая функция: по ней и решают, и её же проверяют тестом. */
-    fun squeezed(speed: Speed, floor: Long = SQUEEZED_BYTES_PER_SEC): Boolean =
+    fun squeezed(speed: Speed, floor: Long = Pult.long("skorost.squeezed_bytes_per_sec", SQUEEZED_BYTES_PER_SEC)): Boolean =
         speed is Speed.Measured && speed.bytesPerSecond < floor
 
     private var lastRunAt = 0L
 
     /** Прошёл ли срок с прошлого замера. */
-    fun due(now: Long = SystemClock.elapsedRealtime(), cooldown: Long = COOLDOWN_MILLIS): Boolean =
+    fun due(now: Long = SystemClock.elapsedRealtime(), cooldown: Long = Pult.long("skorost.cooldown_millis", COOLDOWN_MILLIS)): Boolean =
         lastRunAt == 0L || now - lastRunAt >= cooldown
 
     fun measure(entry: AutoModeExits.Endpoint?, label: String): Speed {
         if (entry == null) return Speed.Unmeasurable("за путём «$label» не закреплён локальный вход")
         if (entry.port !in 1..65535) return Speed.Unmeasurable("у пути «$label» негодный порт ${entry.port}")
-        if (!due()) return Speed.Unmeasurable("замер скорости делали меньше ${COOLDOWN_MILLIS / 60000} мин назад")
+        if (!due()) return Speed.Unmeasurable("замер скорости делали меньше ${Pult.long("skorost.cooldown_millis", COOLDOWN_MILLIS) / 60000} мин назад")
         lastRunAt = SystemClock.elapsedRealtime()
         val speed = runCatching { download(entry) }.getOrElse {
             Speed.Failed(it.message?.takeIf { m -> m.isNotBlank() } ?: it.javaClass.simpleName)
@@ -99,9 +101,11 @@ object SpeedProbe {
     }
 
     private fun download(entry: AutoModeExits.Endpoint): Speed = Socket().use { socket ->
+        // Цель с пульта (`skorost.cel`); нет — вшитая.
+        val cel = Pult.stroka("skorost.cel")?.let(HonestProbe::razobratCel) ?: TARGET
         socket.tcpNoDelay = true
-        socket.soTimeout = READ_TIMEOUT_MILLIS
-        socket.connect(InetSocketAddress(entry.host, entry.port), ENTRY_TIMEOUT_MILLIS)
+        socket.soTimeout = Pult.int("skorost.read_timeout_millis", READ_TIMEOUT_MILLIS)
+        socket.connect(InetSocketAddress(entry.host, entry.port), Pult.int("skorost.entry_timeout_millis", ENTRY_TIMEOUT_MILLIS))
         val out = socket.getOutputStream()
         val input = DataInputStream(socket.getInputStream())
 
@@ -111,10 +115,10 @@ object SpeedProbe {
         if (greeting[0].toInt() != 0x05 || greeting[1].toInt() != 0x00) {
             return Speed.Failed("вход не принял приветствие SOCKS5")
         }
-        val host = TARGET.host.toByteArray()
+        val host = cel.host.toByteArray()
         out.write(
             byteArrayOf(0x05, 0x01, 0x00, 0x03, host.size.toByte()) + host +
-                byteArrayOf((TARGET.port shr 8).toByte(), (TARGET.port and 0xff).toByte()),
+                byteArrayOf((cel.port shr 8).toByte(), (cel.port and 0xff).toByte()),
         )
         out.flush()
         val reply = ByteArray(4).also { input.readFully(it) }
@@ -128,7 +132,7 @@ object SpeedProbe {
 
         out.write(
             (
-                "GET ${TARGET.path} HTTP/1.1\r\nHost: ${TARGET.host}\r\n" +
+                "GET ${cel.path} HTTP/1.1\r\nHost: ${cel.host}\r\n" +
                     "User-Agent: kelevra\r\nConnection: close\r\n\r\n"
                 ).toByteArray(),
         )
@@ -147,7 +151,7 @@ object SpeedProbe {
         val buffer = ByteArray(16 * 1024)
         var read = 0
         val startedAt = SystemClock.elapsedRealtime()
-        while (read < ENOUGH_BYTES && SystemClock.elapsedRealtime() - startedAt < BUDGET_MILLIS) {
+        while (read < Pult.int("skorost.enough_bytes", ENOUGH_BYTES) && SystemClock.elapsedRealtime() - startedAt < Pult.long("skorost.budget_millis", BUDGET_MILLIS)) {
             val n = input.read(buffer)
             if (n <= 0) break
             read += n

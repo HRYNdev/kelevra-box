@@ -29,7 +29,15 @@ package io.nekohasekai.sfa.bg
  * Вынесено из [AutoMode] отдельным классом без единого обращения к Android — чтобы
  * поведение «не дёргается» можно было проверить, а не пересказать.
  */
-internal class AutoModeGate(private val confirmations: Int) {
+internal class AutoModeGate(private val confirmationsOf: () -> Int) {
+
+    constructor(confirmations: Int) : this({ confirmations })
+
+    /**
+     * Число подтверждений читается на каждом наблюдении: пульт (`avtomat.podtverzhdeniy`)
+     * меняет его на границе захода, без пересоздания задвижки.
+     */
+    private val confirmations: Int get() = confirmationsOf().coerceAtLeast(1)
 
     /** Обстановка, на которой стоим. */
     var current: AutoMode.Situation = AutoMode.Situation.Unknown
@@ -62,7 +70,7 @@ internal class AutoModeGate(private val confirmations: Int) {
     }
 
     /** Сколько наблюдений нужно внутри серии перепроверок: на одно меньше обычного. */
-    private val hurriedConfirmations = (confirmations - 1).coerceAtLeast(1)
+    private val hurriedConfirmations: Int get() = (confirmations - 1).coerceAtLeast(1)
 
     /**
      * @param trust наблюдение сделано сразу после доказанной смены сети.

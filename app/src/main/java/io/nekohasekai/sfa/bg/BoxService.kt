@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -298,6 +300,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                     notification.show(lastProfileName, R.string.status_home)
                 }
                 AutoMode.start(autoModeHost, AutoMode.Situation.Home)
+                io.nekohasekai.sfa.bg.pult.PultSvyaz.start()
                 // Ядра тут нет, тиков статуса не будет — но обстановка меняться будет,
                 // и шторка обязана идти за ней. Запускаем ПОСЛЕ AutoMode.start: первое же
                 // значение придёт уже настоящим, без мигания текста. Тики подключит
@@ -339,7 +342,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Ядро уже поднялось с залипшим кэшем sing-box. Если залипший выбор — это
             // выбор автомата, а не человека, возвращаем селектор на default из свежего
             // конфига; дальше автомат заново решает по живой обстановке.
-            AutoModeSticky.release(runningConfig) { g, t -> Libbox.newStandaloneCommandClient().selectOutbound(g, t) }
+            if (!Pult.vykl("vozvrat_zalipshego")) {
+                AutoModeSticky.release(runningConfig) { g, t -> Libbox.newStandaloneCommandClient().selectOutbound(g, t) }
+            }
             checkPathsHonestly("старт сервиса")
 
             if (commandServer.needWIFIState()) {
@@ -367,6 +372,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             notification.start(coreLive = true)
             AutoMode.start(autoModeHost)
+            // Связь с сервером, пока служба жива: опрос /info, испытание пульта, долгий опрос.
+            io.nekohasekai.sfa.bg.pult.PultSvyaz.start()
             // После подъёма tun, не до: ядро WB Chat ходит через tun (см. WbChatConfigPatch),
             // и появившийся позже tun сменил бы ему исходящий порт посреди звонка.
             startWbChat()
@@ -579,7 +586,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 // ядро сам, если байты перестали ходить. После неудачного подъёма он
                 // пробует снова, но только пока комната нужна: туннель не погашен, сервис
                 // не останавливают и автомат стоит на комнате или ищет путь.
-                OlcRtcWatchdog.start(
+                if (Pult.vykl("storozh_komnaty")) KLog.i(TAG, "присмотр за комнатой выключен пультом")
+                else OlcRtcWatchdog.start(
                     protector,
                     requireProtector = vpn != null,
                     // Присмотр поднимает комнату сам только пока ядро собрано под неё: на «ищем путь» приложение
@@ -627,13 +635,20 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val roomInConfig = roomInConfig()
         coreRoomConfig = roomInConfig
 
-        val rules = RuleSetLocalPatch.useCached(result, RuleSetCache.cached())
-        RuleSetLocalPatch.log(rules)
-        RuleSetCache.report(rules)
-        // Список нужен докачке: после правки удалённых наборов в конфиге уже нет,
-        // и спросить «что вообще положено иметь» будет не у кого.
-        ruleSetRemotes = rules.remotes
-        result = rules.content
+        // Выключатели пульта (`vykl.*`): заплатка, которая оказалась виновата, гасится с
+        // сервера без выпуска. Без пульта не выключено ничего.
+        if (!Pult.vykl("nabory_iz_kesha")) {
+            val rules = RuleSetLocalPatch.useCached(result, RuleSetCache.cached())
+            RuleSetLocalPatch.log(rules)
+            RuleSetCache.report(rules)
+            // Список нужен докачке: после правки удалённых наборов в конфиге уже нет,
+            // и спросить «что вообще положено иметь» будет не у кого.
+            ruleSetRemotes = rules.remotes
+            result = rules.content
+        } else {
+            KLog.i(TAG, "наборы правил из кэша выключены пультом — ядро тянет их само")
+            ruleSetRemotes = emptyList()
+        }
 
         // Страховка идёт сразу после наборов и до всего остального: если правила не
         // доехали, дальше править было бы уже нечего — трафик ушёл бы в `final: direct`.
@@ -644,9 +659,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Выбор выхода из прошлого запуска не должен перекрывать `default` с сервера:
         // 15.08.2026 залипшая в кэше «Комната» пережила починку канала и вставала обратно
         // при каждом старте ([CacheSelectPatch]).
-        val cacheSelect = CacheSelectPatch.dontStoreSelected(result)
-        CacheSelectPatch.log(cacheSelect)
-        result = cacheSelect.content
+        if (!Pult.vykl("kesh_vybora")) {
+            val cacheSelect = CacheSelectPatch.dontStoreSelected(result)
+            CacheSelectPatch.log(cacheSelect)
+            result = cacheSelect.content
+        }
 
         // Стек туннеля правим всегда, а не только под комнатой: порты трансляции
         // кончаются на любом выходе, в комнате это было просто заметнее.
@@ -677,7 +694,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 autoMode = Settings.autoModeEnabled,
                 manualRoom = Settings.autoModeManualRoom,
                 whitelistAgeMillis = NetworkModeDetector.whitelistAgeMillis(),
-                ttlMillis = AutoMode.HINT_TTL_MILLIS,
+                ttlMillis = Pult.long("avtomat.hint_ttl_millis", AutoMode.HINT_TTL_MILLIS),
             )
         ) {
             val rest = OlcRtcConfigPatch.finalViaRoom(result, OlcRtcParams.socksPort, BelyjSpisok.domeny(), BelyjSpisok.podseti())
@@ -725,9 +742,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         ImenaSaytov.sekret = clash.secret
 
         val layout = AutoModeExits.parse(result, OlcRtcParams.socksPort)
-        val probe = ProbeInboundPatch.addProbeInbounds(result, layout.measurable)
-        ProbeInboundPatch.log(probe)
-        result = probe.content
+        if (!Pult.vykl("vhody_proby")) {
+            val probe = ProbeInboundPatch.addProbeInbounds(result, layout.measurable)
+            ProbeInboundPatch.log(probe)
+            result = probe.content
+        }
 
         // runningConfig ставит startCore — после удачного старта, не здесь.
         return result
@@ -1063,7 +1082,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * ([roomAhead]) или уже поднятое ядро комнаты. Поиск пути сюда не входит: увести
      * `final` в комнату, которой нет, значит закрыть дорогу и остаткам трафика.
      */
-    private fun roomInConfig(): Boolean = Settings.olcrtcEnabled &&
+    private fun roomInConfig(): Boolean = Settings.olcrtcEnabled && OlcRtcParams.komnataRazreshenaPultom &&
         (roomWanted || roomAhead || OlcRtcCore.state is OlcRtcCore.State.Ready)
 
     /** Нужны ли правки под выход WB Chat: он есть и выбран руками (автомат его не выбирает). */
@@ -1080,6 +1099,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     private fun startWbChat() {
         runCatching {
+            if (Pult.vykl("wb_chat")) {
+                KLog.i(TAG, "WB Chat выключен пультом — ядро не поднимаю")
+                return
+            }
             WbChatWatchdog.start(wanted = { !serviceStopping && !tunnelSuspended && wbInConfig() })
         }.onFailure { KLog.w(TAG, "WB Chat: присмотр не запустился: ${it.message}") }
     }
@@ -1467,6 +1490,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Автомат снимаем первым: иначе обычное выключение выглядит для него как
         // обстановка, в которой надо срочно что-то поднять.
         AutoMode.stop()
+        io.nekohasekai.sfa.bg.pult.PultSvyaz.stop()
         // Сервис уходит — его protect(fd) больше ничего не делает, и держать крючок
         // значит обещать пробам защиту, которой уже нет.
         ProbeSocket.useProtector(null)
@@ -1519,6 +1543,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         serviceStopping = true
         Settings.startedByUser = false
         AutoMode.stop()
+        io.nekohasekai.sfa.bg.pult.PultSvyaz.stop()
         ProbeSocket.useProtector(null)
         val pfd = fileDescriptor
         if (pfd != null) {

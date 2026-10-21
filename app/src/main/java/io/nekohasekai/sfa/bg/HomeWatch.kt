@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 /**
  * Приглядка дома: чем режется пауза между полными заходами и что считается поводом
  * будить заход раньше срока.
@@ -54,7 +56,7 @@ internal object HomeWatch {
      * @param roll случайная величина паузы. Выводить её за границы незачем, но и верить
      *   вызывающему на слово тут не за что.
      */
-    fun slice(left: Long, roll: Long): Long = minOf(left, roll.coerceIn(MIN_MILLIS, MAX_MILLIS))
+    fun slice(left: Long, roll: Long): Long = minOf(left, roll.coerceIn(Pult.long("dom.prismotr.min_millis", MIN_MILLIS), Pult.long("dom.prismotr.max_millis", MAX_MILLIS).coerceAtLeast(Pult.long("dom.prismotr.min_millis", HomeWatch.MIN_MILLIS))))
 
     /**
      * Будить ли полный заход по итогу пробы.
@@ -67,5 +69,5 @@ internal object HomeWatch {
     fun wake(trafficFlows: Boolean): Boolean = !trafficFlows
 
     /** Сколько проб в час даёт этот ритм. Цена приглядки, записанная числом, а не словом. */
-    fun peeksPerHour(): Double = 3_600_000.0 / ((MIN_MILLIS + MAX_MILLIS) / 2.0)
+    fun peeksPerHour(): Double = 3_600_000.0 / ((Pult.long("dom.prismotr.min_millis", MIN_MILLIS) + Pult.long("dom.prismotr.max_millis", MAX_MILLIS).coerceAtLeast(Pult.long("dom.prismotr.min_millis", HomeWatch.MIN_MILLIS))) / 2.0)
 }

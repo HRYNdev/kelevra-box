@@ -20,7 +20,10 @@ object BelyjSpisok {
     @Volatile
     private var cache: List<String>? = null
 
-    fun domeny(): List<String> = cache ?: synchronized(this) {
+    /** Домены белого списка: с пульта (`belyj_spisok.domeny`) вместо вшитых в APK. */
+    fun domeny(): List<String> = io.nekohasekai.sfa.bg.pult.Pult.spisok("belyj_spisok.domeny") ?: domenyIzApk()
+
+    private fun domenyIzApk(): List<String> = cache ?: synchronized(this) {
         cache ?: runCatching {
             Application.application.assets.open(ASSET).bufferedReader().use { razobrat(it.readText()) }
         }.onFailure {
@@ -38,7 +41,9 @@ object BelyjSpisok {
      * `tools/belyj-spisok/podseti.py` из замеров через симку). Не прочитались — пусто,
      * и правила по адресам просто не будет.
      */
-    fun podseti(): List<String> = podsetiCache ?: synchronized(this) {
+    fun podseti(): List<String> = io.nekohasekai.sfa.bg.pult.Pult.spisok("belyj_spisok.podseti") ?: podsetiIzApk()
+
+    private fun podsetiIzApk(): List<String> = podsetiCache ?: synchronized(this) {
         podsetiCache ?: runCatching {
             Application.application.assets.open(ASSET_PODSETI).bufferedReader().use { razobrat(it.readText()) }
         }.onFailure {
