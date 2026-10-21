@@ -87,7 +87,13 @@ object OlcRtcParams {
      *
      * Одно место на всех — иначе подъём упирается в ту точку, которую забыли согласовать.
      */
-    val roomAllowed: Boolean get() = Settings.olcrtcEnabled && hasRoom
+    val roomAllowed: Boolean get() = Settings.olcrtcEnabled && hasRoom && komnataRazreshenaPultom
+
+    /**
+     * Выключатель функции с сервера (`funkcii.komnata`, PULT.md). Действует как аварийный
+     * тумблер человека: новых подъёмов нет, работающий канал не рвётся.
+     */
+    val komnataRazreshenaPultom: Boolean get() = io.nekohasekai.sfa.bg.pult.Pult.bool("funkcii.komnata")
 
     /** Откуда приехали параметры — для честной подписи на экране. */
     val source: Source

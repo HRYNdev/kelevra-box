@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import io.nekohasekai.sfa.bg.path.HonestProbe
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
@@ -86,9 +88,9 @@ object OlcRtcCore {
         val wbToken: String,
         val vp8Fps: Int,
         val vp8BatchSize: Int,
-        val readyTimeoutMillis: Int = DEFAULT_READY_TIMEOUT_MILLIS,
-        val attempts: Int = DEFAULT_ATTEMPTS,
-        val retryPauseMillis: Long = DEFAULT_RETRY_PAUSE_MILLIS,
+        val readyTimeoutMillis: Int = Pult.int("komnata.yadro.default_ready_timeout_millis", DEFAULT_READY_TIMEOUT_MILLIS),
+        val attempts: Int = Pult.int("komnata.yadro.default_attempts", DEFAULT_ATTEMPTS),
+        val retryPauseMillis: Long = Pult.long("komnata.yadro.default_retry_pause_millis", DEFAULT_RETRY_PAUSE_MILLIS),
         val dnsServer: String = "",
         val socksUser: String = "",
         val socksPass: String = "",
@@ -306,9 +308,9 @@ object OlcRtcCore {
                 mobile,
                 "setLivenessOptions",
                 arrayOf(LONG, LONG, LONG),
-                LIVENESS_INTERVAL_MILLIS,
-                LIVENESS_TIMEOUT_MILLIS,
-                LIVENESS_FAILURES,
+                Pult.long("komnata.yadro.liveness_interval_millis", LIVENESS_INTERVAL_MILLIS),
+                Pult.long("komnata.yadro.liveness_timeout_millis", LIVENESS_TIMEOUT_MILLIS),
+                Pult.long("komnata.yadro.liveness_failures", LIVENESS_FAILURES),
             )
 
             KLog.i(

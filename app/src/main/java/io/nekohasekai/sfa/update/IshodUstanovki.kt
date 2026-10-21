@@ -64,8 +64,8 @@ object IshodUstanovki {
     const val NAPOMINANIE_MINUT = 1440L
 
     /** Уведомление «Доступно обновление» не чаще раза в сутки. Часы ушли назад: показывать можно. */
-    fun mozhnoUvedomit(seychasMs: Long, poslednoeMs: Long): Boolean =
-        poslednoeMs <= 0L || seychasMs < poslednoeMs || seychasMs - poslednoeMs >= NAPOMINANIE_MINUT * 60_000L
+    fun mozhnoUvedomit(seychasMs: Long, poslednoeMs: Long, napominanieMinut: Long = NAPOMINANIE_MINUT): Boolean =
+        poslednoeMs <= 0L || seychasMs < poslednoeMs || seychasMs - poslednoeMs >= napominanieMinut * 60_000L
 
     private val SHA256_DIGEST = Regex("""^sha256:([0-9a-fA-F]{64})$""")
 
@@ -102,11 +102,11 @@ object IshodUstanovki {
      * проверки и нехватка места снимаются только человеком, поэтому это напоминание раз
      * в сутки, а не частые попытки.
      */
-    fun zaderzhkaMinut(otkazovPodryad: Int, prichina: OtkazUstanovki): Long? {
+    fun zaderzhkaMinut(otkazovPodryad: Int, prichina: OtkazUstanovki, napominanieMinut: Long = NAPOMINANIE_MINUT): Long? {
         if (otkazovPodryad < 1) return null
         return when (prichina) {
             OtkazUstanovki.NESOVMESTIMO -> null
-            OtkazUstanovki.PROVERKA, OtkazUstanovki.OTMENENO, OtkazUstanovki.MESTO -> NAPOMINANIE_MINUT
+            OtkazUstanovki.PROVERKA, OtkazUstanovki.OTMENENO, OtkazUstanovki.MESTO -> napominanieMinut
             OtkazUstanovki.BITYY_FAYL, OtkazUstanovki.DRUGOE ->
                 LESTNICA_SETI.getOrNull(otkazovPodryad - 1) ?: POTOLOK_SETI_MINUT
         }

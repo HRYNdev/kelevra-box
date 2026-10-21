@@ -68,6 +68,11 @@ data class SubscriptionInfo(
      * null — сервер блока не прислал: старый сервер или вид снят.
      */
     val vid: Any? = null,
+    /**
+     * Сводка не свежая, а поднята с диска (старт без сети или ответ 304): по ней ничего
+     * не исполняется — просьбы сервера уже исполнены, когда она пришла впервые.
+     */
+    val izKesha: Boolean = false,
 ) {
     /** Одна строка под именем: срок и трафик, если они вообще заданы. */
     val note: String
@@ -158,7 +163,12 @@ fun applyBypassPackages(packages: List<String>) {
     }
 }
 
-suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) {
+/**
+ * Тянет сводку /info. [uslovno] — спросить с `If-None-Match` (опрос из службы): ответ
+ * 304 значит «ничего не менялось», и сводка берётся с диска ([SvodkaDisk]) без разбора
+ * пульта и просьб сервера — они уже исполнены, когда сводка пришла впервые.
+ */
+suspend fun loadSubscription(uslovno: Boolean = false): SubscriptionInfo? = withContext(Dispatchers.IO) {
     runCatching {
         val id = Settings.selectedProfile
         if (id == -1L) return@runCatching null
@@ -178,58 +188,120 @@ suspend fun loadSubscription(): SubscriptionInfo? = withContext(Dispatchers.IO) 
         // Те же заголовки, что и у запроса конфига: сервер по ним заводит
         // устройство и возвращает в этой же сводке person.name и device.name.
         Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
+        val sohranyonnaya = if (uslovno) SvodkaDisk.prochest()?.takeIf { it.baza == remote } else null
+        sohranyonnaya?.etag?.let { conn.setRequestProperty("If-None-Match", it) }
         val code = conn.responseCode
+        if (code == 304 && sohranyonnaya != null) {
+            conn.disconnect()
+            return@runCatching razobratSvodku(JSONObject(sohranyonnaya.tekst)).copy(izKesha = true)
+        }
         val text = (if (code in 200..299) conn.inputStream else conn.errorStream)
             ?.bufferedReader()?.readText().orEmpty()
+        val etag = conn.getHeaderField("ETag")
         conn.disconnect()
         if (code !in 200..299) return@runCatching null
 
         val json = JSONObject(text)
+        // Вся сводка — на диск: после перезапуска без сети карточка, панель и ответ на
+        // жалобу поднимаются отсюда ([SubscriptionRefresh.podnyatSDiska]).
+        SvodkaDisk.zapisat(remote, text, etag)
         // Двери сети: пригодятся при следующем входе по коду, если справочник не загрузится.
         json.optJSONArray("dveri")?.let { arr ->
             io.nekohasekai.sfa.Aktivatsiya.zapomnitDveri((0 until arr.length()).map { arr.optString(it) })
         }
-        SubscriptionInfo(
-            name = json.optString("name"),
-            active = json.optBoolean("active"),
-            expires = json.optString("expires").takeIf { it.isNotBlank() && it != "null" },
-            limitBytes = json.optLong("limit_bytes"),
-            usedBytes = json.optLong("used_bytes"),
-            bypassPackages = buildList {
-                val arr = json.optJSONArray("bypass_packages") ?: return@buildList
-                for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
-            },
-            // Имена приходят от сервера, который узнал устройство по заголовкам.
-            // Старый сервер этих блоков не присылает вовсе — тогда остаётся null.
-            personName = json.optJSONObject("person")?.optString("name")
-                ?.takeIf { it.isNotBlank() && it != "null" },
-            deviceName = json.optJSONObject("device")?.optString("name")
-                ?.takeIf { it.isNotBlank() && it != "null" },
-            devices = parseDevices(json),
-            // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
-            olcrtc = json.optJSONObject("olcrtc"),
-            wbchat = json.optJSONObject("wbchat"),
-            sendLogNow = json.optBoolean("send_log_now"),
-            panel = json.optBoolean("panel"),
-            vid = json.opt("vid"),
-            reply = json.optJSONObject("reply")?.let { answer ->
-                val body = answer.optString("text")
-                if (body.isBlank()) null else ComplaintReply(
-                    id = answer.optInt("id"),
-                    text = body,
-                    about = answer.optString("about"),
-                )
-            },
-            transports = buildMap {
-                val list = json.optJSONArray("channels") ?: return@buildMap
-                for (i in 0 until list.length()) {
-                    val item = list.optJSONObject(i) ?: continue
-                    val name = item.optString("name")
-                    val transport = item.optString("transport")
-                    if (name.isNotBlank() && transport.isNotBlank()) put(name, transport)
-                }
-            },
+        // Пульт: настройки и команды с сервера (KelevraServer/docs/PULT.md). Нет блока — не меняется ничего.
+        runCatching { io.nekohasekai.sfa.bg.pult.Pult.prinyatIzSvodki(json, Kelevra.deviceId) }
+            .onFailure { io.nekohasekai.sfa.bg.KLog.w("KelevraPult", "пульт не разобран: ${it.javaClass.simpleName}") }
+        razobratSvodku(json)
+    }.getOrNull()
+}
+
+/** Базовый адрес сводки выбранного профиля (`https://<host>/k/<код>` или `/u/<ключ>`); не наш профиль — null. */
+suspend fun bazaPodpiski(): String? = withContext(Dispatchers.IO) {
+    runCatching {
+        val id = Settings.selectedProfile
+        if (id == -1L) return@runCatching null
+        val profile = ProfileManager.get(id) ?: return@runCatching null
+        if (profile.typed.type != TypedProfile.Type.Remote) return@runCatching null
+        io.nekohasekai.sfa.SubscriptionLink.baseUrl(profile.typed.remoteURL)
+    }.getOrNull()
+}
+
+/** Разбор ответа /info. Без сети и Android — проверяется тестами. */
+fun razobratSvodku(json: JSONObject): SubscriptionInfo = SubscriptionInfo(
+    name = json.optString("name"),
+    active = json.optBoolean("active"),
+    expires = json.optString("expires").takeIf { it.isNotBlank() && it != "null" },
+    limitBytes = json.optLong("limit_bytes"),
+    usedBytes = json.optLong("used_bytes"),
+    bypassPackages = buildList {
+        val arr = json.optJSONArray("bypass_packages") ?: return@buildList
+        for (i in 0 until arr.length()) arr.optString(i).takeIf { it.isNotBlank() }?.let { add(it) }
+    },
+    // Имена приходят от сервера, который узнал устройство по заголовкам.
+    // Старый сервер этих блоков не присылает вовсе — тогда остаётся null.
+    personName = json.optJSONObject("person")?.optString("name")
+        ?.takeIf { it.isNotBlank() && it != "null" },
+    deviceName = json.optJSONObject("device")?.optString("name")
+        ?.takeIf { it.isNotBlank() && it != "null" },
+    devices = parseDevices(json),
+    // блока нет = сеть комнату не раздаёт; выключенную комнату сервер тоже не присылает
+    olcrtc = json.optJSONObject("olcrtc"),
+    wbchat = json.optJSONObject("wbchat"),
+    sendLogNow = json.optBoolean("send_log_now"),
+    panel = json.optBoolean("panel"),
+    vid = json.opt("vid"),
+    reply = json.optJSONObject("reply")?.let { answer ->
+        val body = answer.optString("text")
+        if (body.isBlank()) null else ComplaintReply(
+            id = answer.optInt("id"),
+            text = body,
+            about = answer.optString("about"),
         )
+    },
+    transports = buildMap {
+        val list = json.optJSONArray("channels") ?: return@buildMap
+        for (i in 0 until list.length()) {
+            val item = list.optJSONObject(i) ?: continue
+            val name = item.optString("name")
+            val transport = item.optString("transport")
+            if (name.isNotBlank() && transport.isNotBlank()) put(name, transport)
+        }
+    },
+)
+
+/**
+ * Последняя сводка /info на диске целиком — сырой ответ сервера, адрес, по которому он
+ * получен, время и ETag. Раньше на диск попадали только двери, комната, WB и вид, и после
+ * перезапуска без сети пропадали карточка подписки, пункт панели и ответ на жалобу.
+ */
+object SvodkaDisk {
+    private const val FAYL = "svodka.json"
+
+    data class Zapis(val baza: String, val kogdaMs: Long, val etag: String?, val tekst: String)
+
+    private fun fayl(): java.io.File = java.io.File(io.nekohasekai.sfa.Application.application.filesDir, FAYL)
+
+    fun zapisat(baza: String, tekst: String, etag: String?) {
+        runCatching {
+            val j = JSONObject().put("baza", baza).put("kogda", System.currentTimeMillis()).put("tekst", tekst)
+            if (!etag.isNullOrBlank()) j.put("etag", etag)
+            val tmp = java.io.File(fayl().parentFile, "$FAYL.tmp")
+            tmp.writeText(j.toString())
+            if (!tmp.renameTo(fayl())) {
+                fayl().writeText(tmp.readText())
+                tmp.delete()
+            }
+        }
+    }
+
+    fun prochest(): Zapis? = runCatching { razobrat(fayl().readText()) }.getOrNull()
+
+    internal fun razobrat(tekst: String): Zapis? = runCatching {
+        val j = JSONObject(tekst)
+        val t = j.optString("tekst")
+        if (t.isBlank()) return@runCatching null
+        Zapis(j.optString("baza"), j.optLong("kogda"), j.optString("etag").takeIf { it.isNotBlank() }, t)
     }.getOrNull()
 }
 

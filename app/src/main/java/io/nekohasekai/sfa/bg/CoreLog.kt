@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import io.nekohasekai.libbox.LogEntry
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.database.Settings
@@ -151,6 +153,9 @@ object CoreLog {
     internal const val UZEL_POROG = 3
     private const val UZEL_OKNO_MS = 30 * 1000L
 
+    /** [UZEL_POROG] с пульта (`uzel.porog_otkazov`); без пульта — константа. */
+    internal fun uzelPorog(): Int = io.nekohasekai.sfa.bg.pult.Pult.int("uzel.porog_otkazov", UZEL_POROG)
+
     @Volatile
     private var uzelOknoNachalo = 0L
 
@@ -172,13 +177,14 @@ object CoreLog {
     }
 
     internal fun otkazUzla(line: String, teper: Long) {
+        if (Pult.vykl("otkazy_uzla")) return
         val teg = vyhodUzla(line) ?: return
-        if (teper - uzelOknoNachalo >= UZEL_OKNO_MS) {
+        if (teper - uzelOknoNachalo >= Pult.long("uzel.uzel_okno_ms", UZEL_OKNO_MS)) {
             uzelOknoNachalo = teper
             uzelOtkazov = 0
         }
         uzelOtkazov++
-        if (uzelOtkazov == UZEL_POROG) {
+        if (uzelOtkazov == uzelPorog()) {
             thread(name = "otkazy-uzla", isDaemon = true) { AutoMode.otkazyUzla(teg) }
         }
     }
@@ -285,15 +291,15 @@ object CoreLog {
         bystroOtkazov++
         if (shtorm(bystroOtkazov, bystroSoed)) {
             // Шторм в коротком окне — и повод спросить режим сети. Поток журнала не держим.
-            thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("шторм за ${BYSTRO_OKNO_MS / 1000} с") }
-            podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${BYSTRO_OKNO_MS / 1000} с")
+            thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("шторм за ${Pult.long("corelog.bystro_okno_ms", BYSTRO_OKNO_MS) / 1000} с") }
+            podnyatTrevogu(teper, dolyaOtkazov(bystroOtkazov, bystroSoed), bystroOtkazov, "за ${Pult.long("corelog.bystro_okno_ms", BYSTRO_OKNO_MS) / 1000} с")
         }
     }
 
     private fun uchest(line: String) {
         val teper = System.currentTimeMillis()
         if (oknoNachalo == 0L) oknoNachalo = teper
-        if (teper - bystroNachalo >= BYSTRO_OKNO_MS) {
+        if (teper - bystroNachalo >= Pult.long("corelog.bystro_okno_ms", BYSTRO_OKNO_MS)) {
             bystroNachalo = teper
             bystroSoed = 0
             bystroOtkazov = 0
@@ -350,7 +356,7 @@ object CoreLog {
                 runCatching { Zapisi.otkaz(imya, adres, port, kod, vyhod, 0) }
             }
         }
-        if (teper - oknoNachalo < OKNO_SVODKI_MS) return
+        if (teper - oknoNachalo < Pult.long("corelog.okno_svodki_ms", OKNO_SVODKI_MS)) return
         zakrytOkno(teper)
     }
 
@@ -389,7 +395,7 @@ object CoreLog {
         // текстовую строку регулярным выражением ему больше не нужно.
         runCatching {
             Zapisi.svodka(
-                okno = (OKNO_SVODKI_MS / 1000L).toInt(),
+                okno = (Pult.long("corelog.okno_svodki_ms", OKNO_SVODKI_MS) / 1000L).toInt(),
                 soed = soed,
                 otkazy = otk,
                 kody = kodyDlyaZapisi,
@@ -401,7 +407,7 @@ object CoreLog {
         if (povodSprositRezhim(dolya, kodyDlyaZapisi)) {
             thread(name = "massovye-otkazy", isDaemon = true) { AutoMode.massovyeOtkazy("за окно $dolya%, причины $kody") }
         }
-        if (dolya >= DOLYA_TREVOGI && otk >= 10) podnyatTrevogu(teper, dolya, otk, "за окно")
+        if (dolya >= Pult.int("corelog.dolya_trevogi", DOLYA_TREVOGI) && otk >= 10) podnyatTrevogu(teper, dolya, otk, "за окно")
     }
 
     /**
@@ -413,9 +419,9 @@ object CoreLog {
      * пропускает, а дальше не пускает.
      */
     internal fun povodSprositRezhim(dolya: Int, kody: Map<String, Int>): Boolean {
-        if (dolya < DOLYA_TREVOGI) return false
+        if (dolya < Pult.int("corelog.dolya_trevogi", DOLYA_TREVOGI)) return false
         val schitaem = kody.filterKeys { it != "otkaz_soedineniya" && it != "imya_ne_reshilos" }.values.sum()
-        return schitaem >= POVOD_MIN_OTKAZOV
+        return schitaem >= Pult.int("corelog.povod_min_otkazov", POVOD_MIN_OTKAZOV)
     }
 
     /** Сколько отказов в окне нужно, чтобы стоило спрашивать режим сети. */
@@ -431,11 +437,11 @@ object CoreLog {
      * Доля нужна, чтобы сотня отказов на десятках тысяч живых соединений тревогой не была.
      */
     internal fun shtorm(otkazov: Int, soed: Int): Boolean =
-        otkazov == BYSTRO_POROG && dolyaOtkazov(otkazov, soed) >= BYSTRO_DOLYA
+        otkazov == Pult.int("corelog.bystro_porog", BYSTRO_POROG) && dolyaOtkazov(otkazov, soed) >= Pult.int("corelog.bystro_dolya", BYSTRO_DOLYA)
 
     /** Одна тревога на оба окна: короткое и десятиминутное делят общий предел частоты. */
     private fun podnyatTrevogu(teper: Long, dolya: Int, otk: Int, gde: String) {
-        if (teper - trevogaBylaV <= TREVOGA_NE_CHASHCHE_MS) return
+        if (teper - trevogaBylaV <= Pult.long("corelog.trevoga_ne_chashche_ms", TREVOGA_NE_CHASHCHE_MS)) return
         trevogaBylaV = teper
         KLog.w(TAG, "отказов $dolya% $gde — отправляю журнал, не дожидаясь ночи")
         runCatching { Zapisi.perehod("trevoga", "отказов $dolya% $gde, всего $otk") }

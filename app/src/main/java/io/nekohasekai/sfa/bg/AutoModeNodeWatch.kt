@@ -32,6 +32,8 @@ internal class AutoModeNodeWatch(
     private val staleMillis: Long = STALE_MILLIS,
     private val liveFreshMillis: Long = LIVE_FRESH_MILLIS,
     private val returnAfterMillis: Long = RETURN_AFTER_MILLIS,
+    /** Пауза возврата, читаемая на каждом вопросе (пульт, `uzel.vozvrat_na_pervyy_min`); null — [returnAfterMillis]. */
+    private val returnAfterOf: (() -> Long)? = null,
 ) {
     /** Чем кончился провал текущего узла. */
     enum class Death {
@@ -168,7 +170,7 @@ internal class AutoModeNodeWatch(
             primaryOkSince = now
             return Return.Started
         }
-        return if (now - primaryOkSince >= returnAfterMillis) Return.Due else Return.Waiting
+        return if (now - primaryOkSince >= (returnAfterOf?.invoke() ?: returnAfterMillis)) Return.Due else Return.Waiting
     }
 
     /** Стоим на запасном, первый узел не ответил: пауза возврата сначала. */

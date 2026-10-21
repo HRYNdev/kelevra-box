@@ -6,7 +6,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.work.Constraints
@@ -18,10 +17,12 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.R
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.bg.ServiceNotification
 import io.nekohasekai.sfa.compose.MainActivity
 import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.update.IshodUstanovki
+import io.nekohasekai.sfa.update.ObnovleniyaPult
 import io.nekohasekai.sfa.update.OtkazUstanovki
 import io.nekohasekai.sfa.update.UpdateInfo
 import io.nekohasekai.sfa.update.UpdateState
@@ -57,13 +58,13 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
             // Окно «Есть обновление» показывается раз на версию и при нажатии «Обновить»
             // считается показанным. После отказа оно должно появиться снова.
             Settings.lastShownUpdateVersion = 0
-            val minut = IshodUstanovki.zaderzhkaMinut(otkazov, prichina)
+            val minut = IshodUstanovki.zaderzhkaMinut(otkazov, prichina, ObnovleniyaPult.napominanieMinut())
             if (minut == null) {
-                Log.w(TAG, "повтор обновления не ставлю: версия ${info.versionName}, причина $prichina, отказов этой причины $otkazov")
+                KLog.w(TAG, "повтор обновления не ставлю: версия ${info.versionName}, причина $prichina, отказов этой причины $otkazov")
                 return
             }
             zaplanirovat(context, minut)
-            Log.i(TAG, "повтор обновления через $minut мин: версия ${info.versionName}, причина $prichina, отказов этой причины $otkazov")
+            KLog.i(TAG, "повтор обновления через $minut мин: версия ${info.versionName}, причина $prichina, отказов этой причины $otkazov")
         }
 
         /** Поставить разовую работу повтора; прежняя заменяется, так что в очереди она одна. */
@@ -85,45 +86,29 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
         }
 
         /**
-         * Уведомление «Доступно обновление» для тех, кто не открывает приложение: звать при находке
-         * новой версии. Не чаще раза в сутки; уведомления выключены или версия уже стоит: ничего.
+         * «Обновление готово — нажмите, чтобы установить»: файл уже скачан и проверен, тап
+         * открывает приложение и сразу передаёт файл системе (коммит сессии; где нужно —
+         * системное окно подтверждения). Уведомление постоянное: висит до установки, его
+         * снимает [sbrosit] по успеху. Раньше вместо него было «Доступно обновление» не чаще
+         * раза в сутки, и человек без тихой установки мог не обновиться неделями.
          */
-        fun uvedomitONovoy(context: Context, info: UpdateInfo) {
+        fun pokazatGotovo(context: Context, info: UpdateInfo) {
             if (info.versionCode <= BuildConfig.VERSION_CODE) return
-            val seychas = System.currentTimeMillis()
-            if (!IshodUstanovki.mozhnoUvedomit(seychas, Settings.updateNotifiedAt)) return
-            if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                manager.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "Обновления приложения", NotificationManager.IMPORTANCE_DEFAULT),
-                )
-            }
-            val intent = Intent(context, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pendingIntent = PendingIntent.getActivity(
-                context,
-                NOTIFICATION_ID,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or ServiceNotification.flags,
-            )
-            val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_menu)
-                .setContentTitle("Доступно обновление")
-                .setContentText("Версия ${info.versionName}")
-                .setContentIntent(pendingIntent)
-                .setAutoCancel(true)
-                .setCategory(NotificationCompat.CATEGORY_REMINDER)
-            runCatching {
-                NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build())
-                Settings.updateNotifiedAt = seychas
-            }.onFailure { Log.w(TAG, "уведомление об обновлении не показано: ${it.message}") }
+            pokazat(context, "Обновление готово — нажмите, чтобы установить", "Версия ${info.versionName}")
+            runCatching { Settings.updateNotifiedAt = System.currentTimeMillis() }
         }
 
         private fun napomnit(context: Context, info: UpdateInfo) {
+            pokazat(
+                context,
+                "Обновление ждёт установки",
+                "Версия ${info.versionName} не установилась. Нажмите, чтобы установить.",
+            )
+        }
+
+        private fun pokazat(context: Context, zagolovok: String, tekst: String) {
             if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
-                Log.i(TAG, "напоминание об обновлении не показано: уведомления выключены")
+                KLog.i(TAG, "уведомление об обновлении не показано: уведомления выключены")
                 return
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -133,6 +118,7 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
                 )
             }
             val intent = Intent(context, MainActivity::class.java).apply {
+                action = ObnovleniyaPult.ACTION_USTANOVIT
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             val pendingIntent = PendingIntent.getActivity(
@@ -143,13 +129,16 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
             )
             val builder = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_menu)
-                .setContentTitle("Обновление ждёт установки")
-                .setContentText("Версия ${info.versionName} не установилась. Нажмите, чтобы попробовать ещё раз.")
+                .setContentTitle(zagolovok)
+                .setContentText(tekst)
                 .setContentIntent(pendingIntent)
-                .setAutoCancel(true)
+                // Не снимается тапом и смахиванием: снимает его только установка ([sbrosit]).
+                .setAutoCancel(false)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
                 .setCategory(NotificationCompat.CATEGORY_REMINDER)
             runCatching { NotificationManagerCompat.from(context).notify(NOTIFICATION_ID, builder.build()) }
-                .onFailure { Log.w(TAG, "напоминание об обновлении не показано: ${it.message}") }
+                .onFailure { KLog.w(TAG, "уведомление об обновлении не показано: ${it.message}") }
         }
     }
 
@@ -159,29 +148,35 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
             UpdateState.updateInfo.value
         }
         if (info == null || info.versionCode <= BuildConfig.VERSION_CODE) {
-            Log.i(TAG, "повтор обновления не нужен: новая версия уже стоит или не найдена")
+            KLog.i(TAG, "повтор обновления не нужен: новая версия уже стоит или не найдена")
             sbrosit(applicationContext)
             return Result.success()
         }
-        Log.i(TAG, "повтор обновления: версия ${info.versionName}")
+        KLog.i(TAG, "повтор обновления: версия ${info.versionName}")
         val apkFile = try {
             ApkDownloader().use { it.download(info.downloadUrl, info) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "повтор обновления: скачать не вышло: ${e.message}")
+            KLog.w(TAG, "повтор обновления: скачать не вышло: ${e.message}")
+            // Сборка из пульта, не сошедшаяся с подписанным хешем, не повторяется вовсе.
+            if (ObnovleniyaPult.posleSboya(info, e) && e is io.nekohasekai.sfa.update.FaylNeGoden) {
+                UpdateState.setUpdate(null)
+                sbrosit(applicationContext)
+                return Result.success()
+            }
             posleOtkaza(applicationContext, info, OtkazUstanovki.DRUGOE)
             return Result.success()
         }
-        if (Settings.silentInstallEnabled && ApkInstaller.canSilentInstall()) {
-            Log.i(TAG, "повтор обновления: ставлю без подтверждения")
+        if (ObnovleniyaPult.tiho(Settings.silentInstallEnabled) && ApkInstaller.canSilentInstall()) {
+            KLog.i(TAG, "повтор обновления: ставлю без подтверждения")
             UpdateState.setInstallStatus(UpdateState.InstallStatus.Installing)
             try {
                 ApkInstaller.install(applicationContext, apkFile)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                Log.w(TAG, "повтор обновления: установка не запустилась: ${e.message}")
+                KLog.w(TAG, "повтор обновления: установка не запустилась: ${e.message}")
                 posleOtkaza(applicationContext, info, OtkazUstanovki.DRUGOE)
             }
             return Result.success()
@@ -189,8 +184,9 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
         napomnit(applicationContext, info)
         // Без тихой установки версию ставит только человек. Напоминание повторяется раз в
         // сутки, пока версия не встанет: успех установки снимает работу через sbrosit.
-        zaplanirovat(applicationContext, IshodUstanovki.NAPOMINANIE_MINUT)
-        Log.i(TAG, "следующее напоминание об обновлении через ${IshodUstanovki.NAPOMINANIE_MINUT} мин")
+        val napominanie = ObnovleniyaPult.napominanieMinut()
+        zaplanirovat(applicationContext, napominanie)
+        KLog.i(TAG, "следующее напоминание об обновлении через $napominanie мин")
         return Result.success()
     }
 }

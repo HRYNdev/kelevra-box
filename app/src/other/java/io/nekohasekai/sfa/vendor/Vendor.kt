@@ -105,7 +105,13 @@ object Vendor : VendorInterface {
 
     override val updateSources = listOf(UpdateSource.GITHUB, UpdateSource.FDROID)
 
-    override fun checkUpdateAsync(): UpdateInfo? = when (UpdateSource.fromString(Settings.updateSource)) {
+    override fun checkUpdateAsync(): UpdateInfo? = when (val ist = io.nekohasekai.sfa.update.ObnovleniyaPult.vybratSeychas(io.nekohasekai.sfa.BuildConfig.VERSION_CODE)) {
+        is io.nekohasekai.sfa.update.ObnovleniyaPult.Istochnik.IzPulta -> ist.info
+        io.nekohasekai.sfa.update.ObnovleniyaPult.Istochnik.Nichego -> null
+        io.nekohasekai.sfa.update.ObnovleniyaPult.Istochnik.Vypuski -> proveritVypuski()
+    }
+
+    private fun proveritVypuski(): UpdateInfo? = when (UpdateSource.fromString(Settings.updateSource)) {
         UpdateSource.FDROID -> checkFDroidUpdate(Application.application)
         UpdateSource.GITHUB -> {
             val track = UpdateTrack.fromString(Settings.updateTrack)
@@ -117,6 +123,10 @@ object Vendor : VendorInterface {
 
     override fun scheduleAutoUpdate() {
         UpdateWorker.schedule(io.nekohasekai.sfa.Application.application)
+    }
+
+    override fun proveritObnovlenieSeychas() {
+        UpdateWorker.seychas(io.nekohasekai.sfa.Application.application)
     }
 
     override suspend fun verifySilentInstallMethod(method: String): Boolean {

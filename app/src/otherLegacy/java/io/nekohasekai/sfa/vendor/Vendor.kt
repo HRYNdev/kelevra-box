@@ -101,7 +101,13 @@ object Vendor : VendorInterface {
 
     override val hasCustomUpdate = true
 
-    override fun checkUpdateAsync(): UpdateInfo? {
+    override fun checkUpdateAsync(): UpdateInfo? = when (val ist = io.nekohasekai.sfa.update.ObnovleniyaPult.vybratSeychas(io.nekohasekai.sfa.BuildConfig.VERSION_CODE)) {
+        is io.nekohasekai.sfa.update.ObnovleniyaPult.Istochnik.IzPulta -> ist.info
+        io.nekohasekai.sfa.update.ObnovleniyaPult.Istochnik.Nichego -> null
+        io.nekohasekai.sfa.update.ObnovleniyaPult.Istochnik.Vypuski -> proveritVypuski()
+    }
+
+    private fun proveritVypuski(): UpdateInfo? {
         val track = UpdateTrack.fromString(Settings.updateTrack)
         return GitHubUpdateChecker().use { checker ->
             checker.checkUpdate(track, Settings.githubToken)
@@ -110,6 +116,10 @@ object Vendor : VendorInterface {
 
     override fun scheduleAutoUpdate() {
         UpdateWorker.schedule(io.nekohasekai.sfa.Application.application)
+    }
+
+    override fun proveritObnovlenieSeychas() {
+        UpdateWorker.seychas(io.nekohasekai.sfa.Application.application)
     }
 
     override suspend fun verifySilentInstallMethod(method: String): Boolean = when (method) {

@@ -54,7 +54,7 @@ object Aktivatsiya {
     }
 
     /** `POST /k/<код>/ustroystvo`; null, если дверь не ответила. */
-    private fun aktivirovat(dver: String, kod: String): Priglashenie.Otvet? = try {
+    internal fun aktivirovat(dver: String, kod: String): Priglashenie.Otvet? = try {
         val conn = URL(Kelevra.adresSeti("https://$dver/k/$kod/ustroystvo")).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -78,7 +78,7 @@ object Aktivatsiya {
     }
 
     /** Старый путь: дверь знает код, если `GET /k/<код>/info` вернул 200. */
-    private fun znaetKod(dver: String, kod: String): Boolean = try {
+    internal fun znaetKod(dver: String, kod: String): Boolean = try {
         val conn = URL(Kelevra.adresSeti("https://$dver/k/$kod/info")).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10000

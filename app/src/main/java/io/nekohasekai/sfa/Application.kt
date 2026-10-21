@@ -67,6 +67,9 @@ class Application : Application() {
         // AndroidRuntime идёт только в logcat, а его прошивки Huawei/Honor режут.
         // Ставится поверх сборщика крашей и зовёт его следом.
         KLog.ustanovitLovushku()
+        // Исполнитель команд пульта — сразу: фоновая работа может принять пульт раньше,
+        // чем фон ниже прочитает его с диска.
+        io.nekohasekai.sfa.bg.pult.Pult.ispolnitel = io.nekohasekai.sfa.bg.pult.PultIspolnitel
 
         AppLifecycleObserver.register(this)
 
@@ -95,6 +98,11 @@ class Application : Application() {
             // дважды подряд). Здесь же поход отложен и не роняет старт.
             runCatching { PrivilegeSettingsClient.register(this@Application) }
             initialize(baseDir, workingDir, tempDir)
+            // Пульт с диска — до расписаний: период профиля и журнала читаются из него.
+            // filesDir — шифрованное хранилище, поэтому здесь, а не в onCreate.
+            runCatching { io.nekohasekai.sfa.bg.pult.Pult.zagruzit(baseDir) }.onFailure { KLog.w("KelevraPult", "пульт с диска не поднялся: ${it.message}") }
+            // Последняя сводка /info — для старта без сети (карточка, панель, ответ на жалобу).
+            runCatching { io.nekohasekai.sfa.compose.screen.home.SubscriptionRefresh.podnyatSDiska() }
             UpdateProfileWork.reconfigureUpdater()
             // Суточная отправка логов: ставится здесь же, в фоне и после Room —
             // тумблер лежит в настройках, а их до разблокировки читать нельзя.

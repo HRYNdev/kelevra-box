@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import android.os.SystemClock
 
 /**
@@ -28,7 +30,7 @@ object WbChatWatchdog {
     private const val TICK_MILLIS = 1_000L
 
     /** Пауза перед очередным подъёмом после [fails] неудач подряд. */
-    internal fun pauseAfter(fails: Int): Long = if (fails >= FAILS_BEFORE_SLOW) SLOW_PAUSE_MILLIS else RESTART_PAUSE_MILLIS
+    internal fun pauseAfter(fails: Int): Long = if (fails >= Pult.int("wb.storozh.fails_before_slow", FAILS_BEFORE_SLOW)) Pult.long("wb.storozh.slow_pause_millis", SLOW_PAUSE_MILLIS) else Pult.long("wb.storozh.restart_pause_millis", RESTART_PAUSE_MILLIS)
 
     private val lock = Any()
 
@@ -114,7 +116,7 @@ object WbChatWatchdog {
                     val lived = SystemClock.elapsedRealtime() - WbChatCore.readyAt
                     WbChatCore.noteExited()
                     // Долгий звонок, кончившийся сам, — обычный перезапуск, не «неудача подряд».
-                    fails = if (lived >= HEALTHY_MILLIS) 0 else fails + 1
+                    fails = if (lived >= Pult.long("wb.storozh.healthy_millis", HEALTHY_MILLIS)) 0 else fails + 1
                     notBefore = SystemClock.elapsedRealtime() + pauseAfter(fails)
                     KLog.i(TAG, "ядро WB Chat вышло, прожив ${lived / 1000} с — перезапуск через ${pauseAfter(fails) / 1000} с")
                 }

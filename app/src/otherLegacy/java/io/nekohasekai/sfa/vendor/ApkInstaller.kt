@@ -21,7 +21,7 @@ object ApkInstaller {
         ) {
             return InstallMethod.ROOT
         }
-        return if (Settings.silentInstallEnabled) {
+        return if (io.nekohasekai.sfa.update.ObnovleniyaPult.tiho(Settings.silentInstallEnabled)) {
             val method = Settings.silentInstallMethod
             if (method == "SHIZUKU") InstallMethod.ROOT else InstallMethod.valueOf(method)
         } else {
