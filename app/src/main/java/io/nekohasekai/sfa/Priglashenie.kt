@@ -1,5 +1,6 @@
 package io.nekohasekai.sfa
 
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 
 /**
@@ -12,6 +13,16 @@ object Priglashenie {
     const val TEKST_LIMIT = "Достигнут лимит устройств"
     private const val DLINA_KODA = 12
     private val DVER = Regex("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:\\d{1,5})?$")
+
+    /**
+     * Сроки входа устройства (первый проход [vybratDver]). Дверь, которую режут по дороге или которая
+     * лежит, не должна держать вход: иначе человек старой системы ждал бы полный срок чужой двери.
+     * Соединение (TCP и TLS) ждём [SROK_SOEDINENIYA_MS], весь запрос — [SROK_OTVETA_MS], весь первый
+     * проход по всем дверям — [SROK_PERVOGO_PROHODA_MS]. Старый путь идёт прежним, полным сроком.
+     */
+    const val SROK_SOEDINENIYA_MS = 5_000L
+    const val SROK_OTVETA_MS = 10_000L
+    const val SROK_PERVOGO_PROHODA_MS = 12_000L
 
     // ---- код ----
 
@@ -63,6 +74,44 @@ object Priglashenie {
 
     fun dverGodna(dver: String): Boolean = DVER.matches(dver)
 
+    private val PUT_KLYUCHA = Regex("^/u/([A-Za-z0-9_-]{4,64})/?$")
+    private val HOST_ASCII = Regex("^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
+    private val IPV6 = Regex("^\\[[0-9a-f:.]+(%[0-9a-z._~-]+)?]$")
+    private val PORT = Regex("^(:\\d{1,5})?$")
+
+    /**
+     * Адрес устройства из ответа входа в одном виде: `https://<хост>/u/<ключ>`. Схема в любом регистре,
+     * хост — имя (в том числе не латиницей: приводится к xn--), IPv4 или IPv6 в скобках, с портом;
+     * параметры и якорь отбрасываются. null — не https либо путь не `/u/<ключ>`: такой адрес не вход.
+     */
+    fun adresKlyucha(profil: String): String? {
+        val s = profil.trim()
+        val i = s.indexOf("://")
+        if (i <= 0 || !s.substring(0, i).equals("https", ignoreCase = true)) return null
+        val rest = s.substring(i + 3).substringBefore('#').substringBefore('?')
+        val avtoritet = rest.substringBefore('/')
+        val klyuch = PUT_KLYUCHA.matchEntire(rest.substring(avtoritet.length))?.groupValues?.get(1) ?: return null
+        val host = normHost(avtoritet) ?: return null
+        return "https://$host/u/$klyuch"
+    }
+
+    /** Хост с портом из адреса в виде для хранения; учётные данные в адресе и мусор — null. */
+    private fun normHost(avtoritet: String): String? {
+        if (avtoritet.isEmpty() || avtoritet.contains('@')) return null
+        if (avtoritet.startsWith("[")) {
+            val ip = avtoritet.substringBefore(']') + "]"
+            val port = avtoritet.substring(ip.length.coerceAtMost(avtoritet.length))
+            val ipMal = ip.lowercase()
+            return if (IPV6.matches(ipMal) && PORT.matches(port)) ipMal + port else null
+        }
+        val imya = avtoritet.substringBefore(':')
+        val port = avtoritet.substring(imya.length)
+        if (!PORT.matches(port)) return null
+        val ascii = runCatching { java.net.IDN.toASCII(imya, java.net.IDN.ALLOW_UNASSIGNED) }.getOrNull()
+            ?.lowercase() ?: return null
+        return if (HOST_ASCII.matches(ascii)) ascii + port else null
+    }
+
     private fun ochistit(spisok: List<String>): List<String> =
         spisok.map { it.trim().lowercase() }.filter { dverGodna(it) }
 
@@ -94,9 +143,10 @@ object Priglashenie {
     fun razobratOtvet(status: Int, telo: String): Otvet = when (status) {
         200 -> {
             val j = runCatching { JSONObject(telo) }.getOrNull()
-            val profil = j?.optString("profil")?.trim().orEmpty()
-            val razobrano = SubscriptionLink.parse(profil)
-            if (razobrano == null || razobrano.kind != 'u') {
+            // 200 без адреса https://<хост>/u/<ключ> (пусто, общий /k/, другая схема, лишние части пути) —
+            // сбой двери, а не вход: такой адрес не сохраняется.
+            val profil = adresKlyucha(j?.optString("profil").orEmpty())
+            if (profil == null) {
                 Otvet.Sboy
             } else {
                 Otvet.Ok(profil, j?.optString("slot")?.takeIf { it.isNotBlank() })
@@ -130,29 +180,53 @@ object Priglashenie {
     }
 
     /**
-     * Обходит двери по очереди. [aktivaciya] возвращает ответ двери либо null, если дверь не ответила;
-     * [znaetKod] проверяет `GET /k/<код>/info` на двери, ответившей 404/405.
-     * Успех и лимит завершают обход сразу; дверь, знающая код по старому пути, даёт старый путь.
+     * Вход в два прохода. [aktivaciya] получает дверь и оставшийся срок первого прохода в мс и возвращает
+     * ответ двери на `POST /k/<код>/ustroystvo` либо null, если дверь не ответила; [znaetKod] проверяет
+     * старый путь `GET /k/<код>/info`.
+     *
+     * Первый проход — вход устройства у дверей по порядку, весь не дольше [srokPervogoProhodaMs]: адрес
+     * /u/<ключ> или лимит завершают обход сразу. Только если ни одна дверь устройство не завела, второй
+     * проход — старый путь: сперва у дверей, ответивших 404/405, потом у тех, до кого первый проход не
+     * дошёл за свой срок, последними — у не ответивших; в каждой группе в исходном порядке.
+     *
+     * Первый проход по очереди, а не ко всем дверям сразу: двери одной сети заводят устройство в одном
+     * мозге, и каждое заведение выдаёт новый ключ — одновременные входы оставили бы уже заменённый ключ.
+     *
+     * Почему не дверь за дверью. Старый сервер пересылает старый путь переехавшего человека в новую
+     * сеть, а вход устройства не пересылает (404). При обходе по одной двери первая же отдала бы
+     * переехавшему общий /k/<код>, и телефон жил бы мимо ключа устройства — без лимита устройств и
+     * отключения по одному. Человек старой системы новой дверью не узнан (404) и остаётся, где был.
+     *
      * 404 хотя бы от одной двери и ни одной знающей: код не найден; ответов нет вовсе: нет связи.
      */
     suspend fun vybratDver(
         dveri: List<String>,
-        aktivaciya: suspend (String) -> Otvet?,
+        aktivaciya: suspend (dver: String, srokMs: Long) -> Otvet?,
         znaetKod: suspend (String) -> Boolean,
+        srokPervogoProhodaMs: Long = SROK_PERVOGO_PROHODA_MS,
     ): Itog {
-        var otvetili404 = false
+        val starymPutem = mutableListOf<String>()
+        val neSprosheny = mutableListOf<String>()
+        val molchali = mutableListOf<String>()
+        val konec = System.nanoTime() + srokPervogoProhodaMs * 1_000_000
         for (dver in dveri) {
-            when (val o = aktivaciya(dver)) {
-                null, Otvet.Sboy -> {}
+            val ostalos = (konec - System.nanoTime()) / 1_000_000
+            if (ostalos <= 0) {
+                neSprosheny += dver
+                continue
+            }
+            when (val o = withTimeoutOrNull(ostalos) { aktivaciya(dver, ostalos) }) {
+                null -> molchali += dver
+                Otvet.Sboy -> {}
                 is Otvet.Ok -> return Itog.Novyj(dver, o.profil)
                 is Otvet.Limit -> return Itog.Limit(o.tekst)
-                Otvet.NetProtokola -> {
-                    if (znaetKod(dver)) return Itog.Staryj(dver)
-                    otvetili404 = true
-                }
+                Otvet.NetProtokola -> starymPutem += dver
             }
         }
-        return if (otvetili404) Itog.NeNajden else Itog.NetSvyazi
+        for (dver in starymPutem + neSprosheny + molchali) {
+            if (znaetKod(dver)) return Itog.Staryj(dver)
+        }
+        return if (starymPutem.isNotEmpty()) Itog.NeNajden else Itog.NetSvyazi
     }
 
     // ---- устройство и профили ----
