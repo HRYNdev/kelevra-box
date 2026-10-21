@@ -146,8 +146,9 @@ object SubscriptionRefresh {
             primenitBlok(loaded.olcrtc, OlcRtcParams::applyServer)
             // WB Chat — свой блок верхнего уровня, по тому же правилу.
             primenitBlok(loaded.wbchat, io.nekohasekai.sfa.bg.WbChatParams::applyServer)
-            // Внешний вид: ответ пришёл без блока — снят, с блоком — применяем и помним.
-            io.nekohasekai.sfa.compose.theme.Vid.izSvodki(loaded.vid)
+            // Внешний вид — по тому же правилу: блок — применяем и помним, явный null — снят (встроенный),
+            // ключа нет — держим прежний (выдача при сбое vid.json шлёт клиенту пульта сводку без ключа).
+            primenitBlok(loaded.vid) { io.nekohasekai.sfa.compose.theme.Vid.izSvodki(it) }
             _info.value = loaded
             // Сервер попросил журнал, не дожидаясь ночи — отдаём сразу. Метку своей
             // просьбы он снимает по факту приёма файла, поэтому повторить её он сможет,

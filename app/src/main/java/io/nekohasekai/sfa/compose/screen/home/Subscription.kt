@@ -100,10 +100,10 @@ data class SubscriptionInfo(
      */
     val devices: List<SubscriptionDevice> = emptyList(),
     /**
-     * Внешний вид с сервера — поле `vid` как есть (разбирает [io.nekohasekai.sfa.compose.theme.Vid]).
-     * null — сервер блока не прислал: старый сервер или вид снят.
+     * Внешний вид с сервера (разбирает [io.nekohasekai.sfa.compose.theme.Vid]) по правилу [BlokSvodki]:
+     * блок — применить, явный `"vid": null` — сервер снял вид, ключа нет — держать прежний (сбой на выдаче).
      */
-    val vid: Any? = null,
+    val vid: BlokSvodki = BlokSvodki.Molchit,
     /**
      * Сводка не свежая, а поднята с диска (старт без сети или ответ 304): по ней ничего
      * не исполняется — просьбы сервера уже исполнены, когда она пришла впервые.
@@ -286,7 +286,7 @@ fun razobratSvodku(json: JSONObject): SubscriptionInfo = SubscriptionInfo(
     wbchat = blokSvodki(json, "wbchat"),
     sendLogNow = json.optBoolean("send_log_now"),
     panel = json.optBoolean("panel"),
-    vid = json.opt("vid"),
+    vid = blokSvodki(json, "vid"),
     reply = json.optJSONObject("reply")?.let { answer ->
         val body = answer.optString("text")
         if (body.isBlank()) null else ComplaintReply(

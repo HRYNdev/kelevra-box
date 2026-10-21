@@ -57,6 +57,22 @@ class BlokSvodkiTest {
     }
 
     @Test
+    fun `вид - ключа нет, держим прежний вид`() {
+        val info = razobratSvodku(JSONObject("""{"name":"Вова","olcrtc":$komnata}"""))
+        assertEquals(BlokSvodki.Molchit, info.vid)
+        assertTrue(vyzovy(info.vid).isEmpty())
+    }
+
+    @Test
+    fun `вид - явный null снимает вид, блок применяется`() {
+        val snyat = razobratSvodku(JSONObject("""{"name":"Вова","vid":null}"""))
+        assertEquals(BlokSvodki.Vyklyuchen, snyat.vid)
+        assertNull(vyzovy(snyat.vid).single())
+        val est = razobratSvodku(JSONObject("""{"name":"Вова","vid":{"versiya":3,"teksty":{"k":"t"}}}"""))
+        assertEquals(3, vyzovy(est.vid).single()!!.optInt("versiya"))
+    }
+
+    @Test
     fun `старый сервер без блока и старая запись диска разбираются без падения`() {
         // Запись диска, сделанная до этой правки (с блоком), поднимается как раньше.
         val sDiska = razobratSvodku(JSONObject("""{"name":"Вова","olcrtc":{"room_id":"r"}}""")).copy(izKesha = true)
