@@ -33,10 +33,8 @@ object PultIspolnitel : Pult.Ispolnitel {
     private const val TAG_DIAG = "KelevraDiagnostika"
 
     override suspend fun vypolnit(z: PultYadro.Zadanie): String = when (z.chto) {
-        "prishli_zhurnal" -> {
-            LogUploadWork.otpravitSeychas("по команде пульта", srazu = true)
-            "ok"
-        }
+        // `ok` — журнал принят сервером, как у Desktop (не «поставлен в очередь»).
+        "prishli_zhurnal" -> LogUploadWork.otpravitDlyaPulta("по команде пульта")
         "obnovi_profil" -> {
             UpdateProfileWork.seychas()
             "ok"
@@ -52,8 +50,7 @@ object PultIspolnitel : Pult.Ispolnitel {
         }
         "diagnostika" -> {
             diagnostika().forEach { KLog.i(TAG_DIAG, it) }
-            LogUploadWork.otpravitSeychas("по команде пульта: диагностика", srazu = true)
-            "ok"
+            LogUploadWork.otpravitDlyaPulta("по команде пульта: диагностика")
         }
         "proba" -> proba(z.param.optString("cel"))
         else -> "ne_umeyu"

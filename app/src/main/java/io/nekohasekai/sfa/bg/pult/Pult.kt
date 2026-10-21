@@ -156,23 +156,30 @@ object Pult {
         for (z in itog.zadaniya) zapustit(z)
     }
 
-    private fun zapustit(z: PultYadro.Zadanie) {
+    /**
+     * Журнальные команды ([PultYadro.BEZ_OCHEREDI]) идут мимо общей очереди: они ждут ответа
+     * сервера до 3 мин, и «перейди на ключ» за ними стоял бы минутами. Друг с другом им
+     * толкаться нечего — отправку журнала разводит свой замок.
+     */
+    internal fun zapustit(z: PultYadro.Zadanie) {
         val isp = ispolnitel
         if (isp == null) {
             zavershit(z.id, "oshibka-net_ispolnitelya")
             return
         }
         scope.launch {
-            ochered.withLock {
-                KLog.i(TAG, "команда ${PultYadro.chistyyId(z.id)}: ${z.chto} — выполняю")
-                val itog = runCatching { isp.vypolnit(z) }.getOrElse {
-                    KLog.w(TAG, "команда ${z.chto} сорвалась: ${io.nekohasekai.sfa.Kelevra.maskCode(it.toString())}")
-                    "oshibka-" + (it.javaClass.simpleName.lowercase().take(24))
-                }
-                KLog.i(TAG, "команда ${PultYadro.chistyyId(z.id)}: ${z.chto} — $itog")
-                zavershit(z.id, itog)
-            }
+            if (z.chto in PultYadro.BEZ_OCHEREDI) vypolnitOdnu(isp, z) else ochered.withLock { vypolnitOdnu(isp, z) }
         }
+    }
+
+    private suspend fun vypolnitOdnu(isp: Ispolnitel, z: PultYadro.Zadanie) {
+        KLog.i(TAG, "команда ${PultYadro.chistyyId(z.id)}: ${z.chto} — выполняю")
+        val itog = runCatching { isp.vypolnit(z) }.getOrElse {
+            KLog.w(TAG, "команда ${z.chto} сорвалась: ${io.nekohasekai.sfa.Kelevra.maskCode(it.toString())}")
+            "oshibka-" + (it.javaClass.simpleName.lowercase().take(24))
+        }
+        KLog.i(TAG, "команда ${PultYadro.chistyyId(z.id)}: ${z.chto} — $itog")
+        zavershit(z.id, itog)
     }
 
     fun zavershit(id: String, itog: String) {
