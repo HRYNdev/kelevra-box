@@ -5,6 +5,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
 
 /**
  * Квитанция пульта на «пришли журнал»: `ok` значит «сервер принял», как у Desktop,
@@ -48,5 +50,44 @@ class ZhurnalKvitanciyaTest {
         assertFalse(LogUploadWork.razobrano(ИтогПопытки.Отвергнуто))
         assertFalse(LogUploadWork.razobrano(ИтогПопытки.Сбой))
         assertFalse(LogUploadWork.razobrano(ИтогПопытки.НетСвязи))
+    }
+
+    /** Подстраховка WorkManager ставится до попытки и ровно один раз — и при неудаче тоже. */
+    @Test
+    fun podstrahovka_do_popytki_i_odna() = runBlocking {
+        for (ishod in ИтогПопытки.entries) {
+            val poryadok = mutableListOf<String>()
+            val slovo = LogUploadWork.otpravitDlyaPulta(
+                "тест",
+                srokMs = 5_000,
+                podstrahovka = { poryadok += "ochered" },
+                poprobovat = { poryadok += "popytka"; ishod },
+            )
+            assertEquals("$ishod", listOf("ochered", "popytka"), poryadok)
+            assertEquals(LogUploadWork.slovoKvitancii(ishod), slovo)
+        }
+    }
+
+    /** Сервер молчит дольше срока — квитанция oshibka-set, лишней постановки нет. */
+    @Test
+    fun ne_dozhdalis__oshibka_set() = runBlocking {
+        var postavleno = 0
+        val nikogda = CompletableDeferred<ИтогПопытки>()
+        val slovo = LogUploadWork.otpravitDlyaPulta(
+            "тест",
+            srokMs = 100,
+            podstrahovka = { postavleno++ },
+            poprobovat = { nikogda.await() },
+        )
+        nikogda.complete(ИтогПопытки.Отправлено)
+        assertEquals("oshibka-set", slovo)
+        assertEquals(1, postavleno)
+    }
+
+    /** Попытка упала исключением — до сервера не доехали. */
+    @Test
+    fun popytka_upala__oshibka_set() = runBlocking {
+        val slovo = LogUploadWork.otpravitDlyaPulta("тест", srokMs = 5_000, podstrahovka = {}, poprobovat = { error("сбой") })
+        assertEquals("oshibka-set", slovo)
     }
 }

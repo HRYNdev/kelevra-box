@@ -221,7 +221,7 @@ object LogUploadWork {
      * Повторяется, если сеть недоступна: сама задача разбирает исход и просит повтор, а
      * метку просьбы сервер снимает только по факту приёма файла.
      */
-    fun otpravitSeychas(prichina: String = "по просьбе сервера", srazu: Boolean = false) {
+    fun otpravitSeychas(prichina: String = "по просьбе сервера", srazu: Boolean = false, zaderzhkaMs: Long = 0L) {
         runCatching {
             val wm = WorkManager.getInstance(Application.application)
             // Команда пульта: прошлая просьба могла застрять в откате WorkManager (час и больше) —
@@ -242,9 +242,10 @@ object LogUploadWork {
                         RETRY_MIN_MILLIS,
                         TimeUnit.MILLISECONDS,
                     )
+                    .setInitialDelay(zaderzhkaMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
                     .build(),
             )
-            KLog.i(TAG, "журнал $prichina: поставлен в очередь")
+            KLog.i(TAG, "журнал $prichina: поставлен в очередь" + if (zaderzhkaMs > 0) " (через ${zaderzhkaMs / 1000} с)" else "")
         }.onFailure { KLog.w(TAG, "журнал $prichina не поставился", it) }
     }
 
@@ -729,17 +730,28 @@ object LogUploadWork {
      * считал журнал пришедшим, а он мог не уехать вовсе. Теперь попытка идёт сразу, и `ok`
      * значит «сервер принял». Попытка живёт отдельно от ожидания: если не уложилась в
      * [srokMs], она доезжает сама (отметки сдвинутся по факту), а квитанция — `oshibka-set`.
-     * Не принято — просьба встаёт в обычную очередь с повтором, как раньше.
+     *
+     * Подстраховка ставится ДО попытки, а не после неудачи: процесс могут заморозить или убить
+     * посреди ожидания (туннель выключен, команда пришла из фоновой работы) — тогда отправку
+     * доделает WorkManager. Ставится с KEEP (ждущая просьба, в том числе в бэкоффе, не
+     * заменяется) и с отсрочкой на срок команды, чтобы не идти вместе с этой попыткой и не
+     * считать один отказ сервера дважды в счётчик безнадёжности. Успела попытка — отложенная
+     * работа найдёт «нечего». После неудачи ничего сверх этого не ставится: повтор — обычный.
      */
-    suspend fun otpravitDlyaPulta(prichina: String, srokMs: Long = SROK_KOMANDY_MS): String {
+    internal suspend fun otpravitDlyaPulta(
+        prichina: String,
+        srokMs: Long = SROK_KOMANDY_MS,
+        podstrahovka: () -> Unit = { otpravitSeychas(prichina, zaderzhkaMs = srokMs) },
+        poprobovat: suspend () -> ИтогПопытки = { popytka() },
+    ): String {
+        podstrahovka()
         val zadacha = fon.async {
-            runCatching { popytka() }
+            runCatching { poprobovat() }
                 .onFailure { KLog.w(TAG, "журнал $prichina: попытка упала", it) }
                 .getOrDefault(ИтогПопытки.НетСвязи)
         }
         val itog = kotlinx.coroutines.withTimeoutOrNull(srokMs) { zadacha.await() }
         if (itog == null) KLog.w(TAG, "журнал $prichina: сервер не ответил за ${srokMs / 1000} с")
-        if (itog == null || !razobrano(itog)) otpravitSeychas(prichina, srazu = true)
         val slovo = slovoKvitancii(itog)
         KLog.i(TAG, "журнал $prichina: ${itog ?: "не дождался"} → $slovo")
         return slovo

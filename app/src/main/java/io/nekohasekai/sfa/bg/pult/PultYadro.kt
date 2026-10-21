@@ -52,6 +52,9 @@ object PultYadro {
         "diagnostika", "proba",
     )
 
+    /** Команды, которые ждут ответа сервера на журнал и потому идут мимо общей очереди. */
+    val BEZ_OCHEREDI = setOf("prishli_zhurnal", "diagnostika")
+
     const val IDET = "idet"
 
     data class Komanda(val id: String, val chto: String, val doMs: Long?, val doBityy: Boolean, val param: JSONObject)
