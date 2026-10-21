@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg.path
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import io.nekohasekai.sfa.bg.KLog
 import android.net.Network
 import android.os.SystemClock
@@ -170,7 +172,7 @@ object HonestProbe {
     fun measure(
         entry: AutoModeExits.Endpoint?,
         label: String,
-        timeoutMillis: Int = MIN_TIMEOUT_MILLIS,
+        timeoutMillis: Int = Pult.int("proba.min_timeout_millis", MIN_TIMEOUT_MILLIS),
         target: Target? = null,
         collectBody: Boolean = false,
     ): Measurement {
@@ -180,7 +182,7 @@ object HonestProbe {
         if (entry.port !in 1..65535) {
             return Measurement.unmeasurable("у пути «$label» негодный порт входа ${entry.port}")
         }
-        val wait = maxOf(timeoutMillis, MIN_TIMEOUT_MILLIS)
+        val wait = maxOf(timeoutMillis, Pult.int("proba.min_timeout_millis", MIN_TIMEOUT_MILLIS))
         return turn.withLock {
             val goal = target ?: nextTargetInTurn()
             quietDown(goal.host)
@@ -214,7 +216,7 @@ object HonestProbe {
     fun measureDirect(
         network: Network,
         label: String,
-        timeoutMillis: Int = DIRECT_TIMEOUT_MILLIS,
+        timeoutMillis: Int = Pult.int("proba.direct_timeout_millis", DIRECT_TIMEOUT_MILLIS),
         target: Target? = null,
     ): Measurement = turn.withLock {
         val goal = target ?: nextTargetInTurn()
@@ -225,10 +227,21 @@ object HonestProbe {
         result
     }
 
+    /** «хост:порт/путь» → цель; негодная строка — null. */
+    internal fun razobratCel(s: String): Target? {
+        val host = s.substringBefore(':')
+        val port = s.substringAfter(':', "").substringBefore('/').toIntOrNull() ?: return null
+        val path = "/" + s.substringAfter('/', "")
+        if (host.isEmpty() || port !in 1..65535) return null
+        return Target(host, port, path)
+    }
+
     /** Следующая цель по кругу: одно и то же имя каждые полминуты — само по себе примета. */
     private fun nextTargetInTurn(): Target {
-        val goal = TARGETS[nextTarget % TARGETS.size]
-        nextTarget = (nextTarget + 1) % TARGETS.size
+        // Цели с пульта (`proba.celi`, «хост:порт/путь»); нет — вшитые.
+        val celi = Pult.spisok("proba.celi")?.mapNotNull(::razobratCel)?.takeIf { it.isNotEmpty() } ?: TARGETS
+        val goal = celi[nextTarget % celi.size]
+        nextTarget = (nextTarget + 1) % celi.size
         return goal
     }
 
@@ -236,8 +249,8 @@ object HonestProbe {
     private fun quietDown(host: String) {
         val last = lastTouched[host] ?: return
         val since = SystemClock.elapsedRealtime() - last
-        if (since in 0 until QUIET_MILLIS) {
-            runCatching { Thread.sleep(QUIET_MILLIS - since) }
+        if (since in 0 until Pult.long("proba.quiet_millis", QUIET_MILLIS)) {
+            runCatching { Thread.sleep(Pult.long("proba.quiet_millis", QUIET_MILLIS) - since) }
         }
     }
 
@@ -253,7 +266,7 @@ object HonestProbe {
             Socket().use { socket ->
                 socket.tcpNoDelay = true
                 socket.soTimeout = timeoutMillis
-                socket.connect(InetSocketAddress(entry.host, entry.port), ENTRY_TIMEOUT_MILLIS)
+                socket.connect(InetSocketAddress(entry.host, entry.port), Pult.int("proba.entry_timeout_millis", ENTRY_TIMEOUT_MILLIS))
                 val out = socket.getOutputStream()
                 val input = DataInputStream(socket.getInputStream())
 
@@ -318,7 +331,7 @@ object HonestProbe {
         // вокруг. Проверено в эмуляторе 14.08.2026 при поднятом туннеле: `getAllByName`
         // не отдавал адрес вовсе, замер не состоялся ни разу, и дом не мог подтвердиться
         // трафиком, пока туннель поднят, — то есть осечка вердикта запирала сама себя.
-        val address = when (val own = NetDns.resolve(network, goal.host, NAME_BUDGET_MILLIS)) {
+        val address = when (val own = NetDns.resolve(network, goal.host, Pult.long("proba.name_budget_millis", NAME_BUDGET_MILLIS))) {
             is NetDns.Outcome.Answered -> own.addresses.firstOrNull()
             is NetDns.Outcome.Silent -> null
         } ?: runCatching { network.getAllByName(goal.host).firstOrNull() }.getOrNull()
@@ -329,7 +342,7 @@ object HonestProbe {
         return try {
             ProbeSocket.open { network.bindSocket(it) }.use { socket ->
                 socket.soTimeout = timeoutMillis
-                socket.connect(InetSocketAddress(address, goal.port), DIRECT_CONNECT_TIMEOUT_MILLIS)
+                socket.connect(InetSocketAddress(address, goal.port), Pult.int("proba.direct_connect_timeout_millis", DIRECT_CONNECT_TIMEOUT_MILLIS))
                 exchange(
                     socket.getOutputStream(),
                     DataInputStream(socket.getInputStream()),

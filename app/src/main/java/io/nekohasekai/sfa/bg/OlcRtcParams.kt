@@ -87,7 +87,13 @@ object OlcRtcParams {
      *
      * Одно место на всех — иначе подъём упирается в ту точку, которую забыли согласовать.
      */
-    val roomAllowed: Boolean get() = Settings.olcrtcEnabled && hasRoom
+    val roomAllowed: Boolean get() = Settings.olcrtcEnabled && hasRoom && komnataRazreshenaPultom
+
+    /**
+     * Выключатель функции с сервера (`funkcii.komnata`, PULT.md). Действует как аварийный
+     * тумблер человека: новых подъёмов нет, работающий канал не рвётся.
+     */
+    val komnataRazreshenaPultom: Boolean get() = io.nekohasekai.sfa.bg.pult.Pult.bool("funkcii.komnata")
 
     /** Откуда приехали параметры — для честной подписи на экране. */
     val source: Source
@@ -198,13 +204,15 @@ object OlcRtcParams {
     /**
      * Кладёт в настройки то, что пришло с сервера.
      *
-     * `null` (сервер блок не отдал или выключил комнату) стирает серверные значения:
-     * держать протухшую комнату вреднее, чем не иметь никакой. Ручные значения
-     * при этом не трогаются — они и есть запасной вариант.
+     * `null` — сервер ЯВНО выключил комнату (`"olcrtc": null`): стираем серверные значения,
+     * держать протухшую комнату вреднее, чем не иметь никакой. Ручные значения при этом не
+     * трогаются — они и есть запасной вариант. Ключа `olcrtc` в сводке нет — сюда не зовут вовсе
+     * (сервер молчит, держим прежнее: [io.nekohasekai.sfa.compose.screen.home.primenitBlok]).
      */
     fun applyServer(json: JSONObject?) {
         if (json == null) {
             if (Settings.olcrtcSrvAvailable) {
+                KLog.i(TAG, "сервер выключил комнату — серверные параметры стёрты")
                 Settings.olcrtcSrvAvailable = false
                 Settings.olcrtcSrvCarrier = ""
                 Settings.olcrtcSrvRoomId = ""

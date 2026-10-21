@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import android.content.Context
 import android.os.Environment
 import androidx.work.BackoffPolicy
@@ -16,6 +18,7 @@ import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -218,11 +221,18 @@ object LogUploadWork {
      * Повторяется, если сеть недоступна: сама задача разбирает исход и просит повтор, а
      * метку просьбы сервер снимает только по факту приёма файла.
      */
-    fun otpravitSeychas(prichina: String = "по просьбе сервера") {
+    fun otpravitSeychas(prichina: String = "по просьбе сервера", srazu: Boolean = false, zaderzhkaMs: Long = 0L) {
         runCatching {
-            WorkManager.getInstance(Application.application).enqueueUniqueWork(
+            val wm = WorkManager.getInstance(Application.application)
+            // Команда пульта: прошлая просьба могла застрять в откате WorkManager (час и больше) —
+            // KEEP тогда молча проглотил бы команду. Ждущую заменяем, идущую не трогаем.
+            val idet = srazu && runCatching {
+                wm.getWorkInfosForUniqueWork(WORK_NAME_PO_PROSBE).get()
+                    .any { it.state == androidx.work.WorkInfo.State.RUNNING }
+            }.getOrDefault(false)
+            wm.enqueueUniqueWork(
                 WORK_NAME_PO_PROSBE,
-                ExistingWorkPolicy.KEEP,
+                if (srazu && !idet) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
                 OneTimeWorkRequest.Builder(UploadTask::class.java)
                     .setConstraints(
                         Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
@@ -232,9 +242,10 @@ object LogUploadWork {
                         RETRY_MIN_MILLIS,
                         TimeUnit.MILLISECONDS,
                     )
+                    .setInitialDelay(zaderzhkaMs.coerceAtLeast(0L), TimeUnit.MILLISECONDS)
                     .build(),
             )
-            KLog.i(TAG, "журнал $prichina: поставлен в очередь")
+            KLog.i(TAG, "журнал $prichina: поставлен в очередь" + if (zaderzhkaMs > 0) " (через ${zaderzhkaMs / 1000} с)" else "")
         }.onFailure { KLog.w(TAG, "журнал $prichina не поставился", it) }
     }
 
@@ -253,11 +264,49 @@ object LogUploadWork {
                     .setConstraints(
                         Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
                     )
-                    .setInitialDelay(POVTOR_PAUSE_MILLIS, TimeUnit.MILLISECONDS)
+                    .setInitialDelay(Pult.long("zhurnal.povtor_pause_millis", POVTOR_PAUSE_MILLIS), TimeUnit.MILLISECONDS)
                     .build(),
             )
-            KLog.i(TAG, "отправка не удалась — повтор через ${POVTOR_PAUSE_MILLIS / 60000} мин, часовое расписание не трогаю")
+            KLog.i(TAG, "отправка не удалась — повтор через ${Pult.long("zhurnal.povtor_pause_millis", POVTOR_PAUSE_MILLIS) / 60000} мин, часовое расписание не трогаю")
         }.onFailure { KLog.w(TAG, "повтор отправки не поставился", it) }
+    }
+
+    private const val WORK_NAME_CHASTO = "KelevraLogUploadChasto"
+
+    /** Ритм «часто» — разбор живой беды (`zhurnal.chasto_do`, PULT.md). */
+    private const val CHASTO_MINUT = 10L
+
+    /** Период отправки: 60 минут, как раньше, или значение пульта. */
+    internal fun periodMinut(): Long = io.nekohasekai.sfa.bg.pult.Pult.long("zhurnal.otpravka_min", 60L)
+
+    /** Пора ли слать часто: срок `zhurnal.chasto_do` ещё не прошёл. */
+    internal fun chastoSeychas(chastoDoMs: Long?, nowMs: Long): Boolean = chastoDoMs != null && nowMs < chastoDoMs
+
+    /**
+     * Пульт поменял настройки журнала: переставить период и, если сервер просит часто,
+     * начать цепочку по 10 минут. Цепочка сама гаснет по сроку ([UploadTask]).
+     */
+    fun posleSmenyPulta() {
+        runCatching { schedule0() }.onFailure { KLog.w(TAG, "период журнала не переставился", it) }
+        if (chastoSeychas(io.nekohasekai.sfa.bg.pult.Pult.vremya("zhurnal.chasto_do"), System.currentTimeMillis())) {
+            sleduyushchiyChasto(0L)
+        }
+    }
+
+    private fun sleduyushchiyChasto(zaderzhkaMinut: Long) {
+        runCatching {
+            WorkManager.getInstance(Application.application).enqueueUniqueWork(
+                WORK_NAME_CHASTO,
+                // Следующее звено встаёт за текущим, а не вместо него: REPLACE оборвал бы
+                // работу, которая его и ставит.
+                ExistingWorkPolicy.APPEND_OR_REPLACE,
+                OneTimeWorkRequest.Builder(UploadTask::class.java)
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                    .setInitialDelay(zaderzhkaMinut, TimeUnit.MINUTES)
+                    .addTag(WORK_NAME_CHASTO)
+                    .build(),
+            )
+        }.onFailure { KLog.w(TAG, "частая отправка не поставилась", it) }
     }
 
     private fun schedule0() {
@@ -276,7 +325,10 @@ object LogUploadWork {
             // Дорого это не стоит: отправка ведёт отметку по каждому файлу и посылает
             // ТОЛЬКО новое, так что часовая посылка — килобайты. Первый запуск без
             // задержки: если журнал уже есть, он должен доехать сразу, а не через час.
-            PeriodicWorkRequest.Builder(UploadTask::class.java, 1, TimeUnit.HOURS)
+            //
+            // Период правится пультом (`zhurnal.otpravka_min`); WorkManager чаще 15 минут
+            // периодику не крутит — меньшее значение он сам поднимет до 15.
+            PeriodicWorkRequest.Builder(UploadTask::class.java, periodMinut(), TimeUnit.MINUTES)
                 .setConstraints(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build(),
                 )
@@ -536,7 +588,7 @@ object LogUploadWork {
                 gzip.flush()
                 taken += part
                 // Потолок считаем по уже сжатому: ровно столько уйдёт в сеть.
-                if (raw.size() >= MAX_ARCHIVE_BYTES) {
+                if (raw.size() >= Pult.int("zhurnal.max_archive_bytes", MAX_ARCHIVE_BYTES)) {
                     KLog.i(TAG, "архив упёрся в потолок 20 МБ, старые логи в эту отправку не попали")
                     break
                 }
@@ -564,7 +616,7 @@ object LogUploadWork {
         val count = if (Settings.logUploadStuckSignature == sig) Settings.logUploadStuckCount + 1 else 1
         Settings.logUploadStuckSignature = sig
         Settings.logUploadStuckCount = count
-        return count >= STUCK_LIMIT
+        return count >= Pult.int("zhurnal.stuck_limit", STUCK_LIMIT)
     }
 
     private fun clearStuckState() {
@@ -626,19 +678,102 @@ object LogUploadWork {
     }
 
     /**
+     * Чем кончилась одна попытка целиком. Нужна и работе (повторять или нет), и квитанции
+     * пульта (принял ли сервер журнал).
+     */
+    internal enum class ИтогПопытки {
+        /** Сервер ответил {"ok":true}: всё, что было, у него. */
+        Отправлено,
+
+        /** Новых строк нет: всё прежнее сервер уже принял раньше. */
+        Нечего,
+
+        /** Сервер отказал по содержимому; хвост ещё не безнадёжен — повторить. */
+        Отвергнуто,
+
+        /** Сервер отказал тот же хвост [STUCK_LIMIT] раз подряд — хвост выброшен, повторять незачем. */
+        Выброшено,
+
+        /** Пятисотый ответ: серверу сейчас плохо, хвост не судим — повторить. */
+        Сбой,
+
+        /** До сервера не доехали: нет сети, DNS, таймаут — повторить. */
+        НетСвязи,
+    }
+
+    /** Повторять ли работу: false — не получилось, имеет смысл повторить. */
+    internal fun razobrano(i: ИтогПопытки): Boolean =
+        i == ИтогПопытки.Отправлено || i == ИтогПопытки.Нечего || i == ИтогПопытки.Выброшено
+
+    /**
+     * Слово квитанции пульта для `prishli_zhurnal`/`diagnostika` — тот же смысл, что у Desktop:
+     * `ok` — журнал принят сервером (или новых строк нет, всё прежнее он уже принял);
+     * `oshibka-set` — до сервера не доехали (или не уложились в срок команды);
+     * `oshibka-otkaz` — сервер ответил, но не принял. При ошибке журнал всё равно уходит позже
+     * обычной очередью — квитанция говорит только про эту попытку.
+     */
+    internal fun slovoKvitancii(i: ИтогПопытки?): String = when (i) {
+        ИтогПопытки.Отправлено, ИтогПопытки.Нечего -> "ok"
+        ИтогПопытки.НетСвязи, null -> "oshibka-set"
+        ИтогПопытки.Отвергнуто, ИтогПопытки.Выброшено, ИтогПопытки.Сбой -> "oshibka-otkaz"
+    }
+
+    /** Сколько команда пульта ждёт приёма журнала — как у Desktop (3 мин на команду). */
+    internal const val SROK_KOMANDY_MS = 3 * 60_000L
+
+    private val fon = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Отправить журнал сейчас и дождаться ответа сервера — для квитанции пульта.
+     *
+     * Раньше команда отвечала `ok`, как только просьба вставала в очередь WorkManager: сервер
+     * считал журнал пришедшим, а он мог не уехать вовсе. Теперь попытка идёт сразу, и `ok`
+     * значит «сервер принял». Попытка живёт отдельно от ожидания: если не уложилась в
+     * [srokMs], она доезжает сама (отметки сдвинутся по факту), а квитанция — `oshibka-set`.
+     *
+     * Подстраховка ставится ДО попытки, а не после неудачи: процесс могут заморозить или убить
+     * посреди ожидания (туннель выключен, команда пришла из фоновой работы) — тогда отправку
+     * доделает WorkManager. Ставится с KEEP (ждущая просьба, в том числе в бэкоффе, не
+     * заменяется) и с отсрочкой на срок команды, чтобы не идти вместе с этой попыткой и не
+     * считать один отказ сервера дважды в счётчик безнадёжности. Успела попытка — отложенная
+     * работа найдёт «нечего». После неудачи ничего сверх этого не ставится: повтор — обычный.
+     */
+    internal suspend fun otpravitDlyaPulta(
+        prichina: String,
+        srokMs: Long = SROK_KOMANDY_MS,
+        podstrahovka: () -> Unit = { otpravitSeychas(prichina, zaderzhkaMs = srokMs) },
+        poprobovat: suspend () -> ИтогПопытки = { popytka() },
+    ): String {
+        podstrahovka()
+        val zadacha = fon.async {
+            runCatching { poprobovat() }
+                .onFailure { KLog.w(TAG, "журнал $prichina: попытка упала", it) }
+                .getOrDefault(ИтогПопытки.НетСвязи)
+        }
+        val itog = kotlinx.coroutines.withTimeoutOrNull(srokMs) { zadacha.await() }
+        if (itog == null) KLog.w(TAG, "журнал $prichina: сервер не ответил за ${srokMs / 1000} с")
+        val slovo = slovoKvitancii(itog)
+        KLog.i(TAG, "журнал $prichina: ${itog ?: "не дождался"} → $slovo")
+        return slovo
+    }
+
+    /**
      * Одна попытка целиком. Возвращает:
-     *  - true  — отправлять было нечего или отправилось;
+     *  - true  — отправлять было нечего, отправилось или хвост выброшен как безнадёжный;
      *  - false — не получилось, имеет смысл повторить.
      */
-    internal suspend fun runOnce(): Boolean = withContext(Dispatchers.IO) {
-        // Замок: часовая работа, otpravitSeychas и povtorPozzhe не должны слать одну посылку разом.
-        // Вторая дожидается первой и, прочитав уже сдвинутые отметки, находит только новое.
+    internal suspend fun runOnce(): Boolean = razobrano(popytka())
+
+    internal suspend fun popytka(): ИтогПопытки = withContext(Dispatchers.IO) {
+        // Замок: часовая работа, otpravitSeychas, povtorPozzhe и команда пульта не должны слать
+        // одну посылку разом. Вторая дожидается первой и, прочитав уже сдвинутые отметки,
+        // находит только новое.
         zamokOtpravki.withLock { runOnceLocked() }
     }
 
     private val zamokOtpravki = kotlinx.coroutines.sync.Mutex()
 
-    private suspend fun runOnceLocked(): Boolean {
+    private suspend fun runOnceLocked(): ИтогПопытки {
         val marks = loadMarks()
         // Отчёты о падениях идут первыми: если посылка упрётся в потолок, обрежется
         // обычный журнал, а не разбор падения.
@@ -646,13 +781,13 @@ object LogUploadWork {
         val parts = collectReports(reportRoots, marks) + sbor.parts
         if (parts.isEmpty()) {
             KLog.i(TAG, "отправлять нечего: новых логов нет")
-            return true
+            return ИтогПопытки.Нечего
         }
 
         val (archive, taken) = buildArchive(parts)
         if (archive.isEmpty() || taken.isEmpty()) {
             KLog.i(TAG, "архив пустой, отправка отменена")
-            return true
+            return ИтогПопытки.Нечего
         }
 
         KLog.i(TAG, "отправляю логи: ${taken.size} шт., ${archive.size / 1024} КБ сжатыми")
@@ -662,12 +797,12 @@ object LogUploadWork {
         // о хвосте это не говорит ничего, судить его нельзя. Уходим как раньше, счётчик
         // безнадёжности не трогаем — иначе телефон без сети 7 часов (бэкофф 1ч+2ч+4ч при
         // неизменном хвосте) выбросил бы совершенно целые логи.
-        if (popytka.isFailure) return false
+        if (popytka.isFailure) return ИтогПопытки.НетСвязи
         val ishod = popytka.getOrDefault(ИсходОтправки.ВременныйСбой)
         // Пятисотый ответ значит «серверу сейчас плохо», а не «архив негодный»: он
         // приходит при нехватке места под журналы и при сбое записи. Уходим как при
         // отсутствии сети, счётчик безнадёжности не трогаем.
-        if (ishod == ИсходОтправки.ВременныйСбой) return false
+        if (ishod == ИсходОтправки.ВременныйСбой) return ИтогПопытки.Сбой
         if (ishod == ИсходОтправки.Отвергнуто) {
             // Сюда доходит только РЕАЛЬНЫЙ ответ сервера с отказом. Протокол не говорит,
             // отказ временный или архив навсегда битый (см. STUCK_LIMIT) — единственный
@@ -676,7 +811,7 @@ object LogUploadWork {
             if (recordFailureAndCheckStuck(taken)) {
                 KLog.w(
                     TAG,
-                    "хвост из ${taken.size} шт. отвергнут $STUCK_LIMIT раз подряд без изменений — " +
+                    "хвост из ${taken.size} шт. отвергнут ${Pult.int("zhurnal.stuck_limit", STUCK_LIMIT)} раз подряд без изменений — " +
                         "считаю его безнадёжным и выбрасываю из очереди",
                 )
                 zapomnit(marks, sbor.uchteno, taken)
@@ -684,9 +819,9 @@ object LogUploadWork {
                 clearStuckState()
                 // true — не «отправлено», а «разобрано»: WorkManager не должен
                 // долбить в этот же битый хвост ещё сутки, блокируя новые логи.
-                return true
+                return ИтогПопытки.Выброшено
             }
-            return false
+            return ИтогПопытки.Отвергнуто
         }
         clearStuckState()
 
@@ -695,11 +830,18 @@ object LogUploadWork {
         saveMarks(marks)
         Settings.logUploadLastOk = System.currentTimeMillis()
         KLog.i(TAG, "логи отправлены")
-        return true
+        return ИтогПопытки.Отправлено
     }
 
     class UploadTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
         override suspend fun doWork(): Result {
+            io.nekohasekai.sfa.bg.pult.Pult.zagruzitEsliNado()
+            // Звено частой цепочки ставит следующее, пока срок пульта не вышел.
+            if (WORK_NAME_CHASTO in tags &&
+                chastoSeychas(io.nekohasekai.sfa.bg.pult.Pult.vremya("zhurnal.chasto_do"), System.currentTimeMillis())
+            ) {
+                sleduyushchiyChasto(CHASTO_MINUT)
+            }
             val ok = runCatching { runOnce() }
                 .onFailure { KLog.w(TAG, "отправка логов упала", it) }
                 .getOrDefault(false)
@@ -710,7 +852,7 @@ object LogUploadWork {
             // Повторяем, но не дольше суток: дальше ждём следующего вечера.
             val since = Settings.logUploadRetrySince.takeIf { it > 0 } ?: System.currentTimeMillis()
             Settings.logUploadRetrySince = since
-            if (System.currentTimeMillis() - since >= RETRY_GIVE_UP_MILLIS) {
+            if (System.currentTimeMillis() - since >= Pult.long("zhurnal.retry_give_up_millis", RETRY_GIVE_UP_MILLIS)) {
                 KLog.w(TAG, "сутки повторов не дали результата — ждём следующего вечера")
                 Settings.logUploadRetrySince = 0L
                 return Result.success()

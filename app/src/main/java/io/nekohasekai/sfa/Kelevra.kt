@@ -82,7 +82,30 @@ object Kelevra {
         "X-App-Version" to appVersion,
         io.nekohasekai.sfa.bg.DeviceTraffic.header(io.nekohasekai.sfa.bg.DeviceTraffic.total()),
         pasportHeader(),
+        pultHeader(),
+        sostoyanieHeader(),
     )
+
+    /**
+     * `X-Pult` — что клиент умеет, какую версию пульта принял, квитанции команд и ошибки
+     * (KelevraServer/docs/PULT.md). Без этого заголовка сервер пульт не шлёт вовсе.
+     */
+    internal fun pultHeader(): Pair<String, String>? =
+        runCatching {
+            // Не через [header]: тот режет до 128 знаков, а квитанции с ошибками длиннее.
+            "X-Pult" to io.nekohasekai.sfa.bg.pult.Pult.zagolovok().filter { it.code in 32..126 }.take(1024)
+        }.getOrNull()
+
+    /** `X-Sostoyanie` — пульс устройства: режим автомата, узел, жив ли канал, сеть. */
+    private fun sostoyanieHeader(): Pair<String, String>? =
+        if (io.nekohasekai.sfa.bg.pult.Pult.vykl("puls")) {
+            null
+        } else {
+            // Не через [header]: тот режет до 128 знаков, а имя узла в процент-кодировке длинное.
+            runCatching {
+                "X-Sostoyanie" to io.nekohasekai.sfa.bg.AutoMode.puls().filter { it.code in 33..126 }.take(512)
+            }.getOrNull()
+        }
 
     /**
      * Паспорт устройства одной строкой: чем оно описывает СЕБЯ сверх имени и версии.

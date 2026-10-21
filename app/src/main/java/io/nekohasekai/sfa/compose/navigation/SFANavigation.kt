@@ -601,7 +601,12 @@ fun SFANavHost(
             val context = LocalContext.current
             // Пункт «Панель сети» — только устройству админа; сервер говорит это в сводке подписки.
             var panel by remember { mutableStateOf(false) }
-            LaunchedEffect(Unit) { panel = io.nekohasekai.sfa.compose.screen.home.loadSubscription()?.panel == true }
+            LaunchedEffect(Unit) {
+                panel = (
+                    io.nekohasekai.sfa.compose.screen.home.loadSubscription()
+                        ?: io.nekohasekai.sfa.compose.screen.home.SubscriptionRefresh.sohranyonnaya()
+                    )?.panel == true
+            }
             SimpleSettingsScreen(
                 panel = panel,
                 onPanel = { navController.navigate("settings/panel") },

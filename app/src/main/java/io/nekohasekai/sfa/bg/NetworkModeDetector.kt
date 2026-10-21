@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -194,6 +196,20 @@ object NetworkModeDetector {
         ),
     ) {
         companion object {
+            /**
+             * [DEFAULT] с адресами точек из пульта (`rezhim_seti.neraz_adresa`,
+             * `rezhim_seti.raz_adresa`); ключей нет — ровно [DEFAULT].
+             */
+            fun izPulta(): Targets {
+                val neraz = Pult.spisok("rezhim_seti.neraz_adresa")
+                val raz = Pult.spisok("rezhim_seti.raz_adresa")
+                if (neraz == null && raz == null) return DEFAULT
+                return DEFAULT.copy(
+                    unlisted = if (neraz != null) DEFAULT.unlisted.copy(literals = neraz) else DEFAULT.unlisted,
+                    allowed = if (raz != null) DEFAULT.allowed.copy(literals = raz) else DEFAULT.allowed,
+                )
+            }
+
             val DEFAULT = Targets(
                 // Три независимые точки, а не только свой VPS: вердикт «белый список»
                 // выносится лишь когда молчат все. Проверено по списку оператора
@@ -333,7 +349,7 @@ object NetworkModeDetector {
      *   сетях, а вердикт кэшируется именно по сети.
      */
     suspend fun detect(
-        targets: Targets = Targets.DEFAULT,
+        targets: Targets = Targets.izPulta(),
         force: Boolean = false,
         probeExternalDns: Boolean = false,
         network: Network? = null,
@@ -349,8 +365,8 @@ object NetworkModeDetector {
         last = report
         lastNetwork = chosen
         nextRunAt = SystemClock.elapsedRealtime() +
-            COOLDOWN_MILLIS +
-            Random.nextLong(COOLDOWN_JITTER_MILLIS)
+            Pult.long("rezhim_seti.cooldown_millis", COOLDOWN_MILLIS) +
+            Random.nextLong(Pult.long("rezhim_seti.cooldown_jitter_millis", COOLDOWN_JITTER_MILLIS))
         KLog.i(TAG, "режим: ${report.mode} — ${report.note} (${report.tookMillis} мс)")
         report
     }
@@ -494,7 +510,7 @@ object NetworkModeDetector {
      */
     private fun controlTls(network: Network, endpoint: Endpoint): List<ProbeOutcome> {
         val attempts = mutableListOf<ProbeOutcome>()
-        val addresses = endpoint.literals.ifEmpty { listOf("") }.take(MAX_CONTROL_TRIES)
+        val addresses = endpoint.literals.ifEmpty { listOf("") }.take(Pult.int("rezhim_seti.max_control_tries", MAX_CONTROL_TRIES))
         for (literal in addresses) {
             val one = if (literal.isEmpty()) endpoint else endpoint.copy(literals = listOf(literal))
             val outcome = handshakeOnce(network, one)
@@ -502,7 +518,7 @@ object NetworkModeDetector {
             KLog.i(TAG, "контроль TLS ${one.host}@${literal.ifEmpty { "имя" }}: $outcome")
             if (outcome == ProbeOutcome.Ok || outcome == ProbeOutcome.Answered) break
             if (attempts.count { it == ProbeOutcome.Reset || it == ProbeOutcome.Stalled } >=
-                NetworkModeDecision.CONTROL_CONFIDENT_TRIES
+                Pult.int("rezhim_seti.control_confident_tries", NetworkModeDecision.CONTROL_CONFIDENT_TRIES)
             ) {
                 break
             }
@@ -614,7 +630,7 @@ object NetworkModeDetector {
          */
         requireAllSilent: Boolean = false,
     ): Opened {
-        val addresses = resolve(network, endpoint, if (requireAllSilent) MAX_UNLISTED_ADDRESSES else MAX_ADDRESSES)
+        val addresses = resolve(network, endpoint, if (requireAllSilent) Pult.int("rezhim_seti.max_unlisted_addresses", MAX_UNLISTED_ADDRESSES) else Pult.int("rezhim_seti.max_addresses", MAX_ADDRESSES))
         if (addresses.isEmpty()) return Opened(ProbeOutcome.Failed, null)
         var outcome = ProbeOutcome.Failed
         var silent = 0
@@ -624,8 +640,8 @@ object NetworkModeDetector {
             val socket = runCatching { ProbeSocket.open { network.bindSocket(it) } }
                 .getOrElse { return Opened(ProbeOutcome.Failed, null) }
             try {
-                socket.connect(InetSocketAddress(address, endpoint.port), TCP_TIMEOUT_MILLIS)
-                socket.soTimeout = READ_TIMEOUT_MILLIS
+                socket.connect(InetSocketAddress(address, endpoint.port), Pult.int("rezhim_seti.tcp_timeout_millis", TCP_TIMEOUT_MILLIS))
+                socket.soTimeout = Pult.int("rezhim_seti.read_timeout_millis", READ_TIMEOUT_MILLIS)
                 return Opened(ProbeOutcome.Ok, socket)
             } catch (error: Throwable) {
                 socket.closeQuietly()
@@ -648,7 +664,7 @@ object NetworkModeDetector {
     }
 
     /** Литералы — первыми и без резолвера. Имя — только если литералов нет. */
-    private fun resolve(network: Network, endpoint: Endpoint, limit: Int = MAX_ADDRESSES): List<InetAddress> {
+    private fun resolve(network: Network, endpoint: Endpoint, limit: Int = Pult.int("rezhim_seti.max_addresses", MAX_ADDRESSES)): List<InetAddress> {
         val literals = endpoint.literals.mapNotNull {
             runCatching { InetAddress.getByName(it) }.getOrNull()
         }
@@ -683,9 +699,9 @@ object NetworkModeDetector {
             factory.createSocket(plain, sni, port, true) as SSLSocket
         }.getOrElse { return Handshake(ProbeOutcome.Failed, null) }
         return try {
-            ssl.soTimeout = TLS_TIMEOUT_MILLIS
+            ssl.soTimeout = Pult.int("rezhim_seti.tls_timeout_millis", TLS_TIMEOUT_MILLIS)
             ssl.startHandshake()
-            ssl.soTimeout = READ_TIMEOUT_MILLIS
+            ssl.soTimeout = Pult.int("rezhim_seti.read_timeout_millis", READ_TIMEOUT_MILLIS)
             Handshake(ProbeOutcome.Ok, ssl)
         } catch (error: Throwable) {
             Handshake(ProbeFailure.onHandshake(error).also { trace("рукопожатие", it, error) }, ssl)
@@ -714,8 +730,8 @@ object NetworkModeDetector {
             }
             val stream: InputStream = ssl.inputStream
             val buffer = ByteArray(16 * 1024)
-            val deadline = SystemClock.elapsedRealtime() + BULK_BUDGET_MILLIS
-            while (read < BULK_BYTES) {
+            val deadline = SystemClock.elapsedRealtime() + Pult.long("rezhim_seti.bulk_budget_millis", BULK_BUDGET_MILLIS)
+            while (read < Pult.int("rezhim_seti.bulk_bytes", BULK_BYTES)) {
                 if (SystemClock.elapsedRealtime() >= deadline) {
                     // Бюджет вышел, но данные шли — это не подвисание, а просто конец
                     // наблюдения. Подвисание приходит таймаутом чтения, не отсюда.
@@ -729,9 +745,9 @@ object NetworkModeDetector {
                 }
                 read += count
             }
-            Bulk(ProbeFailure.onTransfer(read, BULK_BYTES, finished, null), read)
+            Bulk(ProbeFailure.onTransfer(read, Pult.int("rezhim_seti.bulk_bytes", BULK_BYTES), finished, null), read)
         } catch (error: Throwable) {
-            Bulk(ProbeFailure.onTransfer(read, BULK_BYTES, finished, error), read)
+            Bulk(ProbeFailure.onTransfer(read, Pult.int("rezhim_seti.bulk_bytes", BULK_BYTES), finished, error), read)
         }
     }
 
@@ -751,7 +767,7 @@ object NetworkModeDetector {
             // запрос ушёл бы в наш туннель, и «отвечает ли внешний резолвер» было бы
             // ответом про туннель.
             socket = ProbeSocket.openDatagram { network.bindSocket(it) }
-            socket.soTimeout = TCP_TIMEOUT_MILLIS
+            socket.soTimeout = Pult.int("rezhim_seti.tcp_timeout_millis", TCP_TIMEOUT_MILLIS)
             socket.send(DatagramPacket(query, query.size, address, 53))
             val answer = ByteArray(512)
             socket.receive(DatagramPacket(answer, answer.size))

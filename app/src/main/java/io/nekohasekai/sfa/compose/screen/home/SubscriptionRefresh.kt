@@ -114,6 +114,7 @@ object SubscriptionRefresh {
      * Сеть не трогает — нужно, чтобы экран сразу показал правду, а не пустоту.
      */
     suspend fun loadLocal() = withContext(Dispatchers.IO) {
+        if (_info.value == null) podnyatSDiska()
         val profile = selectedRemote() ?: return@withContext
         _lastUpdated.value = profile.typed.lastUpdated.takeIf { it.time > 0 }
         if (_summary.value == null) {
@@ -130,17 +131,24 @@ object SubscriptionRefresh {
      * параметры комнаты. То же самое делает главный экран при открытии — здесь оно
      * вынесено, чтобы обновление и открытие экрана не расходились.
      */
-    suspend fun loadInfo(): SubscriptionInfo? {
-        val loaded = loadSubscription()
+    suspend fun loadInfo(uslovno: Boolean = false): SubscriptionInfo? {
+        val loaded = loadSubscription(uslovno)
+        if (loaded != null && loaded.izKesha) {
+            // 304: сервер говорит «ничего не менялось» — применять нечего.
+            if (_info.value == null) _info.value = loaded
+            return loaded
+        }
         if (loaded != null) {
             loaded.bypassPackages.let { applyBypassPackages(it) }
-            // Сеть не ответила — старые параметры комнаты остаются; ответила без блока
-            // olcrtc — стираем, чтобы не держать протухшую комнату.
-            OlcRtcParams.applyServer(loaded.olcrtc)
-            // WB Chat — свой блок верхнего уровня, по тому же правилу: нет блока — стёрто.
-            io.nekohasekai.sfa.bg.WbChatParams.applyServer(loaded.wbchat)
-            // Внешний вид: ответ пришёл без блока — снят, с блоком — применяем и помним.
-            io.nekohasekai.sfa.compose.theme.Vid.izSvodki(loaded.vid)
+            // Комната и WB Chat (PULT.md, «Комната и WB Chat»): блок — применяем, явный null — сервер
+            // выключил, стираем; ключа нет — сервер молчит, держим прежнее. Раньше «нет блока» стирало,
+            // и один сбойный ответ обнулял комнату. Сеть не ответила или 503 — сюда не доходим вовсе.
+            primenitBlok(loaded.olcrtc, OlcRtcParams::applyServer)
+            // WB Chat — свой блок верхнего уровня, по тому же правилу.
+            primenitBlok(loaded.wbchat, io.nekohasekai.sfa.bg.WbChatParams::applyServer)
+            // Внешний вид — по тому же правилу: блок — применяем и помним, явный null — снят (встроенный),
+            // ключа нет — держим прежний (выдача при сбое vid.json шлёт клиенту пульта сводку без ключа).
+            primenitBlok(loaded.vid) { io.nekohasekai.sfa.compose.theme.Vid.izSvodki(it) }
             _info.value = loaded
             // Сервер попросил журнал, не дожидаясь ночи — отдаём сразу. Метку своей
             // просьбы он снимает по факту приёма файла, поэтому повторить её он сможет,
@@ -152,6 +160,26 @@ object SubscriptionRefresh {
         }
         return loaded
     }
+
+    /**
+     * Последняя сводка с диска — для старта без сети: карточка подписки, пункт панели и
+     * ответ на жалобу не должны пропадать оттого, что сервер сейчас недоступен. Только для
+     * показа: комнату, WB и вид держат свои настройки, а просьбы сервера не повторяются.
+     */
+    suspend fun podnyatSDiska(): SubscriptionInfo? = withContext(Dispatchers.IO) {
+        runCatching {
+            val zapis = SvodkaDisk.prochest() ?: return@runCatching null
+            val profile = selectedRemote() ?: return@runCatching null
+            val baza = io.nekohasekai.sfa.SubscriptionLink.baseUrl(profile.typed.remoteURL)
+            if (baza != zapis.baza) return@runCatching null
+            val info = razobratSvodku(JSONObject(zapis.tekst)).copy(izKesha = true)
+            if (_info.value == null) _info.value = info
+            info
+        }.getOrNull()
+    }
+
+    /** Свежая сводка этого запуска, а нет её — последняя с диска. */
+    suspend fun sohranyonnaya(): SubscriptionInfo? = _info.value ?: podnyatSDiska()
 
     private suspend fun refresh() {
         // Уже качаем — второе нажатие ничего не меняет, состояние и так «идёт обновление».

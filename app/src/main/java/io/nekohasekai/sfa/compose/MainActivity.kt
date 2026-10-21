@@ -215,6 +215,9 @@ class MainActivity :
         }
     private val pendingNavigationRoute = mutableStateOf<String?>(null)
 
+    /** Тап по уведомлению «Обновление готово»: передать скачанный файл системе. */
+    private val zaprosUstanovki = mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ConfigurationCompat.getLocales(resources.configuration)[0]?.let { locale ->
@@ -261,6 +264,11 @@ class MainActivity :
         }
         if (intent.categories?.contains("de.robv.android.xposed.category.MODULE_SETTINGS") == true) {
             pendingNavigationRoute.value = "settings/privilege"
+        }
+        if (intent.action == io.nekohasekai.sfa.update.ObnovleniyaPult.ACTION_USTANOVIT) {
+            KLog.i("KelevraObnovlenie", "тап по «Обновление готово» — передаю файл системе")
+            zaprosUstanovki.value = true
+            return
         }
         val uri = intent.data ?: return
         if (intent.action == Action.OPEN_URL) {
@@ -733,6 +741,18 @@ class MainActivity :
                     }
                     Vendor.zaplanirovatPovtorObnovleniya(this@MainActivity)
                 }
+            }
+        }
+
+        // Одно нажатие: тап по постоянному уведомлению сразу запускает установку уже скачанного
+        // файла — без окна «Есть обновление» (оно спросило бы то же самое второй раз).
+        val zaprosUstanovkiSeychas by zaprosUstanovki
+        LaunchedEffect(zaprosUstanovkiSeychas, updateInfo) {
+            val info = updateInfo
+            if (zaprosUstanovkiSeychas && info != null) {
+                zaprosUstanovki.value = false
+                Settings.lastShownUpdateVersion = info.versionCode
+                zapustitObnovlenie(info)
             }
         }
 

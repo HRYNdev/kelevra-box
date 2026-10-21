@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 /**
  * Признак дома: правила вокруг DNS-сводки, вынесенные из [AutoMode] отдельно и без
  * единого обращения к Android.
@@ -157,7 +159,7 @@ internal object HomeSign {
         seenNow: Sign,
         ageMillis: Long?,
         refuted: Boolean,
-        memoryMillis: Long = MEMORY_MILLIS,
+        memoryMillis: Long = Pult.long("dom.memory_millis", MEMORY_MILLIS),
     ): Boolean = when {
         seenNow == Sign.Yes -> true
         refuted -> false

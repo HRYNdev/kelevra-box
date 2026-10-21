@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg
 
+import io.nekohasekai.sfa.bg.pult.Pult
+
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
@@ -206,8 +208,80 @@ object AutoMode {
     }
 
     private fun publish(auto: Boolean, situation: Situation) {
+        if (situation != _state.value.situation) perehodAt = System.currentTimeMillis()
         _state.value = State(auto = auto, situation = situation, link = link)
     }
+
+    /** Когда обстановка менялась в последний раз (часы стены); 0 — ещё не менялась. */
+    @Volatile
+    private var perehodAt = 0L
+
+    /**
+     * Пульс для сервера — заголовок `X-Sostoyanie` (PULT.md, «Провод»): общие с Desktop ключи
+     * `avto`, `tunnel`, `set`, `perehod` (unix-секунды последней смены avto/туннеля), `uzel`
+     * (имя узла в процент-кодировке UTF-8), затем свои: `obst` (обстановка), `zhiv` (канал проверен).
+     */
+    fun puls(nowMs: Long = System.currentTimeMillis()): String {
+        val st = _state.value
+        val avto = when {
+            !active -> "stoit"
+            !st.auto -> "ruchnoy"
+            !io.nekohasekai.sfa.bg.pult.Pult.bool("funkcii.avtorezhim") -> "vykl"
+            st.situation == Situation.Home -> "doma"
+            st.situation == Situation.Unknown -> "neizv"
+            else -> "vne"
+        }
+        val tunnel = runCatching { host?.tunnelLive() == true }.getOrDefault(false)
+        val klyuch = "$avto$tunnel"
+        if (klyuch != pulsKlyuch) {
+            pulsKlyuch = klyuch
+            // Смена обстановки известна точно (publish); смена одного туннеля — с этого взгляда.
+            pulsPerehodMs = if (perehodAt > pulsPerehodMs) perehodAt else nowMs
+        }
+        return pulsStroka(
+            avto = avto,
+            tunnel = tunnel,
+            set = lastNetwork != null,
+            perehodUnix = pulsPerehodMs / 1000L,
+            uzel = (selected ?: layout.main),
+            obstanovka = st.situation.name.lowercase(),
+            link = st.link,
+        )
+    }
+
+    /** Для `perehod`: прошлое сочетание avto+tunnel и когда оно сменилось (часы стены). */
+    @Volatile
+    private var pulsKlyuch = ""
+
+    @Volatile
+    private var pulsPerehodMs = System.currentTimeMillis()
+
+    /** Локальный вход основного канала — для пробы пульта «через туннель»; null — мерить нечем. */
+    fun vhodOsnovnogo(): AutoModeExits.Endpoint? = layout.localProxy
+
+    internal fun pulsStroka(
+        avto: String,
+        tunnel: Boolean,
+        set: Boolean,
+        perehodUnix: Long,
+        uzel: String?,
+        obstanovka: String,
+        link: Link,
+    ): String = buildList {
+        add("avto=$avto")
+        add("tunnel=${if (tunnel) 1 else 0}")
+        add("set=${if (set) 1 else 0}")
+        add("perehod=$perehodUnix")
+        if (!uzel.isNullOrEmpty()) add("uzel=" + java.net.URLEncoder.encode(uzel.take(40), "UTF-8"))
+        add("obst=$obstanovka")
+        add(
+            "zhiv=" + when (link) {
+                Link.Alive -> "1"
+                Link.Dead -> "0"
+                else -> "?"
+            },
+        )
+    }.joinToString(";")
 
     /**
      * Что автомат умеет сделать с сервисом. Реализует [BoxService]: только у него есть
@@ -557,7 +631,11 @@ object AutoMode {
      * Сторож очереди узлов: когда провал узла считается смертью и когда пора вернуться на
      * первый ([AutoModeNodeWatch]). Окно смены сети, подтверждение, пауза возврата — там.
      */
-    private val nodeWatch = AutoModeNodeWatch()
+    private val nodeWatch = AutoModeNodeWatch(returnAfterOf = { returnAfterMillis() })
+
+    /** [RETURN_AFTER_MILLIS] с пульта (`uzel.vozvrat_na_pervyy_min`). */
+    internal fun returnAfterMillis(): Long =
+        io.nekohasekai.sfa.bg.pult.Pult.long("uzel.vozvrat_na_pervyy_min", RETURN_AFTER_MILLIS / 60_000L) * 60_000L
 
     /**
      * Что сказал о каждом узле разовый опрос путей сервиса ([nodeMeasured]): тег → (когда, жив ли).
@@ -689,7 +767,24 @@ object AutoMode {
     @Volatile
     private var pendingSwitch = false
 
-    private val gate = AutoModeGate(CONFIRMATIONS)
+    private val gate = AutoModeGate { podtverzhdeniy() }
+
+    /** [CONFIRMATIONS] с пульта (`avtomat.podtverzhdeniy`); без пульта — константа. */
+    internal fun podtverzhdeniy(): Int = io.nekohasekai.sfa.bg.pult.Pult.int("avtomat.podtverzhdeniy", CONFIRMATIONS)
+
+    /** [ROOM_TRIAL_AFTER] следом за числом подтверждений: на один заход раньше задвижки. */
+    internal fun roomTrialAfter(): Int = (podtverzhdeniy() - 1).coerceAtLeast(1)
+
+    /** [SILENCE_HOLD_MILLIS] с пульта (`avtomat.tishina_rezolvera_min`). */
+    internal fun silenceHoldMillis(): Long =
+        io.nekohasekai.sfa.bg.pult.Pult.long("avtomat.tishina_rezolvera_min", SILENCE_HOLD_MILLIS / 60_000L) * 60_000L
+
+    /**
+     * Автомат решает сам: человек его не выключал и пульт не погасил (`funkcii.avtorezhim`).
+     * Выключенный пультом автомат ведёт себя как выключенный человеком — держит выбранный
+     * выход с поднятым туннелем; настройка человека при этом не трогается.
+     */
+    private fun avtoSam(): Boolean = Settings.autoModeEnabled && io.nekohasekai.sfa.bg.pult.Pult.bool("funkcii.avtorezhim")
     private val burst = AutoModeBurst(BURST_STEPS)
     private var searchingRounds = 0
 
@@ -829,7 +924,7 @@ object AutoMode {
 
     private var roomTriedAt = 0L
     @Volatile
-    private var roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+    private var roomTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
 
     /**
      * Прошлая просьба поднять комнату ушла в асинхронный подъём ([RoomAck.Raising]), и чем
@@ -890,7 +985,7 @@ object AutoMode {
             idle = false
             pendingSwitch = false
             roomTriedAt = 0L
-            roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+            roomTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
             roomTrialPending = false
             roomGateLogged = false
             portSilentAt = 0L
@@ -1048,7 +1143,7 @@ object AutoMode {
         // Комната стоит — подъём удался, штрафовать нечего.
         if (roomUp()) {
             roomTrialPending = false
-            roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+            roomTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
         }
         // И перечитываем раскладку. Проверочные входы ([ProbeInboundPatch]) занимают
         // СВОБОДНЫЕ порты, а свободные они каждый раз разные: после пересборки старые
@@ -1204,7 +1299,7 @@ object AutoMode {
      *
      * @param ageMillis сколько выбор держится; `null` — выбора нет.
      */
-    internal fun manualHoldExpired(ageMillis: Long?, ttlMillis: Long = MANUAL_HOLD_MILLIS): Boolean =
+    internal fun manualHoldExpired(ageMillis: Long?, ttlMillis: Long = Pult.long("avtomat.manual_hold_millis", MANUAL_HOLD_MILLIS)): Boolean =
         ageMillis != null && ageMillis >= ttlMillis
 
     /** Человек включил или выключил автомат. */
@@ -1229,6 +1324,56 @@ object AutoMode {
         silentHoldAt = 0L
         mainFailures = 0
         networkChanged = true
+        wakeLoop()
+    }
+
+    /**
+     * Команда пульта `sbros_avtomata`: забыть память автомата — ручной выбор, залипший выход
+     * и отпечаток дома. Дальше автомат решает заново, как после чистой установки, но профиль,
+     * код и настройки человека не трогаются.
+     */
+    fun sbrosPamyati(why: String) {
+        KLog.i(TAG, "сброс памяти автомата ($why): ручной выбор «${manualExit ?: "нет"}», отпечаток дома, залипший выход")
+        manualExit = null
+        Settings.manualExitName = ""
+        setManualRoom(false)
+        Settings.autoModeEnabled = true
+        holdNetwork = null
+        holdKey = null
+        holdAt = 0L
+        forgetHomeSign()
+        rememberHomeKey(null)
+        // Залипший выход в кэше ядра: пометка «последним выбирал автомат» вернёт селектор на
+        // `default` конфига при следующем старте ([AutoModeSticky.release]); работающему ядру
+        // выход заново выберет ближайший заход (selected = null).
+        val chooser = layout.chooser ?: baseLayout.chooser
+        if (chooser != null) {
+            runCatching {
+                Settings.autoModeStickyGroup = chooser
+                Settings.autoModeStickyTag = "sbros"
+            }
+        }
+        selected = null
+        roomTrialPending = false
+        gate.reset(Situation.Unknown)
+        situationNetwork = null
+        silentHoldAt = 0L
+        mainFailures = 0
+        networkChanged = true
+        idle = false
+        PathRegistry.reset()
+        link = Link.Unknown
+        _state.value = _state.value.copy(auto = true, link = link)
+        wakeLoop()
+    }
+
+    /**
+     * Пульт поменял настройки: выключатели функций (`funkcii.*`) действуют сразу — будим
+     * заход, не дожидаясь ритма. Пороги и ритмы заход и так читает на каждой границе.
+     */
+    fun posleSmenyPulta() {
+        if (!active) return
+        KLog.i(TAG, "пульт поменял настройки — внеочередной заход")
         wakeLoop()
     }
 
@@ -1350,7 +1495,7 @@ object AutoMode {
     }
 
     private fun homeRightNow0(): Boolean {
-        if (!Settings.autoModeEnabled) return false
+        if (!avtoSam()) return false
         val network = physicalNetwork() ?: return false
         // В соте дома не бывает, а этот вопрос задаётся до подъёма ядра — то есть человек
         // ждёт подключения ровно столько, сколько мы его задаём. Четыре запроса к
@@ -1385,14 +1530,14 @@ object AutoMode {
             val recheck = if (idle || hurry != null || pendingSwitch) {
                 null
             } else {
-                silentRecheck(blind, silentRechecks, Random.nextLong(SILENT_RECHECK_MIN_MILLIS, SILENT_RECHECK_MAX_MILLIS + 1))
+                silentRecheck(blind, silentRechecks, Random.nextLong(Pult.long("avtomat.silent_recheck_min_millis", SILENT_RECHECK_MIN_MILLIS), Pult.long("avtomat.silent_recheck_max_millis", SILENT_RECHECK_MAX_MILLIS).coerceAtLeast(Pult.long("avtomat.silent_recheck_min_millis", SILENT_RECHECK_MIN_MILLIS)) + 1))
             }
             if (recheck != null) {
                 silentRechecks++
                 KLog.i(
                     TAG,
                     "резолверы молчали — следующая проверка через ${recheck / 1000} с " +
-                        "($silentRechecks из $SILENT_RECHECK_ROUNDS)",
+                        "($silentRechecks из ${Pult.int("avtomat.silent_recheck_rounds", SILENT_RECHECK_ROUNDS)})",
                 )
             }
             val wait = when {
@@ -1402,10 +1547,10 @@ object AutoMode {
                 // выбрали Нидерланды после комнаты, сайт открывается, а круг врёт.
                 // Раз в минуту перемеряем выбранный путь: решать он ничего не будет,
                 // но человеку показывается правда, а не старая запись.
-                idle -> ROUND_MANUAL_MILLIS
+                idle -> Pult.long("avtomat.round_manual_millis", ROUND_MANUAL_MILLIS)
                 hurry != null -> hurry
                 // Идёт набор подтверждений — досматриваем быстро, а не через пять минут.
-                pendingSwitch -> ROUND_SEARCHING_MILLIS
+                pendingSwitch -> Pult.long("avtomat.round_searching_millis", ROUND_SEARCHING_MILLIS)
                 recheck != null -> recheck
                 else -> delayFor(situation)
             }
@@ -1413,10 +1558,12 @@ object AutoMode {
             // дешёвая проба. Спешка (серия, набор подтверждений) в этом не нуждается —
             // там заход и так близко.
             when {
-                wait == ROUND_ROOM_MILLIS && situation == Situation.Room -> waitInRoom(wait)
+                wait == Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS) && situation == Situation.Room &&
+                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(wait)
                 // Дома проба ловит то, о чём иначе некому сказать: ограничение, наступившее
                 // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
-                wait == ROUND_HOME_MILLIS && situation == Situation.Home -> waitAtHome(wait)
+                wait == Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS) && situation == Situation.Home &&
+                    !Pult.vykl("prismotr_doma") -> waitAtHome(wait)
                 else -> waitNext(wait)
             }
         }
@@ -1435,11 +1582,11 @@ object AutoMode {
             // Обстановку после возврата смотрим как после смены сети: то, что мы про неё
             // знали, снималось под ручной выбор и уже ничего не значит.
             networkChanged = true
-            releaseManualHold(physicalNetwork(), "выбор руками держится больше ${MANUAL_HOLD_MILLIS / 60_000} мин")
+            releaseManualHold(physicalNetwork(), "выбор руками держится больше ${Pult.long("avtomat.manual_hold_millis", MANUAL_HOLD_MILLIS) / 60_000} мин")
         }
 
-        if (!Settings.autoModeEnabled) {
-            // Человек выбирает выход сам. Обязанностей у нас тут две: вернуть туннель,
+        if (!avtoSam()) {
+            // Человек выбирает выход сам (или автомат погашен пультом). Обязанностей у нас тут две: вернуть туннель,
             // если сами же его погасили (иначе выбор руками упрётся в выключенное ядро),
             // и привести комнату в то состояние, которое следует из его выбора.
             if (host.resumeTunnel("автомат выключен человеком", roomNext = Settings.autoModeManualRoom)) selected = null
@@ -1538,6 +1685,7 @@ object AutoMode {
                 sameNetwork = observedNetworkKey != null && observedNetworkKey == situationNetwork,
                 networkChanged = trustOnce,
                 holdAgeMillis = silentHoldAge(),
+                capMillis = silenceHoldMillis(),
             )
         ) {
             if (silentHoldAt == 0L) silentHoldAt = SystemClock.elapsedRealtime()
@@ -1817,7 +1965,7 @@ object AutoMode {
             // Комната больше не висит круглосуточно, поэтому «стоит ли она» — это ответ
             // на вопрос, который мы сами и создаём. Пробуем поднять, но только когда
             // основной канал провалился уже [ROOM_TRIAL_AFTER] заходов подряд.
-            if (mainFailures >= ROOM_TRIAL_AFTER) trialRaiseRoom(host)
+            if (mainFailures >= roomTrialAfter()) trialRaiseRoom(host)
             roomAlive()
         }
         noteRoom()
@@ -1875,7 +2023,7 @@ object AutoMode {
         if (roomUp()) {
             // Подъём, о котором просили, удался — пауза возвращается к минуте.
             roomTrialPending = false
-            roomTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+            roomTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
             return
         }
         // Подъём идёт (поток сервиса, пересборка до входа, пауза между попытками, присмотр) —
@@ -1986,7 +2134,12 @@ object AutoMode {
 
     /** Пауза перед следующей пробной попыткой после неудачи: вдвое длиннее, но не выше потолка. */
     internal fun nextTrialPause(current: Long): Long =
-        (current * 2).coerceIn(ROOM_TRIAL_PAUSE_MILLIS, ROOM_TRIAL_PAUSE_CAP_MILLIS)
+        (current * 2).coerceIn(
+            Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS),
+            // Потолок не ниже начальной паузы: иначе coerceIn бросит на значениях с пульта.
+            Pult.long("avtomat.room_trial_pause_cap_millis", ROOM_TRIAL_PAUSE_CAP_MILLIS)
+                .coerceAtLeast(Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)),
+        )
 
     /**
      * Есть ли смысл просить комнату в этой сети.
@@ -2004,7 +2157,7 @@ object AutoMode {
     internal fun networkAllowsRoom(report: NetworkModeReport?, nowMillis: Long): Boolean {
         if (report == null) return true
         val age = nowMillis - report.atMillis
-        if (age !in 0 until ROOM_GATE_FRESH_MILLIS) return true
+        if (age !in 0 until Pult.long("avtomat.room_gate_fresh_millis", ROOM_GATE_FRESH_MILLIS)) return true
         if (report.mode == NetworkMode.NoNetwork) return false
         val s = report.signals
         val silentAll = s.physicalNetwork && s.tcpUnlisted == ProbeOutcome.Silence && s.tcpAllowed == ProbeOutcome.Silence
@@ -2259,19 +2412,19 @@ object AutoMode {
     }
 
     private fun delayFor(situation: Situation): Long = when (situation) {
-        Situation.Home -> ROUND_HOME_MILLIS
-        Situation.Main -> ROUND_MAIN_MILLIS
-        Situation.Room -> ROUND_ROOM_MILLIS
+        Situation.Home -> Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS)
+        Situation.Main -> Pult.long("avtomat.round_main_millis", ROUND_MAIN_MILLIS)
+        Situation.Room -> Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS)
         // Сети нет — работы для нас нет, но и спать навсегда нельзя. Раньше здесь стояло
         // «ждём только события от системы» (`Long.MAX_VALUE` = `wait(0)`), а вердикт «сети
         // нет» принимается по ОДНОМУ наблюдению. Ошиблись один раз — и разбудить нас может
         // только смена сети, которой в этой же сети не будет. Страховочный тик стоит одну
         // дешёвую проверку в пять минут и снимает залипание насовсем.
-        Situation.NoNetwork -> ROUND_NO_NETWORK_MILLIS
+        Situation.NoNetwork -> Pult.long("avtomat.round_no_network_millis", ROUND_NO_NETWORK_MILLIS)
         Situation.Searching, Situation.Unknown -> {
             searchingRounds++
-            val grown = ROUND_SEARCHING_MILLIS shl (searchingRounds - 1).coerceIn(0, 5)
-            grown.coerceAtMost(ROUND_SEARCHING_CAP_MILLIS)
+            val grown = Pult.long("avtomat.round_searching_millis", ROUND_SEARCHING_MILLIS) shl (searchingRounds - 1).coerceIn(0, 5)
+            grown.coerceAtMost(Pult.long("avtomat.round_searching_cap_millis", ROUND_SEARCHING_CAP_MILLIS))
         }
     }.also { if (situation != Situation.Searching && situation != Situation.Unknown) searchingRounds = 0 }
 
@@ -2479,10 +2632,13 @@ object AutoMode {
      * роутер точно заворачивает, и смотрим, попал ли ответ в подменный диапазон.
      */
     private fun homeBypass(network: Network): HomeSign.Sign {
-        val pool = Executors.newFixedThreadPool(HOME_DOMAINS.size + 1)
+        // Списки с пульта (`dom.domeny`, `dom.kontrol`); нет — вшитые.
+        val homeDomains = Pult.spisok("dom.domeny") ?: HOME_DOMAINS
+        val homeControl = Pult.stroka("dom.kontrol") ?: HOME_CONTROL
+        val pool = Executors.newFixedThreadPool(homeDomains.size + 1)
         try {
             val answers = ExecutorCompletionService<Pair<String, HostAnswer>>(pool)
-            for (host in HOME_DOMAINS + HOME_CONTROL) {
+            for (host in homeDomains + homeControl) {
                 // Ответ приходит вместе с именем, и сам вопрос никогда не бросает: иначе
                 // на сорвавшейся пробе было бы не понять, чей это ответ. Сорвался — это
                 // [HostAnswer.Silent], а не «настоящий адрес»: разница между «не узнали»
@@ -2490,7 +2646,7 @@ object AutoMode {
                 answers.submit { host to runCatching { askHost(network, host) }.getOrDefault(HostAnswer.Silent) }
             }
             val startedAt = SystemClock.elapsedRealtime()
-            val deadline = startedAt + DNS_BUDGET_MILLIS
+            val deadline = startedAt + Pult.long("dom.dns_budget_millis", DNS_BUDGET_MILLIS)
             var hits = 0
             var misses = 0
             var silent = 0
@@ -2504,12 +2660,12 @@ object AutoMode {
             // Разбираем ответы по мере прихода и закрываем сводку, как только итог ясен.
             // Раньше заход дожидался всех четырёх до конца бюджета, и один задумавшийся
             // домен стоил 2.5 секунды всему решению.
-            while (answered < HOME_DOMAINS.size + 1) {
+            while (answered < homeDomains.size + 1) {
                 // Ждём ровно столько, сколько ещё может что-то изменить: пока не хватает
                 // совпадений — весь бюджет, а когда их уже хватает и ждём только контроль —
                 // его короткий срок. Молчащий контроль и раньше засчитывался настоящим.
-                val until = if (hits >= HOME_HITS && control == HomeSign.Control.Waiting) {
-                    minOf(deadline, startedAt + HomeSign.CONTROL_BUDGET_MILLIS)
+                val until = if (hits >= Pult.int("dom.home_hits", HOME_HITS) && control == HomeSign.Control.Waiting) {
+                    minOf(deadline, startedAt + Pult.long("dom.control_budget_millis", HomeSign.CONTROL_BUDGET_MILLIS))
                 } else {
                     deadline
                 }
@@ -2526,7 +2682,7 @@ object AutoMode {
                     }
                 }"
                 when {
-                    host == HOME_CONTROL -> control = when (answer) {
+                    host == homeControl -> control = when (answer) {
                         HostAnswer.Fake -> HomeSign.Control.Fake
                         HostAnswer.Real -> HomeSign.Control.Real
                         HostAnswer.Silent -> HomeSign.Control.Silent
@@ -2536,7 +2692,7 @@ object AutoMode {
                     answer == HostAnswer.Real -> misses++
                     else -> silent++
                 }
-                val decided = HomeSign.verdict(hits, misses, silent, HOME_DOMAINS.size, HOME_HITS, control)
+                val decided = HomeSign.verdict(hits, misses, silent, homeDomains.size, Pult.int("dom.home_hits", HOME_HITS), control)
                 if (decided != null) {
                     sign = decided
                     break
@@ -2546,11 +2702,11 @@ object AutoMode {
             // дождались, идут в молчуны: это тоже «не узнали», а не «настоящий адрес».
             // Контроль среди них считается отдельно, он в число доменов не входит.
             if (sign == null) {
-                val pending = (HOME_DOMAINS.size + 1) - answered
+                val pending = (homeDomains.size + 1) - answered
                 val controlPending = if (control == HomeSign.Control.Waiting) 1 else 0
                 silent += (pending - controlPending).coerceAtLeast(0)
             }
-            val result = sign ?: HomeSign.settle(hits, misses, silent, HOME_HITS, control)
+            val result = sign ?: HomeSign.settle(hits, misses, silent, Pult.int("dom.home_hits", HOME_HITS), control)
             // Говорим ровно то, что узнали: это признак, а не вердикт. Вердикт «дома»
             // складывается выше, из признака и прошедшего наружу трафика, — и лог,
             // который писал здесь «→ дома», врал ровно в той обстановке, ради которой
@@ -2560,8 +2716,8 @@ object AutoMode {
             }.getOrNull().orEmpty()
             KLog.i(
                 TAG,
-                "признак дома по DNS в сети «${describe(network)}»: подменных $hits из ${HOME_DOMAINS.size}, " +
-                    "настоящих $misses, промолчали $silent, контрольный $HOME_CONTROL $control, " +
+                "признак дома по DNS в сети «${describe(network)}»: подменных $hits из ${homeDomains.size}, " +
+                    "настоящих $misses, промолчали $silent, контрольный $homeControl $control, " +
                     "спрашивали ${resolvers.joinToString(",").ifBlank { "резолверов нет" }}, " +
                     "по доменам [${details.joinToString(", ")}], " +
                     "за ${SystemClock.elapsedRealtime() - startedAt} мс → " +
@@ -2725,7 +2881,7 @@ object AutoMode {
     private fun homeCarriesTraffic(network: Network): Boolean? {
         lastHomeLatencyMs = null
         var measured = false
-        repeat(HOME_TRAFFIC_TRIES) { attempt ->
+        repeat(Pult.int("dom.home_traffic_tries", HOME_TRAFFIC_TRIES)) { attempt ->
             val measurement = HonestProbe.measureDirect(network, "дома")
             if (measurement.live) {
                 lastHomeLatencyMs = measurement.latencyMs
@@ -2841,11 +2997,11 @@ object AutoMode {
         blind: Boolean,
         done: Int,
         jitterMillis: Long,
-        rounds: Int = SILENT_RECHECK_ROUNDS,
+        rounds: Int = Pult.int("avtomat.silent_recheck_rounds", SILENT_RECHECK_ROUNDS),
     ): Long? = when {
         !blind -> null
         done >= rounds -> null
-        else -> jitterMillis.coerceIn(SILENT_RECHECK_MIN_MILLIS, SILENT_RECHECK_MAX_MILLIS)
+        else -> jitterMillis.coerceIn(Pult.long("avtomat.silent_recheck_min_millis", SILENT_RECHECK_MIN_MILLIS), Pult.long("avtomat.silent_recheck_max_millis", SILENT_RECHECK_MAX_MILLIS).coerceAtLeast(Pult.long("avtomat.silent_recheck_min_millis", SILENT_RECHECK_MIN_MILLIS)))
     }
 
     /**
@@ -2878,12 +3034,12 @@ object AutoMode {
         !broken && !suspect -> false
         nodeAnswers && !suspect -> false
         cachedAgeMillis == null -> true
-        else -> cachedAgeMillis >= HINT_TTL_MILLIS
+        else -> cachedAgeMillis >= Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)
     }
 
     /** Свеж ли довод «узел отвечает». */
     private fun nodeAnswers(): Boolean = nodeAnsweredAt != 0L &&
-        SystemClock.elapsedRealtime() - nodeAnsweredAt < NODE_ANSWER_TRUST_MILLIS
+        SystemClock.elapsedRealtime() - nodeAnsweredAt < Pult.long("avtomat.node_answer_trust_millis", NODE_ANSWER_TRUST_MILLIS)
 
     /**
      * Узел принял соединение. Это не «канал работает» — до трафика ещё далеко, — но это
@@ -2921,7 +3077,7 @@ object AutoMode {
         KLog.i(TAG, "реальные соединения массово падают ($prichina) — на заходе спрошу режим сети")
         val current = gate.current
         if (current != Situation.Main && current != Situation.Room) return
-        if (massovyeBudilAt != 0L && now - massovyeBudilAt < HINT_TTL_MILLIS) return
+        if (massovyeBudilAt != 0L && now - massovyeBudilAt < Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)) return
         massovyeBudilAt = now
         wakeLoop()
     }
@@ -2945,20 +3101,20 @@ object AutoMode {
         // Ядро пишет отказ по конечному выходу («Нидерланды · XHTTP»), а считаем мы узлы.
         nodeWatch.liveFailures(baseLayout.nodeOf(teg) ?: teg, now)
         if (baseLayout.nodes.size < 2 || gate.current != Situation.Main || manualExit != null) return
-        if (uzelBudilAt != 0L && now - uzelBudilAt < UZEL_BUDIT_MILLIS) return
+        if (uzelBudilAt != 0L && now - uzelBudilAt < Pult.long("uzel.uzel_budit_millis", UZEL_BUDIT_MILLIS)) return
         uzelBudilAt = now
         KLog.i(TAG, "соединения через «$teg» отказывают — проверяю узел сейчас, не дожидаясь захода")
         wakeLoop()
     }
 
     private fun massovyeOtkazySvezhie(): Boolean =
-        massovyeOtkazyAt != 0L && SystemClock.elapsedRealtime() - massovyeOtkazyAt < HINT_TTL_MILLIS
+        massovyeOtkazyAt != 0L && SystemClock.elapsedRealtime() - massovyeOtkazyAt < Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)
 
     /** Подсказка про эту сеть, пока она свежая. Ничего не меряет. */
     private fun cachedHint(network: Network): NetworkMode {
         val report = NetworkModeDetector.reportFor(network) ?: return NetworkMode.Unknown
         val age = System.currentTimeMillis() - report.atMillis
-        if (age !in 0 until HINT_TTL_MILLIS) return NetworkMode.Unknown
+        if (age !in 0 until Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)) return NetworkMode.Unknown
         return report.mode
     }
 
@@ -3029,7 +3185,7 @@ object AutoMode {
     }
 
     private fun askHost(network: Network, host: String): HostAnswer =
-        when (val answer = HomeProbe.ask(network, host, DNS_BUDGET_MILLIS)) {
+        when (val answer = HomeProbe.ask(network, host, Pult.long("dom.dns_budget_millis", DNS_BUDGET_MILLIS))) {
             is HomeProbe.Answer.Silent -> HostAnswer.Silent
             is HomeProbe.Answer.Addresses -> {
                 val fake = answer.addresses.any { address ->
@@ -3074,7 +3230,7 @@ object AutoMode {
             // непрочитанного конфига хуже, чем не заметить белый список.
             null
         } else {
-            anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS).also { open ->
+            anyConnects(network, endpoints, Pult.int("avtomat.tcp_timeout_millis", TCP_TIMEOUT_MILLIS)).also { open ->
                 KLog.i(
                     TAG,
                     if (open) {
@@ -3093,7 +3249,7 @@ object AutoMode {
         // радио молчало ~25 с, а автомат уже объявил основной мёртвым и поднимал комнату).
         val nowMs = SystemClock.elapsedRealtime()
         // Давнее молчание — не «первый пик»: между заходами могло пройти что угодно.
-        val prevSilentAt = portSilentAt.takeIf { it != 0L && nowMs - it <= PORT_SILENCE_STALE_MILLIS } ?: 0L
+        val prevSilentAt = portSilentAt.takeIf { it != 0L && nowMs - it <= Pult.long("avtomat.port_silence_stale_millis", PORT_SILENCE_STALE_MILLIS) } ?: 0L
         portSilentAt = if (portOpen == false) (if (prevSilentAt != 0L) prevSilentAt else nowMs) else 0L
         if (portOpen == false && !inRoom) {
             // Честная проба при невыбранном основном и без закреплённого входа переставляет селектор
@@ -3119,7 +3275,7 @@ object AutoMode {
         // Честная проба выше отвечает только на «идёт ли трафик». Троттлинг она не видит:
         // её ответ весит двести байт и проскакивает сквозь задушенную полосу целым.
         // Поэтому у живого канала отдельно спрашиваем, сколько он тянет ([SpeedProbe]).
-        val squeeze = if (trafficFlows == true) SpeedProbe.measure(proxy, "основной канал") else null
+        val squeeze = if (trafficFlows == true && !Pult.vykl("skorost")) SpeedProbe.measure(proxy, "основной канал") else null
         val squeezed = squeeze?.let(SpeedProbe::squeezed) ?: false
         if (squeezed) KLog.w(TAG, "основной канал задушен ($squeeze) — держаться за него незачем")
         return noteMain(mainVerdict(portOpen, trafficFlows, squeezed), portOpen, squeeze.takeIf { squeezed })
@@ -3170,7 +3326,7 @@ object AutoMode {
      */
     private fun checkNode(network: Network, host: Host, tag: String): NodeCheck {
         val endpoints = baseLayout.nodeEndpoints[tag].orEmpty()
-        if (endpoints.isEmpty() || !anyConnects(network, endpoints, TCP_TIMEOUT_MILLIS)) {
+        if (endpoints.isEmpty() || !anyConnects(network, endpoints, Pult.int("avtomat.tcp_timeout_millis", TCP_TIMEOUT_MILLIS))) {
             KLog.i(TAG, "узел «$tag»: ни один адрес не отвечает")
             return NodeCheck.Dead
         }
@@ -3179,7 +3335,7 @@ object AutoMode {
             KLog.i(TAG, "узел «$tag»: адрес отвечает, канал целиком проверить нечем — по адресу жив")
             return NodeCheck.ByAddress
         }
-        val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
+        val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, Pult.int("avtomat.probe_timeout_millis", PROBE_TIMEOUT_MILLIS))
         ProxyProbe.log("узел «$tag»", result)
         return when (result) {
             is ProxyProbe.Result.Live -> NodeCheck.Live
@@ -3281,7 +3437,7 @@ object AutoMode {
         when (nodeWatch.primaryAlive(now)) {
             AutoModeNodeWatch.Return.Started -> KLog.i(
                 TAG,
-                "первый узел «$primary» снова отвечает — вернусь, если продержится ${RETURN_AFTER_MILLIS / 60_000} мин",
+                "первый узел «$primary» снова отвечает — вернусь, если продержится ${returnAfterMillis() / 60_000} мин",
             )
             AutoModeNodeWatch.Return.Waiting -> Unit
             AutoModeNodeWatch.Return.Due ->
@@ -3356,7 +3512,7 @@ object AutoMode {
         mainPinned || standsOnMain
 
     internal fun portSilenceConfirmed(firstSilentAt: Long, now: Long): Boolean =
-        firstSilentAt != 0L && now - firstSilentAt >= PORT_SILENCE_GAP_MILLIS
+        firstSilentAt != 0L && now - firstSilentAt >= Pult.long("avtomat.port_silence_gap_millis", PORT_SILENCE_GAP_MILLIS)
 
     /**
      * Теневая запись про основной канал. Вердикт [works] уже вынесен и не меняется —
@@ -3479,7 +3635,7 @@ object AutoMode {
                 .onFailure { KLog.w(TAG, "выход на «$main» переставить не вышло: ${it.message}") }
         }
 
-        val result = ProxyProbe.through(proxy, PROBE_HOST, PROBE_PORT, PROBE_TIMEOUT_MILLIS)
+        val result = ProxyProbe.through(proxy, PROBE_HOST, PROBE_PORT, Pult.int("avtomat.probe_timeout_millis", PROBE_TIMEOUT_MILLIS))
         ProxyProbe.log("основной канал", result)
         // Итог пробы забирает [noteMain]: задержку и причину знает только она, а вердикт
         // выносится выше и от записи не зависит.
@@ -3545,7 +3701,7 @@ object AutoMode {
             endpoints.forEach { endpoint ->
                 answers.submit { connects(network, endpoint, timeoutMillis) }
             }
-            val deadline = SystemClock.elapsedRealtime() + timeoutMillis + CONNECT_SLACK_MILLIS
+            val deadline = SystemClock.elapsedRealtime() + timeoutMillis + Pult.long("avtomat.connect_slack_millis", CONNECT_SLACK_MILLIS)
             repeat(endpoints.size) {
                 val left = deadline - SystemClock.elapsedRealtime()
                 if (left <= 0) return false
@@ -3573,14 +3729,14 @@ object AutoMode {
      * @return true — узел ответил, полный заход нужен немедленно.
      */
     private fun peekMain(): Boolean {
-        if (!Settings.autoModeEnabled) return false
+        if (!avtoSam()) return false
         // Узел уже отвечает — рукопожатие не узнает ничего нового. Спрашиваем путь целиком.
         if (!peekWanted) return peekThroughMain()
         val endpoints = layout.mainEndpoints
         if (endpoints.isEmpty()) return false
         val network = physicalNetwork() ?: return false
         val endpoint = endpoints[(peekAt++ % endpoints.size).coerceAtLeast(0)]
-        if (!connects(network, endpoint, ROOM_PEEK_TIMEOUT_MILLIS)) {
+        if (!connects(network, endpoint, Pult.int("avtomat.room_peek_timeout_millis", ROOM_PEEK_TIMEOUT_MILLIS))) {
             // Молчание — обычный исход под запретом, и вслух о нём говорить незачем, кроме
             // как для разбора: без этой строки не видно, ходила приглядка вообще или нет.
             KLog.i(TAG, "приглядка из комнаты: узел ${endpoint.host}:${endpoint.port} молчит")
@@ -3651,7 +3807,7 @@ object AutoMode {
      *
      * @param sinceMillis сколько прошло с прошлой пробы; `null` — её не было ни разу.
      */
-    internal fun honestPeekDue(sinceMillis: Long?, everyMillis: Long = ROOM_HONEST_PEEK_MILLIS): Boolean =
+    internal fun honestPeekDue(sinceMillis: Long?, everyMillis: Long = Pult.long("avtomat.room_honest_peek_millis", ROOM_HONEST_PEEK_MILLIS)): Boolean =
         sinceMillis == null || sinceMillis >= everyMillis
 
     /**
@@ -3669,7 +3825,7 @@ object AutoMode {
     private fun waitInRoom(total: Long) {
         var left = total
         while (active && left > 0) {
-            val slice = minOf(left, Random.nextLong(ROOM_PEEK_MIN_MILLIS, ROOM_PEEK_MAX_MILLIS + 1))
+            val slice = minOf(left, Random.nextLong(Pult.long("avtomat.room_peek_min_millis", ROOM_PEEK_MIN_MILLIS), Pult.long("avtomat.room_peek_max_millis", ROOM_PEEK_MAX_MILLIS).coerceAtLeast(Pult.long("avtomat.room_peek_min_millis", ROOM_PEEK_MIN_MILLIS)) + 1))
             val before = SystemClock.elapsedRealtime()
             val woken = waitNext(slice)
             val spent = SystemClock.elapsedRealtime() - before
@@ -3702,7 +3858,7 @@ object AutoMode {
      * @return true — наружу перестало проходить, полный заход нужен немедленно.
      */
     private fun peekHome(): Boolean {
-        if (!Settings.autoModeEnabled) return false
+        if (!avtoSam()) return false
         // Сети не стало — заход разберётся сам, и позовёт его событие от системы.
         val network = physicalNetwork() ?: return true
         val measurement = HonestProbe.measureDirect(network, "дома, приглядка")
@@ -3740,7 +3896,7 @@ object AutoMode {
         while (active && left > 0) {
             val slice = HomeWatch.slice(
                 left,
-                Random.nextLong(HomeWatch.MIN_MILLIS, HomeWatch.MAX_MILLIS + 1),
+                Random.nextLong(Pult.long("dom.prismotr.min_millis", HomeWatch.MIN_MILLIS), Pult.long("dom.prismotr.max_millis", HomeWatch.MAX_MILLIS).coerceAtLeast(Pult.long("dom.prismotr.min_millis", HomeWatch.MIN_MILLIS)) + 1),
             )
             val before = SystemClock.elapsedRealtime()
             val woken = waitNext(slice)
