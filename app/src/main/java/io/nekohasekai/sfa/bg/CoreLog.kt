@@ -103,6 +103,10 @@ object CoreLog {
     @Volatile
     private var oknoPryamoIp = 0
 
+    /** Отказы «сеть недоступна» на IPv6-адрес: у сети нет v6-маршрута. НЕ входят в [oknoOtkazov]. */
+    @Volatile
+    private var oknoBezV6 = 0
+
     private val oknoKody = LinkedHashMap<String, Int>()
 
     /** Имена сайтов, по которым отказывали в этом окне: ось «сайт» для разбора. */
@@ -215,6 +219,13 @@ object CoreLog {
             else -> null
         }
     }
+
+    /**
+     * Отказ «сеть недоступна» на IPv6-адрес. Приложение пробует v6 напрямую там, где у Wi-Fi нет
+     * v6-маршрута: 22.10.2026 у одного телефона это было 1735 из 2282 отказов за 48 ч и 6 ложных тревог.
+     * Туннель тут ни при чём, поэтому в долю отказов для тревоги и вопроса о режиме сети это не идёт.
+     */
+    internal fun bezMarshrutaV6(kod: String, adres: String): Boolean = kod == "set_nedostupna" && adres.contains(':')
 
     /** Голый адрес, а не имя: IPv4 или IPv6. */
     internal fun golyyAdres(adres: String): Boolean =
@@ -330,15 +341,21 @@ object CoreLog {
                 // Переключение выхода — вызов в командный сервер; поток журнала им не держим.
                 thread(name = "socks-breaker", isDaemon = true) { AutoMode.roomLost("предохранитель") }
             }
-            schestOtkaz(teper)
             val nizhnyaya = line.lowercase(Locale.US)
             val kod = PRICHINY.firstOrNull { nizhnyaya.contains(it.second) }?.first ?: "prochee"
-            oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
+            val adres = RX_ADRES_OTKAZA.find(line)?.groupValues?.getOrNull(1).orEmpty()
+            // IPv6 без маршрута в сети — не обрыв туннеля: в долю тревоги не идёт, считается отдельно.
+            val bezV6 = bezMarshrutaV6(kod, adres)
+            if (bezV6) {
+                oknoBezV6++
+            } else {
+                schestOtkaz(teper)
+                oknoKody[kod] = (oknoKody[kod] ?: 0) + 1
+            }
             // Имя сайта у ядра есть, а в строку отказа оно его не кладёт: там только
             // адрес. Без имени ось «сайт» в журнале телефона отсутствует вовсе, и
             // диагноз 10.09.2026 приходилось ставить обратным запросом руками.
-            val adres = RX_ADRES_OTKAZA.find(line)?.groupValues?.getOrNull(1).orEmpty()
-            if (golyyAdres(adres) && RX_VYHOD.find(line)?.groupValues?.getOrNull(1) == "direct") oknoPryamoIp++
+            if (!bezV6 && golyyAdres(adres) && RX_VYHOD.find(line)?.groupValues?.getOrNull(1) == "direct") oknoPryamoIp++
             if (adres.isNotEmpty()) {
                 val imya = runCatching { ImenaSaytov.imya(adres) }.getOrDefault("")
                 if (imya.isNotEmpty()) {
@@ -365,6 +382,7 @@ object CoreLog {
         val otk = oknoOtkazov
         val tunnel = oknoTunnel
         val pryamoIp = oknoPryamoIp
+        val bezV6 = oknoBezV6
         val kody = oknoKody.entries.joinToString(",") { "${it.key}=${it.value}" }
         // Топ имён: пяти хватает, чтобы увидеть «ломается именно Яндекс», а не гадать.
         val topImen = oknoImena.entries.sortedByDescending { it.value }.take(5)
@@ -379,9 +397,10 @@ object CoreLog {
         oknoOtkazov = 0
         oknoTunnel = 0
         oknoPryamoIp = 0
+        oknoBezV6 = 0
         oknoKody.clear()
         oknoImena.clear()
-        if (soed == 0 && otk == 0) return
+        if (soed == 0 && otk == 0 && bezV6 == 0) return
         val dolya = if (soed > 0) otk * 100 / soed else 100
         runCatching {
             rotator?.append(
@@ -402,6 +421,7 @@ object CoreLog {
                 imena = imenaDlyaZapisi,
                 tunnel = tunnel,
                 pryamoIp = pryamoIp,
+                bezV6 = bezV6,
             )
         }
         if (povodSprositRezhim(dolya, kodyDlyaZapisi)) {

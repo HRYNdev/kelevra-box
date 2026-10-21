@@ -38,6 +38,10 @@ object Aktivatsiya {
     private fun keshSpravochnika(): List<String> =
         Priglashenie.razobratSpravochnik(prefs().getString("dveri_json", "").orEmpty())
 
+    /** Двери из кэша (справочник и прошлые /info), без сети: для запасного пути. */
+    fun dveriIzKesha(): List<String> =
+        Priglashenie.spisokDverej(SubscriptionLink.DEFAULT_HOST, keshSpravochnika(), zapomnennye())
+
     /** Список дверей. Справочник обновляется из релиза; ошибка загрузки не мешает: берётся кэш. */
     suspend fun spisokDverej(): List<String> = withContext(Dispatchers.IO) {
         runCatching {

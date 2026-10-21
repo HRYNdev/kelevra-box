@@ -85,6 +85,23 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             reloadByHumanAt = SystemClock.elapsedRealtime()
         }
 
+        /**
+         * Служба в этом процессе запущена и не останавливалась. Новый процесс начинает с
+         * false — так [AvtoVozvrat] видит, что человек службу включал, а её нет.
+         */
+        @Volatile
+        var zhiva = false
+            private set
+
+        /**
+         * Когда (elapsedRealtime) до службы последний раз дошла команда на запуск, 0 — ни
+         * разу в этом процессе. По ней [AvtoVozvrat] проверяет, что `startForegroundService`
+         * не ушёл в пустоту.
+         */
+        @Volatile
+        var komandaPrishlaAt = 0L
+            private set
+
         fun start() {
             val intent =
                 runBlocking {
@@ -1516,6 +1533,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             runCatching { CoreLog.stop() }
             runCatching { Zapisi.stop() }
             Settings.startedByUser = false
+            zhiva = false
             withContext(Dispatchers.Main) {
                 KLog.i(TAG, "сервис остановлен")
                 status.value = Status.Stopped
@@ -1542,6 +1560,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
         serviceStopping = true
         Settings.startedByUser = false
+        zhiva = false
         AutoMode.stop()
         io.nekohasekai.sfa.bg.pult.PultSvyaz.stop()
         ProbeSocket.useProtector(null)
@@ -1596,8 +1615,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         runCatching { AppLog.start(Application.application) }
         // Записи переходов нужны и дома, где ядра нет: «кто погасил / поднял туннель».
         runCatching { Zapisi.start() }
+        komandaPrishlaAt = SystemClock.elapsedRealtime()
         if (status.value != Status.Stopped) return Service.START_NOT_STICKY
         KLog.i(TAG, "команда на запуск сервиса")
+        zhiva = true
+        runCatching { AvtoVozvrat.ubratUvedomlenie(Application.application) }
         serviceStopping = false
         status.value = Status.Starting
         // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
@@ -1635,7 +1657,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     internal fun onBind(): IBinder = binder
 
     internal fun onDestroy() {
-        KLog.i(TAG, "сервис уничтожен системой")
+        if (status.value == Status.Stopped && !zhiva) {
+            // Штатно: служба остановлена нами или была только привязана (плитка, экран) и не
+            // запускалась. Раньше и это писалось как «сервис уничтожен системой» и путало
+            // разбор: казалось, что система раз за разом убивает работающую службу.
+            KLog.i(TAG, "служба уничтожена штатно (остановлена или была только привязана)")
+        } else {
+            // Сюда приходят без нашей остановки: человек ничего не нажимал, а службы нет.
+            KLog.w(TAG, "сервис уничтожен системой без команды остановки (статус ${status.value})")
+            zhiva = false
+            AvtoVozvrat.posleGibeli()
+        }
         binder.close()
     }
 

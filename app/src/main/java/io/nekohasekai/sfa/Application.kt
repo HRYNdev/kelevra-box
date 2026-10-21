@@ -110,6 +110,11 @@ class Application : Application() {
             HookModuleUpdateNotifier.sync(this@Application)
         }
 
+        // Служба, которую человек включил, пропадает без следа, когда система убивает
+        // процесс: сама она не возвращается. Каждый подъём процесса (фоновая работа,
+        // плитка, экран) — повод проверить и поднять, а не вышло — сказать человеку.
+        runCatching { io.nekohasekai.sfa.bg.AvtoVozvrat.proveritPosleStartaProcessa(this) }
+
         if (Vendor.isPerAppProxyAvailable()) {
             registerReceiver(
                 AppChangeReceiver(),

@@ -197,7 +197,7 @@ object SubscriptionRefresh {
 
             val content = try {
                 KLog.i(TAG, "обновление подписки: запрашиваю настройки у сервера")
-                val text = HTTPClient().use { it.getString(Kelevra.adresSeti(profile.typed.remoteURL)) }
+                val text = io.nekohasekai.sfa.ZapasnoyPut.tekst(Kelevra.adresSeti(profile.typed.remoteURL))
                 Libbox.checkConfig(text)
                 text
             } catch (e: Exception) {
