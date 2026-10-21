@@ -1,8 +1,8 @@
 package io.nekohasekai.sfa.bg.path
 
+import io.nekohasekai.sfa.bg.KLog
 import android.net.Network
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.bg.AutoModeExits
 import java.io.DataInputStream
 import java.io.OutputStream
@@ -186,7 +186,7 @@ object HonestProbe {
             quietDown(goal.host)
             val result = request(entry, goal, wait, collectBody)
             lastTouched[goal.host] = SystemClock.elapsedRealtime()
-            Log.i(TAG, "«$label» через ${entry.host}:${entry.port} → $result")
+            KLog.i(TAG, "«$label» через ${entry.host}:${entry.port} → $result")
             result
         }
     }
@@ -221,7 +221,7 @@ object HonestProbe {
         quietDown(goal.host)
         val result = directRequest(network, goal, timeoutMillis)
         lastTouched[goal.host] = SystemClock.elapsedRealtime()
-        Log.i(TAG, "«$label» напрямую по сети → $result")
+        KLog.i(TAG, "«$label» напрямую по сети → $result")
         result
     }
 

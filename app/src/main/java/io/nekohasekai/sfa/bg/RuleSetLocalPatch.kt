@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import java.io.File
 import org.json.JSONArray
 import org.json.JSONObject
@@ -143,6 +142,6 @@ object RuleSetLocalPatch {
         Result(content, emptyList(), emptyList(), emptyList(), why, false)
 
     fun log(result: Result) {
-        if (result.missing.isEmpty()) Log.i(TAG, result.note) else Log.w(TAG, result.note)
+        if (result.missing.isEmpty()) KLog.i(TAG, result.note) else KLog.w(TAG, result.note)
     }
 }

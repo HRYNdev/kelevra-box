@@ -1,7 +1,6 @@
 package io.nekohasekai.sfa.bg
 
 import android.content.Context
-import android.util.Log
 import io.nekohasekai.sfa.utils.HookErrorClient
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -22,17 +21,17 @@ object DebugInfoExporter {
     private const val BUFFER_SIZE = 128 * 1024
 
     fun export(context: Context, outputPath: String, packageName: String): String {
-        Log.i(TAG, "export start: output=$outputPath, package=$packageName")
+        KLog.i(TAG, "export start: output=$outputPath, package=$packageName")
         val outFile = File(outputPath)
         if (!outFile.name.lowercase(Locale.US).endsWith(".zip")) {
-            Log.e(TAG, "export failed: output path must end with .zip")
+            KLog.e(TAG, "export failed: output path must end with .zip")
             throw IllegalArgumentException("output path must end with .zip")
         }
         val parent = outFile.parentFile!!
         if (!parent.exists()) {
-            Log.i(TAG, "creating output directory: ${parent.path}")
+            KLog.i(TAG, "creating output directory: ${parent.path}")
             if (!parent.mkdirs()) {
-                Log.e(TAG, "export failed: failed to create output directory: ${parent.path}")
+                KLog.e(TAG, "export failed: failed to create output directory: ${parent.path}")
                 throw IllegalStateException("failed to create output directory")
             }
         }
@@ -40,48 +39,48 @@ object DebugInfoExporter {
         var entriesAdded = 0
         try {
             ZipOutputStream(BufferedOutputStream(FileOutputStream(outFile))).use { zip ->
-                Log.i(TAG, "adding export_info.txt")
+                KLog.i(TAG, "adding export_info.txt")
                 addTextEntry(zip, "system/export_info.txt", buildExportInfo(context, packageName))
                 entriesAdded++
-                Log.i(TAG, "adding framework entries")
+                KLog.i(TAG, "adding framework entries")
                 val frameworkCount = addFrameworkEntries(zip, warnings)
                 entriesAdded += frameworkCount
-                Log.i(TAG, "added $frameworkCount framework entries")
-                Log.i(TAG, "adding apex entries")
+                KLog.i(TAG, "added $frameworkCount framework entries")
+                KLog.i(TAG, "adding apex entries")
                 val apexCount = addApexEntries(zip, warnings)
                 entriesAdded += apexCount
-                Log.i(TAG, "added $apexCount apex entries")
-                Log.i(TAG, "adding log entries")
+                KLog.i(TAG, "added $apexCount apex entries")
+                KLog.i(TAG, "adding log entries")
                 val logCount = addLogEntries(zip, warnings, context)
                 entriesAdded += logCount
-                Log.i(TAG, "added $logCount log entries")
-                Log.i(TAG, "adding system entries")
+                KLog.i(TAG, "added $logCount log entries")
+                KLog.i(TAG, "adding system entries")
                 val systemCount = addSystemEntries(zip, warnings, packageName)
                 entriesAdded += systemCount
-                Log.i(TAG, "added $systemCount system entries")
+                KLog.i(TAG, "added $systemCount system entries")
                 if (warnings.isNotEmpty()) {
                     addTextEntry(zip, "logs/debug_export.txt", warnings.joinToString("\n"))
                     entriesAdded++
                 }
             }
-            Log.i(TAG, "zip closed, total entries: $entriesAdded, file size: ${outFile.length()}")
+            KLog.i(TAG, "zip closed, total entries: $entriesAdded, file size: ${outFile.length()}")
         } catch (e: Throwable) {
             outFile.delete()
             val error = buildError("zip", "export failed", e, warnings, outputPath)
-            Log.e(TAG, error, e)
+            KLog.e(TAG, error, e)
             throw e
         }
         if (outFile.length() == 0L) {
             val error = "output file is empty after writing $entriesAdded entries"
-            Log.e(TAG, error)
+            KLog.e(TAG, error)
             outFile.delete()
             throw IllegalStateException(error)
         }
         outFile.setReadable(true, false)
         if (warnings.isNotEmpty()) {
-            Log.w(TAG, "export finished with ${warnings.size} warnings, output size: ${outFile.length()}")
+            KLog.w(TAG, "export finished with ${warnings.size} warnings, output size: ${outFile.length()}")
         } else {
-            Log.i(TAG, "export finished: output=$outputPath, size=${outFile.length()}")
+            KLog.i(TAG, "export finished: output=$outputPath, size=${outFile.length()}")
         }
         return outFile.absolutePath
     }

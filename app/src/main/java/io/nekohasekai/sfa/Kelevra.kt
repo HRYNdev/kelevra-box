@@ -97,7 +97,19 @@ object Kelevra {
      * больше. Формат «ключ=значение» через точку с запятой — тот же, что у десктопа,
      * сервер разбирает обе платформы одним куском кода и незнакомые ключи кладёт рядом.
      */
-    private fun pasportHeader(): Pair<String, String>? = runCatching {
+    private fun pasportHeader(): Pair<String, String>? = runCatching { "X-Pasport" to pasportStroka() }.getOrNull()
+
+    /**
+     * Сам паспорт — та же строка пишется и в журнал приложения ([io.nekohasekai.sfa.bg.AppLog]):
+     * журнал читается на сервере без заголовков запросов.
+     *
+     * С 20.10.2026 сверх прежнего: снято ли с приложения ограничение батареи (`bat_iskl`),
+     * режет ли прошивка logcat (`logcat`, см. [io.nekohasekai.sfa.bg.KLog]), тип сети
+     * (`set`), оператор (`operator`) и пояс часов (`tz`, `tz_id`) — у телефонов на
+     * московском времени разбор журналов сдвигал записи на два часа. Новых разрешений
+     * ни одно поле не требует; каждое добывается отдельно, и сбой одного не съедает паспорт.
+     */
+    fun pasportStroka(): String {
         val chasti = mutableListOf<String>()
         chasti += "os=" + osVersion.replace(';', ' ').replace('=', ' ').take(40)
         chasti += "yadro=" + io.nekohasekai.libbox.Libbox.version().take(24)
@@ -112,8 +124,75 @@ object Kelevra {
             val chasov = (System.currentTimeMillis() - otozvano) / 3600000L
             chasti += "vpn_otozvano_ch=$chasov"
         }
-        "X-Pasport" to chasti.joinToString(";")
-    }.getOrNull()
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                val pm = Application.powerManager
+                val iskl = pm.isIgnoringBatteryOptimizations(Application.application.packageName)
+                chasti += "bat_iskl=" + if (iskl) "1" else "0"
+            }
+        }
+        chasti += "logcat=" + io.nekohasekai.sfa.bg.AppLog.priznakLogcat()
+        runCatching { chasti += "set=" + tipSeti() }
+        runCatching {
+            val tm = Application.application.getSystemService(android.content.Context.TELEPHONY_SERVICE)
+                as? android.telephony.TelephonyManager
+            val imya = tm?.networkOperatorName.orEmpty()
+            if (imya.isNotBlank()) chasti += "operator=" + polePasporta(header(latinica(imya))).take(32)
+        }
+        runCatching {
+            val tz = java.util.TimeZone.getDefault()
+            chasti += "tz=" + io.nekohasekai.sfa.bg.AppLog.smeshchenie(tz.getOffset(System.currentTimeMillis()))
+            chasti += "tz_id=" + polePasporta(header(tz.id)).take(40)
+        }
+        return chasti.joinToString(";")
+    }
+
+    /** Значение поля паспорта не должно ломать разбор «ключ=значение;…». */
+    private fun polePasporta(value: String): String = value.replace(';', ' ').replace('=', ' ').trim()
+
+    /**
+     * Тип сети, которую система считает основной: wifi / mobile / ethernet / vpn / other / none.
+     * Сначала спрашиваем физическую сеть ([io.nekohasekai.sfa.bg.DefaultNetworkMonitor]): при
+     * поднятом туннеле `activeNetwork` — это он сам.
+     */
+    private fun tipSeti(): String {
+        val cm = Application.connectivity
+        val network = io.nekohasekai.sfa.bg.DefaultNetworkMonitor.defaultNetwork
+            ?: (if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) cm.activeNetwork else null)
+            ?: return "none"
+        val caps = cm.getNetworkCapabilities(network) ?: return "none"
+        return when {
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+            else -> "other"
+        }
+    }
+
+    /**
+     * Кириллицу — латиницей: заголовок обязан быть ASCII ([header]), а «МТС» иначе
+     * превратился бы в «???». Остальное не-ASCII остаётся на совести [header].
+     */
+    internal fun latinica(value: String): String = buildString {
+        for (ch in value) {
+            val lower = ch.lowercaseChar()
+            val t = TRANSLIT[lower]
+            when {
+                t == null -> append(ch)
+                ch.isUpperCase() -> append(t.replaceFirstChar { it.uppercaseChar() })
+                else -> append(t)
+            }
+        }
+    }
+
+    private val TRANSLIT: Map<Char, String> = mapOf(
+        'а' to "a", 'б' to "b", 'в' to "v", 'г' to "g", 'д' to "d", 'е' to "e", 'ё' to "e",
+        'ж' to "zh", 'з' to "z", 'и' to "i", 'й' to "y", 'к' to "k", 'л' to "l", 'м' to "m",
+        'н' to "n", 'о' to "o", 'п' to "p", 'р' to "r", 'с' to "s", 'т' to "t", 'у' to "u",
+        'ф' to "f", 'х' to "h", 'ц' to "ts", 'ч' to "ch", 'ш' to "sh", 'щ' to "sch", 'ъ' to "",
+        'ы' to "y", 'ь' to "", 'э' to "e", 'ю' to "yu", 'я' to "ya",
+    )
 
     /**
      * Чем устройство подписывается в первой строке своего журнала.

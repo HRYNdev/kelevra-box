@@ -5,7 +5,6 @@ import android.content.Context
 import android.os.UserManager
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import android.util.Log
 import androidx.annotation.RequiresApi
 import io.nekohasekai.sfa.constant.Status
 
@@ -50,7 +49,7 @@ class TileService :
         // плитку просто показываем недоступной: нажать на неё всё равно нельзя, а
         // разблокировка приведёт сюда снова.
         if (!userUnlocked()) {
-            Log.i(TAG, "телефон ещё не разблокирован — состояние плитки спросим после разблокировки")
+            KLog.i(TAG, "телефон ещё не разблокирован — состояние плитки спросим после разблокировки")
             qsTile?.apply {
                 state = Tile.STATE_UNAVAILABLE
                 updateTile()
@@ -79,7 +78,7 @@ class TileService :
     private fun toggleService() {
         when (connection.status) {
             Status.Stopped -> BoxService.start()
-            Status.Started -> BoxService.stop()
+            Status.Started -> BoxService.stop("человек: плитка")
             else -> {}
         }
     }

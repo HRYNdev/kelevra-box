@@ -2,7 +2,6 @@ package io.nekohasekai.sfa.bg
 
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import java.io.File
 import java.net.InetSocketAddress
@@ -138,7 +137,7 @@ object TelemostCore {
         synchronized(lanes) { lanes.clear() }
         pairedLanes = 0
         lastLine = ""
-        Log.i(
+        KLog.i(
             TAG,
             "старт: socks=127.0.0.1:$socksPort полос $stripes/$stripesMax " +
                 "конференция=${shortUrl(url)} ключ=${if (key.isBlank()) "нет" else "есть"}",
@@ -153,7 +152,7 @@ object TelemostCore {
             // 16.10.2026 на улице: Телемост встал в 13:22:44 для комнаты, которую остановили
             // в 13:21:09, и вызвал пересборку ядра. Пока ждём полосы, смотрим, нужна ли комната.
             if (!stillNeeded()) {
-                Log.i(TAG, "комната больше не нужна — не дожидаюсь готовности")
+                KLog.i(TAG, "комната больше не нужна — не дожидаюсь готовности")
                 stop()
                 return OlcRtcCore.CANCELLED_REASON
             }
@@ -162,7 +161,7 @@ object TelemostCore {
                 return "ядро Телемоста вышло (код ${runCatching { p.exitValue() }.getOrDefault(-1)}): $lastLine"
             }
             if (pairedLanes > 0 && portOpen(socksPort)) {
-                Log.i(TAG, "готов за ${SystemClock.elapsedRealtime() - startedAt} мс: полос с выходом $pairedLanes")
+                KLog.i(TAG, "готов за ${SystemClock.elapsedRealtime() - startedAt} мс: полос с выходом $pairedLanes")
                 return null
             }
             Thread.sleep(250)
@@ -175,12 +174,12 @@ object TelemostCore {
     fun stop() {
         val p = process ?: return
         process = null
-        Log.i(TAG, "остановка")
+        KLog.i(TAG, "остановка")
         p.destroy()
         val until = SystemClock.elapsedRealtime() + STOP_TIMEOUT_MILLIS
         while (alive(p) && SystemClock.elapsedRealtime() < until) Thread.sleep(50)
         if (alive(p)) {
-            Log.w(TAG, "не вышел за $STOP_TIMEOUT_MILLIS мс, добиваю")
+            KLog.w(TAG, "не вышел за $STOP_TIMEOUT_MILLIS мс, добиваю")
             // до API 26 destroy() в libcore Android и так шлёт SIGKILL
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) p.destroyForcibly()
         }
@@ -201,11 +200,11 @@ object TelemostCore {
                 }
                 if (noise.none { it in line }) {
                     lastLine = line
-                    Log.i(CORE_TAG, redact(line))
+                    KLog.i(CORE_TAG, redact(line))
                 }
             }
         }
-        Log.i(TAG, "ядро Телемоста закрыло вывод")
+        KLog.i(TAG, "ядро Телемоста закрыло вывод")
     }
 
     private fun portOpen(port: Int): Boolean = runCatching {

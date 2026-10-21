@@ -6,7 +6,7 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.util.Log;
+import io.nekohasekai.sfa.bg.KLog;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -63,7 +63,7 @@ public final class XposedProvider extends ContentProvider {
     if (method.equals(IXposedService.SEND_BINDER) && extras != null) {
       IBinder binder = extras.getBinder("binder");
       if (binder != null) {
-        Log.d(TAG, "binder received: " + binder);
+        KLog.d(TAG, "binder received: " + binder);
         XposedServiceHelper.onBinderReceived(binder);
       }
       return new Bundle();

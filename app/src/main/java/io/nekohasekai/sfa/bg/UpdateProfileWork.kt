@@ -1,7 +1,6 @@
 package io.nekohasekai.sfa.bg
 
 import android.content.Context
-import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -29,7 +28,7 @@ class UpdateProfileWork {
             runCatching {
                 reconfigureUpdater0()
             }.onFailure {
-                Log.e(TAG, "reconfigureUpdater", it)
+                KLog.e(TAG, "reconfigureUpdater", it)
             }
         }
 
@@ -105,7 +104,7 @@ class UpdateProfileWork {
                 } catch (e: Exception) {
                     // Адрес подписки несёт код доступа целиком, а текст ошибки его часто
                     // повторяет — в лог идёт замаскированная копия исключения.
-                    Log.e(TAG, "update profile ${profile.name}", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
+                    KLog.e(TAG, "update profile ${profile.name}", io.nekohasekai.sfa.Kelevra.maskThrowable(e))
                     success = false
                 }
             }
@@ -116,7 +115,7 @@ class UpdateProfileWork {
             runCatching {
                 io.nekohasekai.sfa.compose.screen.home.SubscriptionRefresh.loadInfo()
             }.onFailure {
-                Log.w(TAG, "сводка подписки не обновилась", it)
+                KLog.w(TAG, "сводка подписки не обновилась", it)
             }
 
             if (selectedProfileUpdated) {

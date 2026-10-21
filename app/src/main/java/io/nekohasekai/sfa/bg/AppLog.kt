@@ -10,10 +10,12 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
-import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 /**
  * Своя запись журнала: приложение пишет лог само, себе, без единого разрешения.
@@ -32,7 +34,10 @@ import java.util.Locale
  * достать с телефона без root. Если внешнего хранилища нет вовсе, откатываемся на
  * `filesDir`: там тоже всё работает, только достать сложнее.
  *
- * Что пишем. Свои же записи logcat. Начиная с Android 4.1 приложение читает из logcat
+ * Что пишем. Строки [KLog] — напрямую, мимо logcat (см. там: прошивки Huawei и Honor
+ * режут logcat приложения вплоть до нуля). Плюс то, что logcat приносит из процесса
+ * помимо KLog: чужие библиотеки, падения AndroidRuntime, WebView — там, где logcat жив.
+ * Начиная с Android 4.1 приложение читает из logcat
  * ТОЛЬКО записи собственного процесса и никакого разрешения для этого не нужно —
  * поэтому [Runtime.exec] с `logcat` отдаёт ровно то, что раньше собирал adb-шелл в
  * automode.log и events.log: `AutoMode`, `BoxService`, `NetworkMode`, `HonestProbe`,
@@ -68,8 +73,104 @@ object AppLog {
 
     private val stampFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
+    /**
+     * Самопроверка logcat: сколько ждём, пока маркеры вернутся. Живой logcat отдаёт их
+     * за доли секунды; медленный телефон на старте — за несколько.
+     */
+    private const val SAMOPROVERKA_ZHDAT_MS = 20_000L
+
+    /**
+     * Как часто самопроверка повторяется сама. Ещё она повторяется после каждого
+     * перезапуска чтения logcat: на Huawei logcat деградировал постепенно, и признак,
+     * снятый один раз на старте, в паспорте врал бы.
+     */
+    private const val SAMOPROVERKA_KAZHDYE_MS = 60 * 60_000L
+
+    /** По этим словам маркер самопроверки узнаётся в потоке logcat. */
+    private const val MARKER = "самопроверка logcat"
+
+    /**
+     * Тег маркеров. Пишутся они только в logcat (не через [KLog]: им надо именно
+     * вернуться из logcat), а в файл не кладутся — итог самопроверки пишется заметкой.
+     */
+    private const val TAG_MARKER = "KelevraLogcatCheck"
+
+    /** Уровни, которые проверяет самопроверка. */
+    internal val PROVERYAEMYE = listOf('D', 'I', 'W', 'E')
+
+    /** Сколько строк [KLog] держим, пока файл журнала ещё не открыт. Старше — вытесняются. */
+    private const val DO_STARTA_MAX = 2000
+
     @Volatile
     private var rotator: LogRotator? = null
+
+    /**
+     * Строки [KLog], пришедшие до открытия файла: самый старт процесса или телефон ещё не
+     * разблокирован (хранилище заперто). Дописываются, как только файл откроется.
+     */
+    private val doStarta = ArrayDeque<String>()
+    private var doStartaVytesneno = 0
+
+    /** Метка текущего круга самопроверки; null — ещё не запускалась. */
+    @Volatile
+    private var markerId: String? = null
+
+    /** Какие уровни маркеров текущего круга уже вернулись из logcat. */
+    private val uvideli = java.util.Collections.synchronizedSet(HashSet<Char>())
+
+    /** Круг самопроверки закончил ждать: опоздавший маркер теперь лишь поправляет признак. */
+    @Volatile
+    private var krugResheno = false
+
+    /** Итог последней самопроверки для паспорта: «?» — ещё не было ни одной. */
+    @Volatile
+    private var logcatPriznak = "?"
+
+    /** Толчок повторить самопроверку раньше срока (чтение logcat поднято заново). */
+    private val pereproverit = LinkedBlockingQueue<Unit>(1)
+
+    @Volatile
+    private var proverkaPotok: Thread? = null
+
+    /**
+     * Признак для паспорта устройства: «ok» — logcat доносит все уровни, «rezhet_DIW» —
+     * какие уровни не доходят, «net» — не доходит ничего, «?» — проверки ещё не было.
+     * На запись журнала не влияет: [KLog] пишет в файл сам всегда.
+     */
+    fun priznakLogcat(): String = logcatPriznak
+
+    internal fun opisanie(uvideliUrovni: Set<Char>): String {
+        val cut = PROVERYAEMYE.filter { it !in uvideliUrovni }
+        return when {
+            cut.isEmpty() -> "ok"
+            cut.size == PROVERYAEMYE.size -> "net"
+            else -> "rezhet_" + cut.sorted().joinToString("")
+        }
+    }
+
+    /**
+     * Пояс телефона одной строкой: «Europe/Moscow, UTC+03:00».
+     *
+     * Метка времени в строках журнала — местная и без пояса (формат logcat `threadtime`,
+     * его разбирает сервер, и менять его нельзя). 20.10.2026 у телефонов на московском
+     * времени разбор сдвигал все записи на два часа: сервер считал их екатеринбургскими.
+     * Поэтому пояс пишется шапкой в начало каждого файла журнала и в паспорт устройства.
+     */
+    fun poyas(now: Long = System.currentTimeMillis()): String {
+        val tz = TimeZone.getDefault()
+        return "${tz.id}, UTC${smeshchenie(tz.getOffset(now))}"
+    }
+
+    /** Смещение пояса в виде «+03:00» / «-04:30». */
+    internal fun smeshchenie(offsetMillis: Int): String {
+        val sign = if (offsetMillis < 0) "-" else "+"
+        val minutes = Math.abs(offsetMillis) / 60_000
+        return sign + "%02d:%02d".format(Locale.US, minutes / 60, minutes % 60)
+    }
+
+    /** Шапка каждого нового файла журнала: по ней разбор узнаёт пояс меток. */
+    internal fun shapkaFayla(): String =
+        "${synchronized(stampFormat) { stampFormat.format(Date()) }} === пояс ${poyas()} ===\n"
 
     @Volatile
     private var pump: Thread? = null
@@ -97,10 +198,8 @@ object AppLog {
             // телефона хранилище заперто, и молча получить журнал «в никуда» нельзя.
             val folder = dir(context)
             if (!folder.isDirectory && !folder.mkdirs()) error("каталог журнала не создан: $folder")
-            val target = LogRotator(folder, BASE_NAME, MAX_FILE_BYTES, MAX_FILES)
-            rotator = target
-            target
-        }.onFailure { Log.w(TAG, "не удалось открыть свой журнал, попробую позже", it) }.getOrNull() ?: return
+            LogRotator(folder, BASE_NAME, MAX_FILE_BYTES, MAX_FILES, header = ::shapkaFayla)
+        }.onFailure { KLog.w(TAG, "не удалось открыть свой журнал, попробую позже", it) }.getOrNull() ?: return
 
         // Первая строка журнала называет устройство: модель, система с версией, версия
         // приложения ([Kelevra.deviceSummary]). До этого в андроидном журнале не было ни
@@ -115,14 +214,139 @@ object AppLog {
         // перезапуска одного лишь приложения, а без такой отметки два разных случая
         // выглядят в журнале одинаково.
         note(
+            started,
             "=== запись журнала начата, $устройство, pid ${Process.myPid()}, " +
-                "телефон включён ${SystemClock.elapsedRealtime() / 60_000} мин назад ===",
+                "телефон включён ${SystemClock.elapsedRealtime() / 60_000} мин назад, " +
+                "пояс ${runCatching { poyas() }.getOrDefault("?")} ===",
         )
+        // Шапка сессии первой, за ней — строки KLog, накопленные до открытия файла.
+        podklyuchit(started)
+        runCatching { Kelevra.pasportStroka() }.getOrNull()?.let { note("=== паспорт: $it ===") }
         pump = Thread({ pumpLoop(started) }, "kelevra-app-log").apply {
             isDaemon = true
             priority = Thread.MIN_PRIORITY
             start()
         }
+        if (proverkaPotok == null) {
+            proverkaPotok = Thread({ samoproverkaLoop() }, "kelevra-logcat-check").apply {
+                isDaemon = true
+                start()
+            }
+        }
+    }
+
+    /** Подключить файл к прямой записи и дописать в него накопленное до открытия. */
+    internal fun podklyuchit(target: LogRotator) {
+        val (lines, vytesneno) = synchronized(doStarta) {
+            // Порядок под замком: строка, пришедшая в [pryamo] после снятия копии, уже
+            // увидит файл и ляжет следом, а не застрянет в очереди.
+            rotator = target
+            val all = doStarta.toList()
+            doStarta.clear()
+            val lost = doStartaVytesneno
+            doStartaVytesneno = 0
+            all to lost
+        }
+        if (vytesneno > 0) note("=== до открытия журнала вытеснено строк: $vytesneno ===")
+        if (lines.isNotEmpty()) note("=== строки, записанные до открытия журнала: ${lines.size} ===")
+        lines.forEach { runCatching { target.append(it) } }
+    }
+
+    /** Для тестов: отключить файл, забыть накопленное. */
+    internal fun otklyuchit() {
+        synchronized(doStarta) {
+            rotator = null
+            doStarta.clear()
+            doStartaVytesneno = 0
+        }
+    }
+
+    /**
+     * Доносит ли logcat наши строки — по уровням. Только диагностика для паспорта: на
+     * запись журнала итог не влияет ([KLog] пишет в файл сам всегда).
+     *
+     * Повод: 20.10.2026 прошивка Honor выбрасывала из logcat всё ниже E, а Huawei не
+     * доносил ничего. Пишем по маркеру каждого уровня и ждём, какие вернутся через
+     * [drain]. Круг повторяется раз в [SAMOPROVERKA_KAZHDYE_MS] и после каждого
+     * перезапуска чтения; заметка в файл — только когда итог поменялся.
+     */
+    private fun samoproverkaLoop() {
+        var prezhniy: String? = null
+        while (true) {
+            val itog = runCatching { krugSamoproverki() }.getOrElse { "?" }
+            if (itog != prezhniy) {
+                note("=== самопроверка logcat: ${opisanieDlyaFayla(itog)} (журнал пишется напрямую, от logcat не зависит) ===")
+                prezhniy = itog
+            }
+            val ok = runCatching { pereproverit.poll(SAMOPROVERKA_KAZHDYE_MS, TimeUnit.MILLISECONDS) }
+            if (ok.isFailure) return
+        }
+    }
+
+    private fun krugSamoproverki(): String {
+        val id = java.lang.Long.toHexString(System.nanoTime())
+        synchronized(uvideli) {
+            krugResheno = false
+            uvideli.clear()
+            markerId = id
+        }
+        Log.d(TAG_MARKER, "$MARKER $id D")
+        Log.i(TAG_MARKER, "$MARKER $id I")
+        Log.w(TAG_MARKER, "$MARKER $id W")
+        Log.e(TAG_MARKER, "$MARKER $id E")
+        val until = SystemClock.elapsedRealtime() + SAMOPROVERKA_ZHDAT_MS
+        while (SystemClock.elapsedRealtime() < until && uvideli.size < PROVERYAEMYE.size) {
+            Thread.sleep(250)
+        }
+        val itog = synchronized(uvideli) {
+            krugResheno = true
+            opisanie(HashSet(uvideli))
+        }
+        logcatPriznak = itog
+        return itog
+    }
+
+    private fun opisanieDlyaFayla(itog: String): String = when {
+        itog == "ok" -> "все уровни доходят"
+        itog == "net" -> "не доходит ничего"
+        itog.startsWith("rezhet_") -> "режутся ${itog.removePrefix("rezhet_")}"
+        else -> "сорвалась"
+    }
+
+    /** Строка маркера самопроверки из logcat: запомнить уровень. */
+    private fun markerVidit(line: String) {
+        val id = markerId ?: return
+        val at = line.indexOf("$MARKER $id ")
+        if (at < 0) return
+        val level = line.getOrNull(at + MARKER.length + id.length + 2) ?: return
+        // Опоздавший маркер (круг уже решён) лишь поправляет признак паспорта.
+        synchronized(uvideli) {
+            if (uvideli.add(level) && krugResheno) logcatPriznak = opisanie(HashSet(uvideli))
+        }
+    }
+
+    /**
+     * Строка, готовая в формате `threadtime`, — прямо в файл, мимо logcat. Зовёт [KLog]
+     * на каждую свою строку. Файл ещё не открыт — строка ждёт в [doStarta].
+     */
+    fun pryamo(text: String) {
+        val target = rotator ?: synchronized(doStarta) {
+            // Файл могли подключить, пока шли сюда: тогда пишем в него, иначе ждём.
+            rotator ?: run {
+                if (doStarta.size >= DO_STARTA_MAX) {
+                    doStarta.removeFirst()
+                    doStartaVytesneno++
+                }
+                doStarta.addLast(text)
+                null
+            }
+        } ?: return
+        runCatching { target.append(text) }
+    }
+
+    /** Дожать файл до носителя (падение процесса: дальше — только смерть). */
+    fun sbrosit() {
+        runCatching { rotator?.sync() }
     }
 
     /**
@@ -134,8 +358,11 @@ object AppLog {
      * «ничего не происходило».
      */
     fun note(line: String) {
-        val target = rotator ?: return
-        runCatching { target.append("${stampFormat.format(Date())} $line\n") }
+        note(rotator ?: return, line)
+    }
+
+    private fun note(target: LogRotator, line: String) {
+        runCatching { target.append("${synchronized(stampFormat) { stampFormat.format(Date()) }} $line\n") }
     }
 
     /**
@@ -151,6 +378,9 @@ object AppLog {
             val failure = runCatching { drain(target, metka) }.exceptionOrNull()
             note("=== чтение logcat прервалось${failure?.let { ": ${it.javaClass.simpleName}" }.orEmpty()}, поднимаю заново ===")
             runCatching { Thread.sleep(RESTART_PAUSE_MILLIS) }.onFailure { return }
+            // Logcat сорвался — проверить заново, что он доносит: паспорт не должен врать.
+            // Маркеры, записанные чуть раньше запуска чтения, оно подберёт по отметке -T.
+            pereproverit.offer(Unit)
         }
     }
 
@@ -187,6 +417,27 @@ object AppLog {
      * Строку, которую не разобрать (нет двоеточия, свой формат, продолжение стека),
      * оставляем: потерять непонятное хуже, чем возить лишнее.
      */
+    /** Тег из шумного списка: [KLog] такие строки в файл напрямую тоже не пишет. */
+    internal fun shumnyTeg(tag: String): Boolean = tag in ШУМНЫЕ_ТЕГИ
+
+    /** Начало строки `threadtime`: pid и тег (logcat добивает тег пробелами до 8 знаков). */
+    private val RX_GOLOVA = Regex("""^\d\d-\d\d \d\d:\d\d:\d\d\.\d+\s+(\d+)\s+\d+\s+[VDIWEFA]\s+(.*?)\s*:(?:\s|$)""")
+
+    /**
+     * Брать ли строку logcat в файл. Нет — если это шум ([shumnaya]), маркер самопроверки
+     * или строка своего процесса ([myPid]) с тегом [KLog] ([tegiKLog]): такую KLog уже
+     * записал напрямую, из logcat она была бы дублем. Строку, которую не разобрать,
+     * оставляем — потерять непонятное хуже, чем возить лишнее.
+     */
+    internal fun vFayl(line: String, myPid: Int, tegiKLog: Set<String>): Boolean {
+        if (line.contains(MARKER)) return false
+        if (shumnaya(line)) return false
+        val m = RX_GOLOVA.find(line) ?: return true
+        val pid = m.groupValues[1].toIntOrNull() ?: return true
+        if (pid != myPid) return true
+        return m.groupValues[2].trim() !in tegiKLog
+    }
+
     internal fun shumnaya(line: String): Boolean {
         val dvoetochie = line.indexOf(':', startIndex = 20)
         if (dvoetochie <= 0) return false
@@ -202,14 +453,16 @@ object AppLog {
     }
 
     private fun drain(target: LogRotator, metka: LogcatMetka) {
-        val pid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) Process.myPid() else null
+        val myPid = Process.myPid()
+        val pid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) myPid else null
         val process = Runtime.getRuntime().exec(metka.komanda(pid).toTypedArray())
         try {
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 while (true) {
                     val line = reader.readLine() ?: break
                     if (metka.uzhePisali(line)) continue
-                    if (shumnaya(line)) continue
+                    if (line.contains(MARKER)) markerVidit(line)
+                    if (!vFayl(line, myPid, KLog.tegi)) continue
                     target.append(line + "\n")
                 }
             }
@@ -309,8 +562,10 @@ internal class LogRotator(
     private val baseName: String,
     private val maxFileBytes: Long,
     private val maxFiles: Int,
+    /** Шапка в начало каждого нового файла (пояс меток времени); null — без шапки. */
+    private val header: (() -> String)? = null,
 ) {
-    private var out: OutputStream? = null
+    private var out: FileOutputStream? = null
     private var headBytes = 0L
 
     val head: File get() = File(dir, baseName)
@@ -335,9 +590,24 @@ internal class LogRotator(
             open()
         }
         val stream = out ?: return
+        val makeHeader = header
+        if (headBytes == 0L && makeHeader != null) {
+            val head = runCatching { makeHeader().toByteArray() }.getOrNull()
+            // Шапка не должна пробивать потолок файла: не влезает вместе со строкой — без неё.
+            if (head != null && head.isNotEmpty() && head.size + bytes.size <= maxFileBytes) {
+                stream.write(head)
+                headBytes += head.size
+            }
+        }
         stream.write(bytes)
         stream.flush()
         headBytes += bytes.size
+    }
+
+    /** Дожать записанное до носителя: append уже отдал всё ядру, это — против выключения. */
+    @Synchronized
+    fun sync() {
+        runCatching { out?.fd?.sync() }
     }
 
     @Synchronized

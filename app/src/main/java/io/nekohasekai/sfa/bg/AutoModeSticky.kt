@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.sfa.database.Settings
 import org.json.JSONObject
 
@@ -32,7 +31,7 @@ object AutoModeSticky {
         runCatching {
             Settings.autoModeStickyGroup = group
             Settings.autoModeStickyTag = tag
-        }.onFailure { Log.w(TAG, "AutoModeSticky.remember не удалось: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "AutoModeSticky.remember не удалось: ${it.message}") }
     }
 
     /** Человек выбрал выход руками — его выбор пометке не подлежит, снимаем её. */
@@ -40,7 +39,7 @@ object AutoModeSticky {
         runCatching {
             Settings.autoModeStickyGroup = ""
             Settings.autoModeStickyTag = ""
-        }.onFailure { Log.w(TAG, "AutoModeSticky.forget не удалось: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "AutoModeSticky.forget не удалось: ${it.message}") }
     }
 
     /**
@@ -94,10 +93,10 @@ object AutoModeSticky {
 
             val target = config?.let { restoreTarget(it, group, stickyTag) }
             if (target != null) {
-                Log.i(TAG, "AutoModeSticky: залипший выбор автомата «$stickyTag» в «$group» возвращаю на «$target»")
+                KLog.i(TAG, "AutoModeSticky: залипший выбор автомата «$stickyTag» в «$group» возвращаю на «$target»")
                 select(group, target)
             }
-        }.onFailure { Log.w(TAG, "AutoModeSticky.release не удалось: ${it.message}") }
+        }.onFailure { KLog.w(TAG, "AutoModeSticky.release не удалось: ${it.message}") }
             .also { forget() }
     }
 }

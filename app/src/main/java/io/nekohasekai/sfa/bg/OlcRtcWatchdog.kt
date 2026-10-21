@@ -1,7 +1,6 @@
 package io.nekohasekai.sfa.bg
 
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.database.Settings
 
@@ -208,7 +207,7 @@ object OlcRtcWatchdog {
                 isDaemon = true
                 start()
             }
-            Log.i(TAG, "присмотр включён: проверка раз в $CHECK_INTERVAL_MILLIS мс")
+            KLog.i(TAG, "присмотр включён: проверка раз в $CHECK_INTERVAL_MILLIS мс")
         }
     }
 
@@ -230,7 +229,7 @@ object OlcRtcWatchdog {
             t?.interrupt()
             t?.join(1_000)
             note = ""
-            Log.i(TAG, "присмотр выключен (подъёмов за сессию: $restarts)")
+            KLog.i(TAG, "присмотр выключен (подъёмов за сессию: $restarts)")
         }
     }
 
@@ -266,7 +265,7 @@ object OlcRtcWatchdog {
             if (OlcRtcCore.state is OlcRtcCore.State.Ready && !OlcRtcCore.isRunning()) {
                 if (!socksLostReported) {
                     socksLostReported = true
-                    Log.w(TAG, "ядро комнаты вышло само — увожу выход, не дожидаясь пробы")
+                    KLog.w(TAG, "ядро комнаты вышло само — увожу выход, не дожидаясь пробы")
                     AutoMode.roomLost("ядро комнаты вышло само")
                 }
                 return true
@@ -288,7 +287,7 @@ object OlcRtcWatchdog {
             // Тумблер выключили посреди сессии: работающий канал не рвём, но и
             // поднимать его больше не наше дело.
             if (!Settings.olcrtcEnabled) {
-                Log.i(TAG, "комната выключена тумблером — присмотр отходит")
+                KLog.i(TAG, "комната выключена тумблером — присмотр отходит")
                 note = ""
                 active = false
                 return
@@ -314,7 +313,7 @@ object OlcRtcWatchdog {
                 Step.Raise -> {
                     if (restarts >= MAX_RESTARTS && !gaveUp) {
                         gaveUp = true
-                        Log.w(
+                        KLog.w(
                             TAG,
                             "подняли $MAX_RESTARTS раз подряд, канал не встал — дальше пробую раз в " +
                                 "${RARE_RETRY_MILLIS / 1000} с, пока комната нужна",
@@ -349,7 +348,7 @@ object OlcRtcWatchdog {
                 if (restarts > 0 && lastRestartAt > 0 &&
                     SystemClock.elapsedRealtime() - lastRestartAt > HEALTHY_RESET_MILLIS
                 ) {
-                    Log.i(TAG, "канал держится дольше ${HEALTHY_RESET_MILLIS / 1000} с — счётчик подъёмов обнулён")
+                    KLog.i(TAG, "канал держится дольше ${HEALTHY_RESET_MILLIS / 1000} с — счётчик подъёмов обнулён")
                     restarts = 0
                     lastRestartAt = 0L
                     note = ""
@@ -361,7 +360,7 @@ object OlcRtcWatchdog {
             deadInARow = failures
             val reason = (health as? OlcRtcCore.Health.Dead)?.reason ?: "неизвестно"
             if (failures < FAILURES_BEFORE_RESTART) {
-                Log.i(TAG, "канал не отвечает ($reason), отказ $failures из $FAILURES_BEFORE_RESTART")
+                KLog.i(TAG, "канал не отвечает ($reason), отказ $failures из $FAILURES_BEFORE_RESTART")
                 continue
             }
 
@@ -371,14 +370,14 @@ object OlcRtcWatchdog {
                     // Комната никому не нужна — редкие попытки держать незачем, отходим,
                     // как и раньше.
                     note = "подняли $MAX_RESTARTS раз подряд, канал не встал, комната не нужна — больше не пробуем"
-                    Log.w(TAG, note)
+                    KLog.w(TAG, note)
                     // Выход мог вернуться на неё заходом автомата, пока ядро числилось
                     // поднятым: уводим, иначе он там и останется.
                     AutoMode.roomLost("присмотр сдался")
                     active = false
                     return
                 }
-                Log.w(TAG, "подняли $MAX_RESTARTS раз подряд, канал не встал — дальше пробую раз в ${RARE_RETRY_MILLIS / 1000} с")
+                KLog.w(TAG, "подняли $MAX_RESTARTS раз подряд, канал не встал — дальше пробую раз в ${RARE_RETRY_MILLIS / 1000} с")
             }
 
             if (!restartCore(reason, pauseBeforeRaise(restarts + 1), channelWasUp = true)) return
@@ -410,7 +409,7 @@ object OlcRtcWatchdog {
         // попробует снова.
         restarting = true
         if (runCatching { raisingElsewhere() }.getOrDefault(false)) {
-            Log.i(TAG, "комнату сейчас поднимает сервис — свой подъём не запускаю")
+            KLog.i(TAG, "комнату сейчас поднимает сервис — свой подъём не запускаю")
             return active
         }
 
@@ -420,7 +419,7 @@ object OlcRtcWatchdog {
         } else {
             "канал упал ($reason), поднимаю заново — попытка $restarts из $MAX_RESTARTS"
         }
-        Log.w(TAG, "$note, пауза $pauseMillis мс")
+        KLog.w(TAG, "$note, пауза $pauseMillis мс")
 
         if (channelWasUp) {
             // Сначала уводим выход, потом гасим. Раньше порядок был обратный, и всё время
@@ -428,7 +427,7 @@ object OlcRtcWatchdog {
             // отказом в погашенный сокс.
             AutoMode.roomLost("присмотр поднимает комнату заново: $reason")
             runCatching { OlcRtcCore.stop() }
-                .onFailure { Log.w(TAG, "остановка перед подъёмом сорвалась: ${it.message}") }
+                .onFailure { KLog.w(TAG, "остановка перед подъёмом сорвалась: ${it.message}") }
         }
         // Ядро погашено нарочно и сейчас встанет заново. По одному только состоянию это
         // не отличить от «комнату не поднимали», а для человека разница вся: «поднимаю
@@ -451,7 +450,7 @@ object OlcRtcWatchdog {
                 socksLostReported = false
                 note = "канал поднят заново (попытка $restarts)"
                 val port = OlcRtcParams.socksPort
-                Log.i(TAG, "$note: SOCKS5 на 127.0.0.1:$port")
+                KLog.i(TAG, "$note: SOCKS5 на 127.0.0.1:$port")
                 // Сразу спрашиваем: «поднят» без прошедших байтов — это ещё не канал.
                 val health = OlcRtcCore.probe(port)
                 RoomNote.note(OlcRtcCore.state, health)
@@ -464,7 +463,7 @@ object OlcRtcWatchdog {
             else -> {
                 val next = pauseBeforeRaise(restarts + 1)
                 note = "подъём $restarts не удался: ${OlcRtcCore.lastError} — следующая попытка через ${next / 1000} с"
-                Log.w(TAG, note)
+                KLog.w(TAG, note)
                 RoomNote.note()
             }
         }

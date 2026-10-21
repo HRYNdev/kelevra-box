@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import org.json.JSONObject
 
 /**
@@ -50,6 +49,6 @@ object ClashSecretPatch {
     }
 
     fun log(result: Result) {
-        Log.i(TAG, result.note)
+        KLog.i(TAG, result.note)
     }
 }

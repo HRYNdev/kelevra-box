@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.sfa.database.Settings
 import org.json.JSONObject
 
@@ -93,7 +92,7 @@ object WbChatParams {
         val cookies = json?.optString("cookies").orEmpty()
         if (json == null || port !in 1..65535 || peer.isBlank() || token.isBlank() || cookies.isBlank()) {
             if (Settings.wbchatAvailable || Settings.wbchatToken.isNotEmpty()) {
-                Log.i(TAG, if (json == null) "сервер не отдал блок wbchat — параметры WB Chat стёрты" else "блок wbchat неполный — параметры WB Chat стёрты")
+                KLog.i(TAG, if (json == null) "сервер не отдал блок wbchat — параметры WB Chat стёрты" else "блок wbchat неполный — параметры WB Chat стёрты")
             }
             Settings.wbchatAvailable = false
             Settings.wbchatSocksPort = 0
@@ -117,6 +116,6 @@ object WbChatParams {
         Settings.wbchatTag = json.optString("tag")
         Settings.wbchatAvailable = true
         val now = resolve()
-        if (was != now) Log.i(TAG, "параметры WB Chat с сервера: $now")
+        if (was != now) KLog.i(TAG, "параметры WB Chat с сервера: $now")
     }
 }

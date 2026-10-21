@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.sfa.bg.path.HonestProbe
 
 /**
@@ -55,9 +54,9 @@ object ProxyProbe {
 
     fun log(where: String, result: Result) {
         when (result) {
-            is Result.Live -> Log.i(TAG, "$where: трафик идёт, ответ за ${result.latencyMs} мс")
-            is Result.Dead -> Log.i(TAG, "$where: трафика нет — ${result.reason}")
-            is Result.Unmeasured -> Log.i(TAG, "$where: замер не состоялся — ${result.reason}")
+            is Result.Live -> KLog.i(TAG, "$where: трафик идёт, ответ за ${result.latencyMs} мс")
+            is Result.Dead -> KLog.i(TAG, "$where: трафика нет — ${result.reason}")
+            is Result.Unmeasured -> KLog.i(TAG, "$where: замер не состоялся — ${result.reason}")
         }
     }
 }

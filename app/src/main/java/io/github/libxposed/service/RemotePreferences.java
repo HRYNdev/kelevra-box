@@ -5,7 +5,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.RemoteException;
-import android.util.Log;
+import io.nekohasekai.sfa.bg.KLog;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import java.util.ArrayList;
@@ -211,7 +211,7 @@ public final class RemotePreferences implements SharedPreferences {
           if (throwing) {
             throw new RuntimeException(e);
           } else {
-            Log.e(TAG, "Failed to update remote preferences", e);
+            KLog.e(TAG, "Failed to update remote preferences", e);
           }
         }
       } finally {

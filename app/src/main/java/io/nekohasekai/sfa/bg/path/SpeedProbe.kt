@@ -1,7 +1,7 @@
 package io.nekohasekai.sfa.bg.path
 
+import io.nekohasekai.sfa.bg.KLog
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.bg.AutoModeExits
 import java.io.DataInputStream
 import java.net.InetSocketAddress
@@ -94,7 +94,7 @@ object SpeedProbe {
         val speed = runCatching { download(entry) }.getOrElse {
             Speed.Failed(it.message?.takeIf { m -> m.isNotBlank() } ?: it.javaClass.simpleName)
         }
-        Log.i(TAG, "«$label» через ${entry.host}:${entry.port} → $speed")
+        KLog.i(TAG, "«$label» через ${entry.host}:${entry.port} → $speed")
         return speed
     }
 

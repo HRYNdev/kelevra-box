@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -116,6 +115,6 @@ object WbChatConfigPatch {
         .put("outbound", direct)
 
     fun log(result: Result) {
-        Log.i(TAG, "WB Chat: ${result.note}")
+        KLog.i(TAG, "WB Chat: ${result.note}")
     }
 }

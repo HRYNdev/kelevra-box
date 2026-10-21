@@ -1,7 +1,7 @@
 package io.nekohasekai.sfa
 
 import android.content.Context
-import android.util.Log
+import io.nekohasekai.sfa.bg.KLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -49,7 +49,7 @@ object Aktivatsiya {
             } finally {
                 conn.disconnect()
             }
-        }.onFailure { Log.i(TAG, "справочник дверей не загружен: ${it.javaClass.simpleName}") }
+        }.onFailure { KLog.i(TAG, "справочник дверей не загружен: ${it.javaClass.simpleName}") }
         Priglashenie.spisokDverej(SubscriptionLink.DEFAULT_HOST, keshSpravochnika(), zapomnennye())
     }
 
@@ -73,7 +73,7 @@ object Aktivatsiya {
             conn.disconnect()
         }
     } catch (e: java.io.IOException) {
-        Log.i(TAG, "дверь $dver не ответила: ${Kelevra.maskCode(e.javaClass.simpleName)}")
+        KLog.i(TAG, "дверь $dver не ответила: ${Kelevra.maskCode(e.javaClass.simpleName)}")
         null
     }
 

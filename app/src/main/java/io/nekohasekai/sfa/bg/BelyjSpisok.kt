@@ -1,6 +1,5 @@
 package io.nekohasekai.sfa.bg
 
-import android.util.Log
 import io.nekohasekai.sfa.Application
 
 /**
@@ -25,7 +24,7 @@ object BelyjSpisok {
         cache ?: runCatching {
             Application.application.assets.open(ASSET).bufferedReader().use { razobrat(it.readText()) }
         }.onFailure {
-            Log.w(TAG, "список доменов не прочитан (${it.javaClass.simpleName}), напрямую пойдут только приложения и добавки")
+            KLog.w(TAG, "список доменов не прочитан (${it.javaClass.simpleName}), напрямую пойдут только приложения и добавки")
         }.getOrDefault(emptyList()).also { cache = it }
     }
 
@@ -43,7 +42,7 @@ object BelyjSpisok {
         podsetiCache ?: runCatching {
             Application.application.assets.open(ASSET_PODSETI).bufferedReader().use { razobrat(it.readText()) }
         }.onFailure {
-            Log.w(TAG, "подсети не прочитаны (${it.javaClass.simpleName}), безымянные соединения пойдут в комнату")
+            KLog.w(TAG, "подсети не прочитаны (${it.javaClass.simpleName}), безымянные соединения пойдут в комнату")
         }.getOrDefault(emptyList()).also { podsetiCache = it }
     }
 

@@ -1,7 +1,7 @@
 package io.github.libxposed.service;
 
 import android.os.IBinder;
-import android.util.Log;
+import io.nekohasekai.sfa.bg.KLog;
 import androidx.annotation.NonNull;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -40,7 +40,7 @@ public final class XposedServiceHelper {
           mListener.onServiceBind(service);
         }
       } catch (Throwable t) {
-        Log.e(TAG, "onBinderReceived", t);
+        KLog.e(TAG, "onBinderReceived", t);
       }
     }
   }
@@ -61,7 +61,7 @@ public final class XposedServiceHelper {
             service.getRaw().asBinder().linkToDeath(() -> mListener.onServiceDied(service), 0);
             mListener.onServiceBind(service);
           } catch (Throwable t) {
-            Log.e(TAG, "registerListener", t);
+            KLog.e(TAG, "registerListener", t);
             it.remove();
           }
         }

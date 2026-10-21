@@ -1,7 +1,7 @@
 package io.nekohasekai.sfa.compose.theme
 
-import android.util.Log
 import androidx.compose.ui.graphics.Color
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,7 +63,7 @@ object Vid {
     fun izSvodki(syroy: Any?) {
         if (syroy == null || syroy == JSONObject.NULL) {
             if (Settings.vidServer.isNotEmpty()) {
-                Log.i(TAG, "сервер больше не присылает вид — возвращаю встроенный")
+                KLog.i(TAG, "сервер больше не присылает вид — возвращаю встроенный")
                 Settings.vidServer = ""
             }
             _blok.value = Blok()
@@ -72,12 +72,12 @@ object Vid {
         val json = syroy as? JSONObject
         val blok = json?.let { runCatching { razobrat(it) }.getOrNull() }
         if (json == null || blok == null) {
-            Log.w(TAG, "вид от сервера не разобран — остаюсь на прежнем")
+            KLog.w(TAG, "вид от сервера не разобран — остаюсь на прежнем")
             return
         }
         val tekst = json.toString()
         if (tekst != Settings.vidServer) {
-            Log.i(
+            KLog.i(
                 TAG,
                 "вид от сервера: цветов ${blok.dark.size}/${blok.light.size}, " +
                     "текстов ${blok.teksty.size}, флагов ${blok.funkcii.size}",

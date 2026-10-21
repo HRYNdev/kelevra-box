@@ -3,7 +3,6 @@ package io.nekohasekai.sfa.bg
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import android.widget.Toast
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.compose.screen.profileoverride.PerAppProxyScanner
@@ -19,13 +18,13 @@ class AppChangeReceiver : BroadcastReceiver() {
     }
 
     override fun onReceive(context: Context, intent: Intent) {
-        Log.d(TAG, "onReceive: ${intent.action}")
+        KLog.d(TAG, "onReceive: ${intent.action}")
         if (!Settings.perAppProxyEnabled) {
-            Log.d(TAG, "per app proxy disabled")
+            KLog.d(TAG, "per app proxy disabled")
             return
         }
         if (!Settings.perAppProxyManagedMode) {
-            Log.d(TAG, "managed mode disabled")
+            KLog.d(TAG, "managed mode disabled")
             return
         }
         val pendingResult = goAsync()
@@ -33,7 +32,7 @@ class AppChangeReceiver : BroadcastReceiver() {
             try {
                 rescanAllApps()
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to rescan apps", e)
+                KLog.e(TAG, "Failed to rescan apps", e)
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, R.string.error_title, Toast.LENGTH_SHORT).show()
                 }
@@ -44,9 +43,9 @@ class AppChangeReceiver : BroadcastReceiver() {
     }
 
     private suspend fun rescanAllApps() {
-        Log.d(TAG, "rescanning all apps")
+        KLog.d(TAG, "rescanning all apps")
         val chinaApps = PerAppProxyScanner.scanAllChinaApps()
         Settings.perAppProxyManagedList = chinaApps
-        Log.d(TAG, "rescan complete, found ${chinaApps.size} china apps")
+        KLog.d(TAG, "rescan complete, found ${chinaApps.size} china apps")
     }
 }

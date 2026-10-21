@@ -2,7 +2,6 @@ package io.nekohasekai.sfa.bg
 
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.database.Settings
 import org.json.JSONObject
@@ -183,10 +182,10 @@ object OlcRtcParams {
             }
             .firstOrNull()
         if (address == null) {
-            Log.w(TAG, "резолвер физической сети не найден — ядро комнаты пойдёт к системному")
+            KLog.w(TAG, "резолвер физической сети не найден — ядро комнаты пойдёт к системному")
             return ""
         }
-        Log.i(TAG, "ядру комнаты отдаём резолвер физической сети $address")
+        KLog.i(TAG, "ядру комнаты отдаём резолвер физической сети $address")
         return "$address:53"
     }
 
@@ -267,7 +266,7 @@ object OlcRtcParams {
             Settings.olcrtcSrvTelemostStripesMax = 0
         }
         if (was != Settings.olcrtcSrvNositel) {
-            Log.i(TAG, "носитель комнаты: ${was.ifBlank { "olcrtc" }} -> ${Settings.olcrtcSrvNositel.ifBlank { "olcrtc" }}")
+            KLog.i(TAG, "носитель комнаты: ${was.ifBlank { "olcrtc" }} -> ${Settings.olcrtcSrvNositel.ifBlank { "olcrtc" }}")
         }
     }
 }

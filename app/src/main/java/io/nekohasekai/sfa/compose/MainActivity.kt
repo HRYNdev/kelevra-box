@@ -8,7 +8,6 @@ import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -96,6 +95,7 @@ import io.nekohasekai.sfa.Kelevra
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.bg.BoxService
 import io.nekohasekai.sfa.bg.CrashReportManager
+import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.bg.OOMReportManager
 import io.nekohasekai.sfa.bg.ServiceConnection
 import io.nekohasekai.sfa.bg.ServiceNotification
@@ -221,7 +221,7 @@ class MainActivity :
             runCatching {
                 Libbox.setLocale(locale.toLanguageTag())
             }.onFailure {
-                Log.d("MainActivity", "set locale: ${it.message}")
+                KLog.d("MainActivity", "set locale: ${it.message}")
             }
         }
         enableEdgeToEdge()
@@ -722,7 +722,7 @@ class MainActivity :
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.w("KelevraObnovlenie", "обновление сорвалось до передачи системе: ${e.message}")
+                    KLog.w("KelevraObnovlenie", "обновление сорвалось до передачи системе: ${e.message}")
                     // Сырой текст исключения бывал английским и служебным.
                     // Окно скачивания закрывается: ошибку показывает отдельное окно с повтором.
                     showDownloadDialog = false
@@ -1480,7 +1480,7 @@ class MainActivity :
             return
         }
 
-        BoxService.stop()
+        BoxService.stop("приложение: перезапуск для новых настроек")
         while (true) {
             when (currentServiceStatus) {
                 Status.Stopped -> {

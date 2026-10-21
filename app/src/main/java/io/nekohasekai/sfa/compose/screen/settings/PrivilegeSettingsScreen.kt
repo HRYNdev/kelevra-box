@@ -135,7 +135,7 @@ fun PrivilegeSettingsScreen(navController: NavController, serviceStatus: Status 
                         }
                     }
                 } catch (e: Throwable) {
-                    android.util.Log.e("PrivilegeSettings", "Failed to save file", e)
+                    io.nekohasekai.sfa.bg.KLog.e("PrivilegeSettings", "Failed to save file", e)
                 }
             }
         }

@@ -2,7 +2,6 @@ package io.nekohasekai.sfa.bg
 
 import android.content.Context
 import android.os.Environment
-import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -197,7 +196,7 @@ object LogUploadWork {
      * жалобы вроде «само включается» не разбираются вовсе.
      */
     fun schedule() {
-        runCatching { schedule0() }.onFailure { Log.w(TAG, "не удалось поставить отправку логов", it) }
+        runCatching { schedule0() }.onFailure { KLog.w(TAG, "не удалось поставить отправку логов", it) }
         // Часовой отсчёт начинается от постановки, то есть после перезапуска приложения
         // первый журнал уезжал только через час. 12.09.2026 после убийства приложения
         // системой так и вышло: процесс поднялся в 15:29, а журнал поехал вечером.
@@ -235,8 +234,8 @@ object LogUploadWork {
                     )
                     .build(),
             )
-            Log.i(TAG, "журнал $prichina: поставлен в очередь")
-        }.onFailure { Log.w(TAG, "журнал $prichina не поставился", it) }
+            KLog.i(TAG, "журнал $prichina: поставлен в очередь")
+        }.onFailure { KLog.w(TAG, "журнал $prichina не поставился", it) }
     }
 
     /**
@@ -257,8 +256,8 @@ object LogUploadWork {
                     .setInitialDelay(POVTOR_PAUSE_MILLIS, TimeUnit.MILLISECONDS)
                     .build(),
             )
-            Log.i(TAG, "отправка не удалась — повтор через ${POVTOR_PAUSE_MILLIS / 60000} мин, часовое расписание не трогаю")
-        }.onFailure { Log.w(TAG, "повтор отправки не поставился", it) }
+            KLog.i(TAG, "отправка не удалась — повтор через ${POVTOR_PAUSE_MILLIS / 60000} мин, часовое расписание не трогаю")
+        }.onFailure { KLog.w(TAG, "повтор отправки не поставился", it) }
     }
 
     private fun schedule0() {
@@ -538,7 +537,7 @@ object LogUploadWork {
                 taken += part
                 // Потолок считаем по уже сжатому: ровно столько уйдёт в сеть.
                 if (raw.size() >= MAX_ARCHIVE_BYTES) {
-                    Log.i(TAG, "архив упёрся в потолок 20 МБ, старые логи в эту отправку не попали")
+                    KLog.i(TAG, "архив упёрся в потолок 20 МБ, старые логи в эту отправку не попали")
                     break
                 }
             }
@@ -612,11 +611,11 @@ object LogUploadWork {
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.readText().orEmpty()
             if (code in 500..599) {
-                Log.w(TAG, "серверу плохо: http $code — хвост не сужу, попробую позже")
+                KLog.w(TAG, "серверу плохо: http $code — хвост не сужу, попробую позже")
                 return ИсходОтправки.ВременныйСбой
             }
             if (code !in 200..299) {
-                Log.w(TAG, "сервер отказал: http $code")
+                KLog.w(TAG, "сервер отказал: http $code")
                 return ИсходОтправки.Отвергнуто
             }
             val ok = runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
@@ -646,19 +645,19 @@ object LogUploadWork {
         val sbor = collectLogs(sourceDirs(ownLogsDir, downloadLogsDir), marks)
         val parts = collectReports(reportRoots, marks) + sbor.parts
         if (parts.isEmpty()) {
-            Log.i(TAG, "отправлять нечего: новых логов нет")
+            KLog.i(TAG, "отправлять нечего: новых логов нет")
             return true
         }
 
         val (archive, taken) = buildArchive(parts)
         if (archive.isEmpty() || taken.isEmpty()) {
-            Log.i(TAG, "архив пустой, отправка отменена")
+            KLog.i(TAG, "архив пустой, отправка отменена")
             return true
         }
 
-        Log.i(TAG, "отправляю логи: ${taken.size} шт., ${archive.size / 1024} КБ сжатыми")
+        KLog.i(TAG, "отправляю логи: ${taken.size} шт., ${archive.size / 1024} КБ сжатыми")
         val popytka = runCatching { upload(archive, Kelevra.currentHost(), Kelevra.currentDeviceKey()) }
-            .onFailure { Log.w(TAG, "отправка логов сорвалась", Kelevra.maskThrowable(it)) }
+            .onFailure { KLog.w(TAG, "отправка логов сорвалась", Kelevra.maskThrowable(it)) }
         // Исключение из upload() = до сервера ВООБЩЕ не доехали (нет сети, DNS, таймаут):
         // о хвосте это не говорит ничего, судить его нельзя. Уходим как раньше, счётчик
         // безнадёжности не трогаем — иначе телефон без сети 7 часов (бэкофф 1ч+2ч+4ч при
@@ -675,7 +674,7 @@ object LogUploadWork {
             // признак безнадёжности: тот же самый хвост отвергается заново несколько раз
             // подряд, уже после бэкоффа.
             if (recordFailureAndCheckStuck(taken)) {
-                Log.w(
+                KLog.w(
                     TAG,
                     "хвост из ${taken.size} шт. отвергнут $STUCK_LIMIT раз подряд без изменений — " +
                         "считаю его безнадёжным и выбрасываю из очереди",
@@ -695,14 +694,14 @@ object LogUploadWork {
         zapomnit(marks, sbor.uchteno, taken)
         saveMarks(marks)
         Settings.logUploadLastOk = System.currentTimeMillis()
-        Log.i(TAG, "логи отправлены")
+        KLog.i(TAG, "логи отправлены")
         return true
     }
 
     class UploadTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
         override suspend fun doWork(): Result {
             val ok = runCatching { runOnce() }
-                .onFailure { Log.w(TAG, "отправка логов упала", it) }
+                .onFailure { KLog.w(TAG, "отправка логов упала", it) }
                 .getOrDefault(false)
             if (ok) {
                 Settings.logUploadRetrySince = 0L
@@ -712,7 +711,7 @@ object LogUploadWork {
             val since = Settings.logUploadRetrySince.takeIf { it > 0 } ?: System.currentTimeMillis()
             Settings.logUploadRetrySince = since
             if (System.currentTimeMillis() - since >= RETRY_GIVE_UP_MILLIS) {
-                Log.w(TAG, "сутки повторов не дали результата — ждём следующего вечера")
+                KLog.w(TAG, "сутки повторов не дали результата — ждём следующего вечера")
                 Settings.logUploadRetrySince = 0L
                 return Result.success()
             }

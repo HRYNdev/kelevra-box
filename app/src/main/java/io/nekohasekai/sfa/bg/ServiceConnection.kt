@@ -6,7 +6,6 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.RemoteException
-import android.util.Log
 import androidx.appcompat.app.AppCompatActivity
 import io.nekohasekai.sfa.aidl.IService
 import io.nekohasekai.sfa.aidl.IServiceCallback
@@ -36,7 +35,7 @@ class ServiceConnection(private val context: Context, callback: Callback, privat
                 }
             }
         context.bindService(intent, this, AppCompatActivity.BIND_AUTO_CREATE)
-        Log.d(TAG, "request connect")
+        KLog.d(TAG, "request connect")
     }
 
     fun disconnect() {
@@ -44,7 +43,7 @@ class ServiceConnection(private val context: Context, callback: Callback, privat
             context.unbindService(this)
         } catch (_: IllegalArgumentException) {
         }
-        Log.d(TAG, "request disconnect")
+        KLog.d(TAG, "request disconnect")
     }
 
     fun reconnect() {
@@ -59,7 +58,7 @@ class ServiceConnection(private val context: Context, callback: Callback, privat
                 }
             }
         context.bindService(intent, this, AppCompatActivity.BIND_AUTO_CREATE)
-        Log.d(TAG, "request reconnect")
+        KLog.d(TAG, "request reconnect")
     }
 
     override fun onServiceConnected(name: ComponentName, binder: IBinder) {
@@ -69,23 +68,23 @@ class ServiceConnection(private val context: Context, callback: Callback, privat
             if (register) service.registerCallback(callback)
             callback.onServiceStatusChanged(service.status)
         } catch (e: RemoteException) {
-            Log.e(TAG, "initialize service connection", e)
+            KLog.e(TAG, "initialize service connection", e)
         }
-        Log.d(TAG, "service connected")
+        KLog.d(TAG, "service connected")
     }
 
     override fun onServiceDisconnected(name: ComponentName?) {
         try {
             service?.unregisterCallback(callback)
         } catch (e: RemoteException) {
-            Log.e(TAG, "cleanup service connection", e)
+            KLog.e(TAG, "cleanup service connection", e)
         }
-        Log.d(TAG, "service disconnected")
+        KLog.d(TAG, "service disconnected")
     }
 
     override fun onBindingDied(name: ComponentName?) {
         reconnect()
-        Log.d(TAG, "service dead")
+        KLog.d(TAG, "service dead")
     }
 
     interface Callback {

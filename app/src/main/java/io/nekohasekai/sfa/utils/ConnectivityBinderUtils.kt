@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.os.IBinder
 import android.os.Parcel
-import android.util.Log
+import io.nekohasekai.sfa.bg.KLog
 
 object ConnectivityBinderUtils {
     private const val TAG = "ConnectivityBinderUtils"
@@ -20,14 +20,14 @@ object ConnectivityBinderUtils {
                 return service.asBinder()
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Failed to get ConnectivityManager service binder", e)
+            KLog.w(TAG, "Failed to get ConnectivityManager service binder", e)
         }
         return try {
             val serviceManager = Class.forName("android.os.ServiceManager")
             val getService = serviceManager.getMethod("getService", String::class.java)
             getService.invoke(null, Context.CONNECTIVITY_SERVICE) as? IBinder
         } catch (e: Throwable) {
-            Log.w(TAG, "Failed to get binder from ServiceManager", e)
+            KLog.w(TAG, "Failed to get binder from ServiceManager", e)
             null
         }
     }

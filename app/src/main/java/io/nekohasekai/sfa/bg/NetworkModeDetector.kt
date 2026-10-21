@@ -4,7 +4,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.bg.path.ProbeSocket
 import kotlinx.coroutines.Dispatchers
@@ -314,7 +313,7 @@ object NetworkModeDetector {
      */
     fun forget(reason: String) {
         if (last == null && lastNetwork == null) return
-        Log.i(TAG, "подсказку о сети забыл: $reason")
+        KLog.i(TAG, "подсказку о сети забыл: $reason")
         last = null
         lastNetwork = null
         nextRunAt = 0L
@@ -352,7 +351,7 @@ object NetworkModeDetector {
         nextRunAt = SystemClock.elapsedRealtime() +
             COOLDOWN_MILLIS +
             Random.nextLong(COOLDOWN_JITTER_MILLIS)
-        Log.i(TAG, "режим: ${report.mode} — ${report.note} (${report.tookMillis} мс)")
+        KLog.i(TAG, "режим: ${report.mode} — ${report.note} (${report.tookMillis} мс)")
         report
     }
 
@@ -440,11 +439,11 @@ object NetworkModeDetector {
                     owned = null
                     val unlisted = transferOnce(network, targets.unlistedBulk)
                     signals = signals.copy(bulkUnlisted = unlisted.outcome, bulkUnlistedBytes = unlisted.bytes)
-                    Log.i(TAG, "передача с неразрешённого ${targets.unlistedBulk.host}: ${unlisted.outcome}, ${unlisted.bytes} Б")
+                    KLog.i(TAG, "передача с неразрешённого ${targets.unlistedBulk.host}: ${unlisted.outcome}, ${unlisted.bytes} Б")
                     if (unlisted.outcome == ProbeOutcome.Reset || unlisted.outcome == ProbeOutcome.Stalled) {
                         val allowed = transferOnce(network, targets.allowedBulk)
                         signals = signals.copy(bulkAllowed = allowed.outcome, bulkAllowedBytes = allowed.bytes)
-                        Log.i(TAG, "передача с разрешённого ${targets.allowedBulk.host}: ${allowed.outcome}, ${allowed.bytes} Б")
+                        KLog.i(TAG, "передача с разрешённого ${targets.allowedBulk.host}: ${allowed.outcome}, ${allowed.bytes} Б")
                     }
                 }
             }
@@ -455,7 +454,7 @@ object NetworkModeDetector {
             return report(signals, wall, started)
         } catch (error: Throwable) {
             // Сорвавшийся замер — это «не знаю», а не повод уронить вызывающего.
-            Log.w(TAG, "замер сорвался: ${error.javaClass.simpleName}: ${error.message}")
+            KLog.w(TAG, "замер сорвался: ${error.javaClass.simpleName}: ${error.message}")
             return report(signals, wall, started)
         } finally {
             owned.closeQuietly()
@@ -500,7 +499,7 @@ object NetworkModeDetector {
             val one = if (literal.isEmpty()) endpoint else endpoint.copy(literals = listOf(literal))
             val outcome = handshakeOnce(network, one)
             attempts += outcome
-            Log.i(TAG, "контроль TLS ${one.host}@${literal.ifEmpty { "имя" }}: $outcome")
+            KLog.i(TAG, "контроль TLS ${one.host}@${literal.ifEmpty { "имя" }}: $outcome")
             if (outcome == ProbeOutcome.Ok || outcome == ProbeOutcome.Answered) break
             if (attempts.count { it == ProbeOutcome.Reset || it == ProbeOutcome.Stalled } >=
                 NetworkModeDecision.CONTROL_CONFIDENT_TRIES
@@ -642,7 +641,7 @@ object NetworkModeDetector {
         // Молчали не все — значит это не сеть с фильтром по адресам, а отдельная точка.
         // Отдаём наверх последний не-тихий исход, чтобы вердикт не встал на тишине.
         if (requireAllSilent && silent in 1 until addresses.size) {
-            Log.i(TAG, "неразрешённые адреса: молчат $silent из ${addresses.size} — это не белый список")
+            KLog.i(TAG, "неразрешённые адреса: молчат $silent из ${addresses.size} — это не белый список")
             return Opened(ProbeOutcome.Unreachable, null)
         }
         return Opened(outcome, null)
@@ -794,7 +793,7 @@ object NetworkModeDetector {
      * это разбор ошибок чего-то не знает. Уровень debug — в обычной работе молчит.
      */
     private fun trace(stage: String, outcome: ProbeOutcome, error: Throwable) {
-        Log.d(
+        KLog.d(
             TAG,
             "$stage → $outcome: ${error.javaClass.name}: ${error.message} " +
                 "(причина: ${error.cause?.javaClass?.name}: ${error.cause?.message})",

@@ -3,7 +3,6 @@ package io.nekohasekai.sfa.bg
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 import io.nekohasekai.sfa.BuildConfig
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -26,7 +25,7 @@ class BootReceiver : BroadcastReceiver() {
             if (obnovilos) {
                 // Успех установки своего обновления система часто не присылает: процесс
                 // завершается раньше ответа. Замена пакета — надёжная отметка исхода.
-                Log.i(
+                KLog.i(
                     "KelevraObnovlenie",
                     "приложение обновилось: версия ${BuildConfig.VERSION_NAME}, " +
                         if (Settings.startedByUser) "служба поднимается" else "служба не была запущена",
