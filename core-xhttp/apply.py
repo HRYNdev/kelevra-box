@@ -98,6 +98,11 @@ def main():
         )
     for name in ("xhttp.go", "range.go"):
         shutil.copy2(os.path.join(HERE, name), os.path.join(core, "option", name))
+    # помощник правки 7 (ChaCha первым в Reality), см. ниже
+    shutil.copy2(
+        os.path.join(HERE, "tls", "kelevra_reality_chacha.go"),
+        os.path.join(core, "common", "tls", "kelevra_reality_chacha.go"),
+    )
 
     # 2. константа типа транспорта
     patch(
@@ -302,6 +307,50 @@ def main():
     )
 
     print("reality: X25519MLKEM768 в ClientHello сохраняется: правка наложена")
+
+    # --------------------------------------------------------------------------------
+    # 7. Reality: ChaCha20-Poly1305 первым, когда в ClientHello есть X25519MLKEM768.
+    #
+    # Правка 6 оставляет X25519MLKEM768 у отпечатка chrome, и ClientHello становится
+    # таким же, как у настоящего Chrome на процессоре с AES: AES-GCM первым в
+    # шифрах. Замер 23.10.2026 на домашней линии (51 пачка, после каждой — контроль
+    # без ML-KEM): именно этот вид — chrome + ML-KEM + AES первым — режется окнами
+    # по нескольку минут (0-1 из 10 рукопожатий, и в sing-box, и в голом uTLS без
+    # Reality). Тот же chrome + ML-KEM с ChaCha20 первым проходит 100% к тем же
+    # узлам и портам; положение SNI и число TCP-сегментов роли не играют.
+    #
+    # Порядок берём как у BoringSSL на процессоре без ускорения AES (ChaCha первым
+    # и в TLS 1.3, и в TLS 1.2) — такой ClientHello Chrome шлёт в природе, набор
+    # шифров тот же, меняется только порядок. Сервер Reality (Xray) говорит только
+    # TLS 1.3, ему годится любой шифр из списка; какой выбрать, решает цель.
+    #
+    # Почему без новой опции. Опции разбираются с DisallowUnknownFields: старое ядро
+    # на незнакомом поле падает целиком, а профиль сервер отдаёт один на всех. Поэтому
+    # правка привязана к уже существующему условию: ChaCha первым ровно тогда, когда
+    # правка 6 оставила X25519MLKEM768 (группа и ключ) и отпечаток из семейства
+    # Chromium. Без ML-KEM (randomized его выкинул, firefox/safari его не шлют)
+    # ClientHello не меняется. Чем платим: выключить ChaCha из профиля нельзя,
+    # только сменой отпечатка или новой сборкой.
+    # --------------------------------------------------------------------------------
+    patch_v_funkcii(
+        os.path.join(core, "common", "tls", "reality_client.go"),
+        [(
+            "func (e *RealityClientConfig) ClientHandshake(",
+            "\tif len(uConfig.NextProtos) > 0 {\n",
+            "\t// Kelevra (core-xhttp/apply.py, правка 7): с X25519MLKEM768 у отпечатков\n"
+            "\t// Chromium ChaCha20-Poly1305 идёт первым (kelevra_reality_chacha.go).\n"
+            "\tif kelevraRealityChaCha(uConn, e.uClient.id, mlkemCurve && mlkemKeyShare) {\n"
+            "\t\terr = uConn.BuildHandshakeState()\n"
+            "\t\tif err != nil {\n"
+            "\t\t\treturn nil, err\n"
+            "\t\t}\n"
+            "\t}\n"
+            "\n"
+            "\tif len(uConfig.NextProtos) > 0 {\n",
+        )],
+    )
+
+    print("reality: ChaCha20 первым при X25519MLKEM768 у chrome: правка наложена")
 
 
 if __name__ == "__main__":
