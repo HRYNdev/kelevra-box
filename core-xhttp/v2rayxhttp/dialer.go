@@ -36,9 +36,12 @@ type DialerClient interface {
 
 // implements xhttp.DialerClient in terms of direct network connections
 type DefaultDialerClient struct {
-	options     *option.V2RayXHTTPBaseOptions
-	client      *http.Client
+	options *option.V2RayXHTTPBaseOptions
+	client  *http.Client
+	// closed: соединение больше не выдаётся новым сессиям (IsClosed), но живые
+	// потоки на нём продолжают работать. released: транспорт физически закрыт.
 	closed      bool
+	released    bool
 	httpVersion string
 	// pool of net.Conn, created using dialUploadConn
 	uploadRawPool  *sync.Pool
@@ -61,13 +64,29 @@ type efaceWords struct {
 //go:linkname transportConnPool golang.org/x/net/http2.(*Transport).connPool
 func transportConnPool(t *http2.Transport) http2.ClientConnPool
 
+// markClosed — реакция на ошибку одного запроса, как у Xray (client.go:
+// `c.closed = true`): соединение выбывает из выдачи новым сессиям, но ничего
+// не рвётся. Раньше здесь звался Close(), и ошибка одного GET/POST закрывала
+// ВСЕ HTTP/2-соединения клиента — вместе с чужой большой загрузкой в том же
+// xmux. Если TCP действительно умер, http2 сам закроет его вместе с потоками;
+// физически транспорт закроет XmuxClient, когда на нём не останется сессий.
+func (c *DefaultDialerClient) markClosed() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	c.closed = true
+}
+
+// Close физически закрывает транспорт со всеми его соединениями. Зовётся
+// только из XmuxClient, когда соединение выбыло и открытых сессий на нём нет,
+// или при закрытии всего клиента.
 func (c *DefaultDialerClient) Close() {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
-	if c.closed {
+	c.closed = true
+	if c.released {
 		return
 	}
-	c.closed = true
+	c.released = true
 	switch transport := c.client.Transport.(type) {
 	case *http.Transport:
 		transport.CloseIdleConnections()
@@ -117,7 +136,7 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 		resp, err := c.client.Do(req)
 		if err != nil {
 			if !uploadOnly { // stream-down is enough
-				c.Close()
+				c.markClosed()
 			}
 			gotConn.Close()
 			common.Close(body)
@@ -147,7 +166,7 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, sessio
 	if c.httpVersion != "1.1" {
 		resp, err := c.client.Do(req)
 		if err != nil {
-			c.Close()
+			c.markClosed()
 			return err
 		}
 		io.Copy(io.Discard, resp.Body)
@@ -183,7 +202,7 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, sessio
 				if h1UploadConn.UnreadedResponsesCount > 0 {
 					resp, err := http.ReadResponse(h1UploadConn.RespBufReader, req)
 					if err != nil {
-						c.Close()
+						c.markClosed()
 						return fmt.Errorf("error while reading response: %s", err.Error())
 					}
 					io.Copy(io.Discard, resp.Body)
