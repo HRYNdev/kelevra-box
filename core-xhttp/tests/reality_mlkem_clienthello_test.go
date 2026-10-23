@@ -7,6 +7,9 @@
 // несёт X25519MLKEM768, без которого Xray >= 26.9.8 (XTLS/REALITY 8cdf7bf9)
 // отвергает клиента (sing-box#4520).
 //
+// С 23.10.2026 правка 6 работает только по признаку reality.support_x25519mlkem768,
+// поэтому здесь он выставлен; поведение без признака — reality_priznak_clienthello_test.go.
+//
 // Чтобы прогнать: скопировать файл в common/tls/ выкачанного дерева sing-box и
 //   go test -tags with_utls ./common/tls/ -run TestRealityMLKEM -v
 // До apply.py: chrome — FAIL (ключа X25519MLKEM768 нет). После — PASS.
@@ -45,6 +48,8 @@ func snyatClientHello(t *testing.T, fp string) (gruppy, klyuchi []uint16) {
 			Enabled:   true,
 			PublicKey: "wtxAyNcu29RnRbEPxqx5IieDo8ruCPRrerGsGshFdSA",
 			ShortID:   "87ed",
+			// признак правки 6; без него — как апстрим (reality_priznak_clienthello_test.go)
+			SupportX25519MLKEM768: true,
 		},
 	})
 	if err != nil {

@@ -4,7 +4,7 @@
 // рядом): своего go.mod нет, собирается только внутри дерева sing-box.
 //
 // Зачем: доказательство правки 7 из core-xhttp/apply.py — у chrome с
-// X25519MLKEM768 ChaCha20-Poly1305 идёт первым, а всё остальное в ClientHello
+// X25519MLKEM768 (признак support_x25519mlkem768 в профиле) ChaCha20-Poly1305 идёт первым, а всё остальное в ClientHello
 // (набор шифров, группы, ключи, расширения, подписи, ALPN) — как у пресета chrome.
 //
 // Чтобы прогнать: после apply.py скопировать файл в common/tls/ дерева и
@@ -104,8 +104,9 @@ func chRazobrat(t *testing.T, b []byte) chHello {
 	return h
 }
 
-// chReality снимает первый ClientHello рукопожатия Reality с отпечатком fp.
-func chReality(t *testing.T, fp string) chHello {
+// chReality снимает первый ClientHello рукопожатия Reality с отпечатком fp;
+// priznak — reality.support_x25519mlkem768 в профиле (правка 6).
+func chReality(t *testing.T, fp string, priznak bool) chHello {
 	t.Helper()
 	cfg, err := NewRealityClient(context.Background(), logger.NOP(), "kelevra.test", option.OutboundTLSOptions{
 		Enabled:    true,
@@ -113,9 +114,10 @@ func chReality(t *testing.T, fp string) chHello {
 		ALPN:       []string{"h2", "http/1.1"},
 		UTLS:       &option.OutboundUTLSOptions{Enabled: true, Fingerprint: fp},
 		Reality: &option.OutboundRealityOptions{
-			Enabled:   true,
-			PublicKey: "wtxAyNcu29RnRbEPxqx5IieDo8ruCPRrerGsGshFdSA",
-			ShortID:   "87ed",
+			Enabled:               true,
+			PublicKey:             "wtxAyNcu29RnRbEPxqx5IieDo8ruCPRrerGsGshFdSA",
+			ShortID:               "87ed",
+			SupportX25519MLKEM768: priznak,
 		},
 	})
 	if err != nil {
@@ -169,10 +171,10 @@ func chIndex(v []uint16, x uint16) int {
 	return -1
 }
 
-// chrome + ML-KEM: ChaCha первым в TLS 1.3 и 1.2, как BoringSSL без AES;
+// chrome + ML-KEM (с признаком): ChaCha первым в TLS 1.3 и 1.2, как BoringSSL без AES;
 // остальное — как у пресета chrome.
 func TestRealityChaChaChrome(t *testing.T) {
-	h := chReality(t, "chrome")
+	h := chReality(t, "chrome", true)
 	o := chObrazec(t, utls.HelloChrome_Auto)
 
 	if chIndex(h.gruppy, gruppaMLKEMch) < 0 || chIndex(h.klyuchi, gruppaMLKEMch) < 0 {
@@ -224,7 +226,7 @@ const gruppaMLKEMch = 4588 // X25519MLKEM768
 
 // Без ML-KEM (firefox его не шлёт) порядок шифров не трогаем: как у пресета.
 func TestRealityChaChaFirefoxNeTrogaem(t *testing.T) {
-	h := chReality(t, "firefox")
+	h := chReality(t, "firefox", true)
 	o := chObrazec(t, utls.HelloFirefox_Auto)
 	if chIndex(h.gruppy, gruppaMLKEMch) >= 0 {
 		t.Skipf("firefox в этой версии uTLS шлёт ML-KEM: %v", h.gruppy)
