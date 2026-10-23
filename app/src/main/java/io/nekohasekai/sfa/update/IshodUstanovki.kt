@@ -143,6 +143,10 @@ object IshodUstanovki {
     /** Файл привязан к версии: иначе после выхода новой версии ставился старый скачанный. */
     fun imyaFayla(versionCode: Int): String = "update-$versionCode.apk"
 
+    /** Номер версии из имени файла [imyaFayla]; чужое имя — 0. */
+    fun versiyaIzImeni(imya: String): Int =
+        Regex("""^update-(\d+)\.apk$""").matchEntire(imya)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
     /** Уникальное имя временного файла на один вызов: два воркера одной версии не пишут в один файл. */
     fun imyaChastichnogoFayla(versionCode: Int): String =
         "${imyaFayla(versionCode)}.${java.util.UUID.randomUUID()}.part"

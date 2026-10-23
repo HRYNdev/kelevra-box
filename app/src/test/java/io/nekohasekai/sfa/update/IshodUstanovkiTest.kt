@@ -215,4 +215,11 @@ class IshodUstanovkiTest {
         assertEquals("Google", IshodUstanovki.telefon("Google", ""))
         assertEquals("—", IshodUstanovki.telefon(null, null))
     }
+
+    @Test
+    fun `номер версии из имени файла обновления`() {
+        assertEquals(711151, IshodUstanovki.versiyaIzImeni(IshodUstanovki.imyaFayla(711151)))
+        assertEquals(0, IshodUstanovki.versiyaIzImeni("update-711151.apk.123.part"))
+        assertEquals(0, IshodUstanovki.versiyaIzImeni("chuzhoy.apk"))
+    }
 }

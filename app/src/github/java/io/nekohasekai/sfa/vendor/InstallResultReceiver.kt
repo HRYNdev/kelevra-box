@@ -138,14 +138,18 @@ class InstallResultReceiver : BroadcastReceiver() {
      * второй отказ той же версии идёт обычным путём (напоминание раз в сутки).
      * false — повтора не было (уже пробовали, нет файла или сессия не создалась).
      */
-    private fun povtoritSOknom(context: Context, versionCode: Int, telefon: String): Boolean {
-        if (versionCode > 0 && Settings.updatePovtorSOknom == versionCode) {
-            Log.i(TAG_ISHOD, "повтор с окном для этой версии уже был, второй раз не повторяю")
-            return false
-        }
+    private fun povtoritSOknom(context: Context, versionCodeIzSvedeniy: Int, telefon: String): Boolean {
         val apk = UpdateState.cachedApkFile.value ?: Settings.cachedApkPath.takeIf { it.isNotEmpty() }?.let { java.io.File(it) }
         if (apk == null || !apk.exists() || apk.length() <= 0L) {
             Log.w(TAG_ISHOD, "повтор с окном невозможен: файла обновления нет")
+            return false
+        }
+        // Сведения о версии могли не подняться (свежий процесс) — тогда номер из имени файла.
+        val versionCode = versionCodeIzSvedeniy.takeIf { it > 0 } ?: IshodUstanovki.versiyaIzImeni(apk.name)
+        // Номер не узнать — признак не поставить; зацикливания всё равно нет: сессия с окном
+        // приходит с EXTRA_TIHAYA=false и второй раз не повторяется.
+        if (versionCode > 0 && Settings.updatePovtorSOknom == versionCode) {
+            Log.i(TAG_ISHOD, "повтор с окном для этой версии уже был, второй раз не повторяю")
             return false
         }
         // Признак ставится ДО повтора: если процесс умрёт посреди сессии, второго круга не будет.
