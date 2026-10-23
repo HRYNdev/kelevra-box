@@ -5,14 +5,21 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import io.nekohasekai.sfa.update.IshodUstanovki
 import java.io.File
 import java.io.FileInputStream
 import android.content.pm.PackageInstaller as AndroidPackageInstaller
 
 object SystemPackageInstaller {
 
+    /** В ответе сессии: шла ли она тихо (USER_ACTION_NOT_REQUIRED). Нужен для повтора с окном. */
+    const val EXTRA_TIHAYA = "io.nekohasekai.sfa.INSTALL_TIHAYA"
+
     fun canSystemSilentInstall(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hyperOsBlokiruetTihuyuUstanovku()
+
+    /** «Производитель модель» для строк журнала обновления. */
+    fun telefon(): String = IshodUstanovki.telefon(Build.MANUFACTURER, Build.MODEL)
 
     /**
      * HyperOS/MIUI рубит тихий self-update (USER_ACTION_NOT_REQUIRED) ещё до системного окна:
@@ -28,15 +35,24 @@ object SystemPackageInstaller {
         return "xiaomi" in proizvoditel || "xiaomi" in brend || "redmi" in brend || "poco" in brend
     }
 
-    fun install(context: Context, apkFile: File) {
+    /**
+     * [sOknom] — сессия без USER_ACTION_NOT_REQUIRED: система показывает окно подтверждения.
+     * Так идёт повтор после отказа тихой сессии с VERIFICATION_FAILURE (InstallResultReceiver).
+     */
+    fun install(context: Context, apkFile: File, sOknom: Boolean = false) {
         val packageInstaller = context.packageManager.packageInstaller
         val params = AndroidPackageInstaller.SessionParams(AndroidPackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(context.packageName)
-        if (canSystemSilentInstall()) {
+        val tihaya = !sOknom && canSystemSilentInstall()
+        if (tihaya) {
             // На Xiaomi/Redmi/POCO эту строку не ставим вовсе: без неё требование
             // подтверждения остаётся системным умолчанием, и ответ придёт как
             // STATUS_PENDING_USER_ACTION — его InstallResultReceiver уже открывает.
             params.setRequireUserAction(AndroidPackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+        } else if (sOknom && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // Повтор с окном: требуем подтверждение явно, а не полагаемся на умолчание,
+            // которое у приложения с UPDATE_PACKAGES_WITHOUT_USER_ACTION может снова пойти тихо.
+            params.setRequireUserAction(AndroidPackageInstaller.SessionParams.USER_ACTION_REQUIRED)
         }
 
         val sessionId = packageInstaller.createSession(params)
@@ -50,6 +66,7 @@ object SystemPackageInstaller {
 
             val intent = Intent(context, InstallResultReceiver::class.java).apply {
                 action = InstallResultReceiver.ACTION_INSTALL_COMPLETE
+                putExtra(EXTRA_TIHAYA, tihaya)
             }
             val pendingIntent = PendingIntent.getBroadcast(
                 context,
@@ -58,7 +75,10 @@ object SystemPackageInstaller {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
             )
 
-            Log.i("KelevraObnovlenie", "файл обновления передан системе: ${apkFile.length()} байт")
+            Log.i(
+                "KelevraObnovlenie",
+                "файл обновления передан системе: ${apkFile.length()} байт, установка ${IshodUstanovki.rezhim(tihaya)}, телефон ${telefon()}",
+            )
             session.commit(pendingIntent.intentSender)
         }
     }

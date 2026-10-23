@@ -157,4 +157,62 @@ class IshodUstanovkiTest {
         assertTrue(s.contains("PROVERKA"))
         assertTrue(s.contains("код 3"))
     }
+
+    // Журнал 12-1 (Samsung SM-A525F, Android 14), 22.10.2026: тихая сессия отказ за 6 с без окна.
+    private val otkazMamy = "INSTALL_FAILED_VERIFICATION_FAILURE: Install not allowed"
+
+    @Test
+    fun `отказ проверки тихой сессии повторяется с окном`() {
+        assertTrue(IshodUstanovki.povtoritSOknom(3, otkazMamy, bylaTihaya = true, uzhePovtoryali = false))
+    }
+
+    @Test
+    fun `сессия с окном второй раз не повторяется`() {
+        assertFalse(IshodUstanovki.povtoritSOknom(3, otkazMamy, bylaTihaya = false, uzhePovtoryali = false))
+    }
+
+    @Test
+    fun `повтор с окном один на версию`() {
+        assertFalse(IshodUstanovki.povtoritSOknom(3, otkazMamy, bylaTihaya = true, uzhePovtoryali = true))
+    }
+
+    @Test
+    fun `повтор с окном только на VERIFICATION_FAILURE с кодом 3`() {
+        // Отказ HyperOS «Permission denied» тем же кодом — не сюда, у него своя дорога.
+        assertFalse(IshodUstanovki.povtoritSOknom(3, "INSTALL_FAILED_ABORTED: Permission denied", true, false))
+        // Таймаут проверки — другой отказ, повтор с окном его не лечит.
+        assertFalse(IshodUstanovki.povtoritSOknom(3, "INSTALL_FAILED_VERIFICATION_TIMEOUT", true, false))
+        assertFalse(IshodUstanovki.povtoritSOknom(2, otkazMamy, true, false))
+        assertFalse(IshodUstanovki.povtoritSOknom(1, otkazMamy, true, false))
+        assertFalse(IshodUstanovki.povtoritSOknom(3, null, true, false))
+        assertTrue(IshodUstanovki.povtoritSOknom(3, otkazMamy.lowercase(), true, false))
+    }
+
+    @Test
+    fun `строка журнала несёт телефон и режим установки`() {
+        val s = IshodUstanovki.strokaZhurnala(
+            "1.14.150", OtkazUstanovki.PROVERKA, 3, otkazMamy,
+            IshodUstanovki.telefon("samsung", "SM-A525F"), tihaya = true,
+        )
+        assertTrue(s, s.contains("телефон: samsung SM-A525F"))
+        assertTrue(s, s.contains("установка: тихая"))
+        val sOknom = IshodUstanovki.strokaZhurnala("1.14.150", OtkazUstanovki.PROVERKA, 3, otkazMamy, "x", tihaya = false)
+        assertTrue(sOknom, sOknom.contains("установка: с окном"))
+    }
+
+    @Test
+    fun `старая строка журнала без телефона не меняется`() {
+        assertEquals(
+            "установка обновления не прошла: версия 1.14.116, причина PROVERKA, код 3, система: —",
+            IshodUstanovki.strokaZhurnala("1.14.116", OtkazUstanovki.PROVERKA, 3, null),
+        )
+    }
+
+    @Test
+    fun `телефон без повтора производителя`() {
+        assertEquals("OnePlus CPH2581", IshodUstanovki.telefon("OnePlus", "CPH2581"))
+        assertEquals("HUAWEI ELE-L29", IshodUstanovki.telefon("HUAWEI", "HUAWEI ELE-L29"))
+        assertEquals("Google", IshodUstanovki.telefon("Google", ""))
+        assertEquals("—", IshodUstanovki.telefon(null, null))
+    }
 }
