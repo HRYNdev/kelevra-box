@@ -48,10 +48,25 @@ class AutoModeLogicTest {
     }
 
     @Test
+    fun `основной не поднимается, комната WB везёт — идём ей, даже если Телемост тоже стоит`() {
+        // Решение 24.10.2026: под белыми списками первая — комната WB, Телемост запасной.
+        assertEquals(
+            Situation.Wb,
+            AutoMode.decide(hasNetwork = true, home = false, main = false, room = true, wb = true),
+        )
+    }
+
+    @Test
+    fun `комната WB не перебивает ни дом, ни основной канал`() {
+        assertEquals(Situation.Home, AutoMode.decide(hasNetwork = true, home = true, main = false, room = false, wb = true))
+        assertEquals(Situation.Main, AutoMode.decide(hasNetwork = true, home = false, main = true, room = false, wb = true))
+    }
+
+    @Test
     fun `сети нет — ждём, что бы ни показывали остальные пробы`() {
         assertEquals(
             Situation.NoNetwork,
-            AutoMode.decide(hasNetwork = false, home = true, main = true, room = true),
+            AutoMode.decide(hasNetwork = false, home = true, main = true, room = true, wb = true),
         )
     }
 

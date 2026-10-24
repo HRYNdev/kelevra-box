@@ -3,6 +3,7 @@ package io.nekohasekai.sfa.bg
 import io.nekohasekai.sfa.bg.pult.Pult
 
 import android.os.SystemClock
+import io.nekohasekai.sfa.bg.path.HonestProbe
 import io.nekohasekai.sfa.bg.path.RoomNote
 import io.nekohasekai.sfa.database.Settings
 
@@ -23,7 +24,9 @@ import io.nekohasekai.sfa.database.Settings
  *
  * Почему не сразу после первого отказа: серверная нога перезаходит в комнату раз в 10 с,
  * и одиночный отказ — это чаще всего попадание в её пересборку, которая проходит сама.
- * Ждём [FAILURES_BEFORE_RESTART] отказов подряд.
+ * Ждём [FAILURES_BEFORE_RESTART] отказов подряд. Свежая комната, через которую ещё ничего не
+ * прошло, получает окно «встаёт» ([GRACE_MILLIS]) и после него [FAILURES_UNPROVEN] отказов —
+ * правило целиком в [condemnsRoom].
  *
  * Почему подъём не повторяется бесконечно часто: если комната умерла надолго (ногу
  * выключили, сервер убрал выход), частый цикл «подняться → упасть» жжёт батарею и трафик.
@@ -67,6 +70,48 @@ object OlcRtcWatchdog {
 
     /** Сколько канал должен продержаться живым, чтобы забыть прошлые подъёмы. */
     private const val HEALTHY_RESET_MILLIS = 120_000L
+
+    /**
+     * Окно «встаёт»: столько от Ready комнату не перезапускаем и выход с неё не уводим, пока
+     * через неё не прошла ни одна проба.
+     *
+     * Под белым списком нога заходит в свежую комнату не сразу, и первые пробы врут подряд.
+     * Раньше три отказа за 15 с после Ready давали перезапуск, а перезапуск уводил выход на
+     * основной канал — мёртвый как раз под белым списком (24.10.2026). Окно не держит только
+     * то, что подъёмом заведомо не встанет: ядро вышло само и локальный вход не отвечает.
+     */
+    const val GRACE_MILLIS = 180_000L
+
+    /**
+     * Столько отказов без единой удачи считаем смертью комнаты, когда окно вышло. Вдвое
+     * больше обычного: живой комната ещё ни разу не была, и три отказа здесь — не обрыв.
+     */
+    const val FAILURES_UNPROVEN = 6
+
+    /**
+     * Мертва ли комната по пробам. Чистая функция — правило «окно, потом шесть без удачи,
+     * после первой удачи три подряд» проверяется тестом.
+     *
+     * @param sinceReadyMillis сколько прошло с Ready, от которого считаем окно.
+     * @param everLive с этого Ready хоть одна проба прошла.
+     * @param failures отказов подряд (без удачи — это и все отказы с Ready).
+     * @param refusedInARow из них подряд — «локальный вход не отвечает»: сокс ядра не слушает,
+     *   ждать нечего, правило прежнее.
+     */
+    internal fun condemnsRoom(
+        sinceReadyMillis: Long,
+        everLive: Boolean,
+        failures: Int,
+        refusedInARow: Int,
+        failuresBeforeRestart: Int = Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART),
+        graceMillis: Long = Pult.long("komnata.storozh.grace_millis", GRACE_MILLIS),
+        failuresUnproven: Int = Pult.int("komnata.storozh.failures_unproven", FAILURES_UNPROVEN),
+    ): Boolean = when {
+        refusedInARow >= failuresBeforeRestart -> true
+        everLive -> failures >= failuresBeforeRestart
+        sinceReadyMillis < graceMillis -> false
+        else -> failures >= failuresUnproven
+    }
 
     /** Что присмотру делать на этом ходу. */
     internal enum class Step {
@@ -165,10 +210,18 @@ object OlcRtcWatchdog {
         private set
 
     /**
-     * Присмотр вынес приговор: канал не отвечает столько раз подряд, что это уже не
-     * пересборка на той стороне, — либо частые подъёмы кончились.
+     * Приговор по пробам ([condemnsRoom]) на последнем ходу. Держим готовым, а не считаем
+     * в [condemned]: правило зависит от окна «встаёт», а часы — забота хода присмотра.
      */
-    val condemned: Boolean get() = gaveUp || deadInARow >= Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)
+    @Volatile
+    private var judgedDead: Boolean = false
+
+    /**
+     * Присмотр вынес приговор: канал не отвечает столько раз подряд, что это уже не
+     * пересборка на той стороне, — либо частые подъёмы кончились. В окне «встаёт»
+     * ([GRACE_MILLIS]) приговора нет: автомат по нему гасит комнату.
+     */
+    val condemned: Boolean get() = gaveUp || judgedDead
 
     private var protector: ((Int) -> Boolean)? = null
     private var requireProtector: Boolean = false
@@ -203,6 +256,10 @@ object OlcRtcWatchdog {
             restarts = 0
             gaveUp = false
             deadInARow = 0
+            judgedDead = false
+            // Зовут, когда ядро уже поднялось: окно «встаёт» считаем отсюда.
+            readyAt = SystemClock.elapsedRealtime()
+            everLive = false
             note = ""
             active = true
             thread = Thread(::loop, "olcrtc-watchdog").apply {
@@ -242,6 +299,14 @@ object OlcRtcWatchdog {
     @Volatile
     private var socksLostReported = false
 
+    /** С какого Ready считаем окно «встаёт» ([SystemClock.elapsedRealtime]); 0 — ядро не стоит. */
+    @Volatile
+    private var readyAt = 0L
+
+    /** С этого Ready через комнату прошла хоть одна проба. */
+    @Volatile
+    private var everLive = false
+
     /**
      * Присмотр прямо сейчас гасит и поднимает ядро. Сервис по нему не запускает второй
      * подъём поверх: `OlcRtcCore.start` гасит чужой запуск, и два подъёма рвали друг друга.
@@ -278,6 +343,7 @@ object OlcRtcWatchdog {
 
     private fun loop() {
         var failures = 0
+        var refused = 0
         var lastRestartAt = 0L
         // Когда кончился последний подъём, удачный или нет. От него отмеряется пауза до
         // следующей попытки, пока ядро лежит в отказе.
@@ -300,6 +366,14 @@ object OlcRtcWatchdog {
             // Отказ мог оставить и чужой подъём (сервис по просьбе автомата). Паузу тогда
             // отмеряем от момента, когда мы его увидели, а не поднимаем в ту же секунду.
             if (state is OlcRtcCore.State.Failed && raiseEndedAt == 0L) raiseEndedAt = now
+            // Окно «встаёт» живёт от Ready до Ready: ядро легло — следующее Ready (наше или
+            // поднятое сервисом) начнёт его заново.
+            if (state !is OlcRtcCore.State.Ready) {
+                readyAt = 0L
+                everLive = false
+            } else if (readyAt == 0L) {
+                readyAt = now
+            }
             val step = nextStep(
                 state = state,
                 roomNeeded = runCatching { roomNeeded() }.getOrDefault(false),
@@ -327,7 +401,9 @@ object OlcRtcWatchdog {
                     raiseEndedAt = SystemClock.elapsedRealtime()
                     lastRestartAt = raiseEndedAt
                     failures = 0
+                    refused = 0
                     deadInARow = 0
+                    judgedDead = false
                     continue
                 }
 
@@ -344,7 +420,10 @@ object OlcRtcWatchdog {
 
             if (health is OlcRtcCore.Health.Live) {
                 failures = 0
+                refused = 0
                 deadInARow = 0
+                judgedDead = false
+                everLive = true
                 socksLostReported = false
                 gaveUp = false
                 if (restarts > 0 && lastRestartAt > 0 &&
@@ -361,8 +440,21 @@ object OlcRtcWatchdog {
             failures++
             deadInARow = failures
             val reason = (health as? OlcRtcCore.Health.Dead)?.reason ?: "неизвестно"
-            if (failures < Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)) {
-                KLog.i(TAG, "канал не отвечает ($reason), отказ $failures из ${Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)}")
+            refused = if (reason == HonestProbe.ENTRY_REFUSED) refused + 1 else 0
+            val sinceReady = if (readyAt == 0L) 0L else SystemClock.elapsedRealtime() - readyAt
+            judgedDead = condemnsRoom(sinceReady, everLive, failures, refused)
+            if (!judgedDead) {
+                val porog = if (everLive || refused > 0) {
+                    Pult.int("komnata.storozh.failures_before_restart", FAILURES_BEFORE_RESTART)
+                } else {
+                    Pult.int("komnata.storozh.failures_unproven", FAILURES_UNPROVEN)
+                }
+                val okno = if (!everLive && refused == 0 && sinceReady < Pult.long("komnata.storozh.grace_millis", GRACE_MILLIS)) {
+                    ", комната ещё встаёт (${sinceReady / 1000} из ${Pult.long("komnata.storozh.grace_millis", GRACE_MILLIS) / 1000} с) — не трогаю"
+                } else {
+                    ""
+                }
+                KLog.i(TAG, "канал не отвечает ($reason), отказ $failures из $porog$okno")
                 continue
             }
 
@@ -386,7 +478,9 @@ object OlcRtcWatchdog {
             raiseEndedAt = SystemClock.elapsedRealtime()
             lastRestartAt = raiseEndedAt
             failures = 0
+            refused = 0
             deadInARow = 0
+            judgedDead = false
         }
     }
 
@@ -426,7 +520,8 @@ object OlcRtcWatchdog {
         if (channelWasUp) {
             // Сначала уводим выход, потом гасим. Раньше порядок был обратный, и всё время
             // подъёма — пауза плюс до трёх попыток по 25 секунд — трафик получал отказ за
-            // отказом в погашенный сокс.
+            // отказом в погашенный сокс. Куда уводить, решает [AutoMode.roomLostTarget]: при
+            // мёртвом основном — на WB, если он жив, иначе никуда, но не на основной.
             AutoMode.roomLost("присмотр поднимает комнату заново: $reason")
             runCatching { OlcRtcCore.stop() }
                 .onFailure { KLog.w(TAG, "остановка перед подъёмом сорвалась: ${it.message}") }
@@ -456,6 +551,9 @@ object OlcRtcWatchdog {
                 // Сразу спрашиваем: «поднят» без прошедших байтов — это ещё не канал.
                 val health = OlcRtcCore.probe(port)
                 RoomNote.note(OlcRtcCore.state, health)
+                // Новое Ready — новое окно «встаёт».
+                readyAt = SystemClock.elapsedRealtime()
+                everLive = health is OlcRtcCore.Health.Live
                 if (health is OlcRtcCore.Health.Live) gaveUp = false
                 // Выход при подъёме увели с комнаты. Ждать очередного шага ритма автомата
                 // (в комнате — до трёх минут), чтобы вернуть его, незачем.

@@ -134,6 +134,78 @@ class OlcRtcWatchdogStepTest {
         assertTrue("попыток $raises", raises in 10..25)
     }
 
+    // ------------------------------------------------------------ окно «встаёт»
+
+    /**
+     * Под белым списком 24.10.2026 комната встала, первые пробы не прошли, и через 15 с
+     * присмотр её перезапустил, уведя выход на мёртвый основной. В окне от Ready, пока не было
+     * ни одной удачной пробы, приговора нет.
+     */
+    private fun condemns(since: Long, everLive: Boolean = false, failures: Int, refused: Int = 0) =
+        OlcRtcWatchdog.condemnsRoom(since, everLive, failures, refused)
+
+    @Test
+    fun `в окне без единой удачи три и даже десять отказов — не приговор`() {
+        assertFalse(condemns(since = 15_000L, failures = OlcRtcWatchdog.FAILURES_BEFORE_RESTART))
+        assertFalse(condemns(since = OlcRtcWatchdog.GRACE_MILLIS - 1, failures = 30))
+    }
+
+    @Test
+    fun `окно вышло — нужно шесть отказов без удачи, а не три`() {
+        val after = OlcRtcWatchdog.GRACE_MILLIS
+        assertFalse(condemns(since = after, failures = OlcRtcWatchdog.FAILURES_BEFORE_RESTART))
+        assertFalse(condemns(since = after, failures = OlcRtcWatchdog.FAILURES_UNPROVEN - 1))
+        assertTrue(condemns(since = after, failures = OlcRtcWatchdog.FAILURES_UNPROVEN))
+        assertEquals(6, OlcRtcWatchdog.FAILURES_UNPROVEN)
+        assertEquals(180_000L, OlcRtcWatchdog.GRACE_MILLIS)
+    }
+
+    @Test
+    fun `после первой удачи — три подряд, как раньше, и окно не держит`() {
+        assertFalse(condemns(since = 20_000L, everLive = true, failures = OlcRtcWatchdog.FAILURES_BEFORE_RESTART - 1))
+        assertTrue(condemns(since = 20_000L, everLive = true, failures = OlcRtcWatchdog.FAILURES_BEFORE_RESTART))
+    }
+
+    @Test
+    fun `локальный вход не отвечает — окно не держит`() {
+        // Сокс ядра не слушает: нога тут ни при чём, ждать нечего.
+        assertTrue(condemns(since = 10_000L, failures = 3, refused = OlcRtcWatchdog.FAILURES_BEFORE_RESTART))
+        assertFalse(condemns(since = 10_000L, failures = 3, refused = OlcRtcWatchdog.FAILURES_BEFORE_RESTART - 1))
+    }
+
+    @Test
+    fun `окно и порог отказов берутся с пульта`() {
+        try {
+            io.nekohasekai.sfa.bg.pult.Pult.dlyaTesta(
+                io.nekohasekai.sfa.bg.pult.PultSostoyanie(
+                    nastroyki = mapOf("komnata.storozh.grace_millis" to 30_000, "komnata.storozh.failures_unproven" to 4),
+                ),
+            )
+            assertFalse(condemns(since = 29_999L, failures = 10))
+            assertTrue(condemns(since = 30_000L, failures = 4))
+        } finally {
+            io.nekohasekai.sfa.bg.pult.Pult.dlyaTesta(io.nekohasekai.sfa.bg.pult.PultSostoyanie())
+        }
+    }
+
+    @Test
+    fun `сценарий белого списка — нога встаёт к сотой секунде, перезапуска нет`() {
+        // Ход раз в пять секунд, каждая проба до сотой секунды — отказ, дальше канал живой.
+        var failures = 0
+        var everLive = false
+        var t = 0L
+        while (t < 240_000L) {
+            t += OlcRtcWatchdog.CHECK_INTERVAL_MILLIS
+            if (t >= 100_000L) {
+                everLive = true
+                failures = 0
+            } else {
+                failures++
+            }
+            assertFalse("перезапуск на $t мс", condemns(since = t, everLive = everLive, failures = failures))
+        }
+    }
+
     // ------------------------------------------------------------ нужна ли комната
 
     @Test

@@ -86,6 +86,16 @@ class PathChipTest {
     }
 
     @Test
+    fun `комната WB - те же слова, что у комнаты`() {
+        PathRegistry.alive(PathId.WB)
+        assertChip("Комната", chip(PathId.WB))
+        PathRegistry.raising(PathId.WB)
+        assertChip(PathChip.SEARCH, chip(PathId.WB))
+        PathRegistry.dead(PathId.WB, "молчит")
+        assertChip(PathChip.DOWN, chip(PathId.WB))
+    }
+
+    @Test
     fun `ни на чём не стоим, автомат ищет путь — «Поиск»`() {
         PathRegistry.dead(PathId.MAIN, reason = "молчит")
         assertChip(PathChip.SEARCH, chip(chosen = null))

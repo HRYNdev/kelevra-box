@@ -16,6 +16,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import io.nekohasekai.sfa.Application
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.ZapasnoyPut
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -647,31 +648,48 @@ object LogUploadWork {
 
     /** Отправка. Успех — только когда сервер ответил {"ok":true}. */
     private fun upload(archive: ByteArray, host: String, deviceKey: String?): ИсходОтправки {
-        val conn = URL(Kelevra.adresSeti("https://$host/logs")).openConnection() as HttpURLConnection
+        val zagolovki = buildList {
+            add("Content-Type" to "application/gzip")
+            addAll(Kelevra.deviceHeaders())
+            if (deviceKey != null) add("X-Device-Key" to deviceKey)
+        }
+        // Прямой путь, при сбое сети — через туннель: в комнате Телемоста приложение вне tun,
+        // и под белым списком иностранная дверь напрямую не отвечает ([ZapasnoyPut.sluzhebnyj]).
+        val (code, body) = ZapasnoyPut.sluzhebnyj(
+            Kelevra.adresSeti("https://$host/logs"),
+            { u ->
+                val o = ZapasnoyPut.zaprosCherezTunnel(u, "POST", archive, zagolovki, connectMs = 20000, readMs = 60000)
+                o.kod to o.telo
+            },
+        ) { u -> uploadPryamo(u, archive, zagolovki) }
+        if (code in 500..599) {
+            KLog.w(TAG, "серверу плохо: http $code — хвост не сужу, попробую позже")
+            return ИсходОтправки.ВременныйСбой
+        }
+        if (code !in 200..299) {
+            KLog.w(TAG, "сервер отказал: http $code")
+            return ИсходОтправки.Отвергнуто
+        }
+        val ok = runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
+        return if (ok) ИсходОтправки.Принято else ИсходОтправки.Отвергнуто
+    }
+
+    /** Один прямой POST: код и тело ответа. Сбой сети — исключение. */
+    private fun uploadPryamo(url: String, archive: ByteArray, zagolovki: List<Pair<String, String>>): Pair<Int, String> {
+        val conn = URL(url).openConnection() as HttpURLConnection
         return try {
             conn.requestMethod = "POST"
             conn.connectTimeout = 20000
             conn.readTimeout = 60000
             conn.doOutput = true
             conn.setFixedLengthStreamingMode(archive.size)
-            conn.setRequestProperty("Content-Type", "application/gzip")
             conn.setRequestProperty("User-Agent", "kelevra")
-            Kelevra.deviceHeaders().forEach { (name, value) -> conn.setRequestProperty(name, value) }
-            if (deviceKey != null) conn.setRequestProperty("X-Device-Key", deviceKey)
+            zagolovki.forEach { (name, value) -> conn.setRequestProperty(name, value) }
             conn.outputStream.use { it.write(archive) }
             val code = conn.responseCode
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.bufferedReader()?.readText().orEmpty()
-            if (code in 500..599) {
-                KLog.w(TAG, "серверу плохо: http $code — хвост не сужу, попробую позже")
-                return ИсходОтправки.ВременныйСбой
-            }
-            if (code !in 200..299) {
-                KLog.w(TAG, "сервер отказал: http $code")
-                return ИсходОтправки.Отвергнуто
-            }
-            val ok = runCatching { JSONObject(body).optBoolean("ok") }.getOrDefault(false)
-            if (ok) ИсходОтправки.Принято else ИсходОтправки.Отвергнуто
+            code to body
         } finally {
             conn.disconnect()
         }

@@ -204,13 +204,16 @@ object SubscriptionRefresh {
                 // Текст ошибки от HTTP-клиента/ядра часто повторяет запрошенный URL —
                 // с кодом доступа внутри, поэтому в лог идёт замаскированная копия.
                 KLog.w(TAG, "обновление подписки: настройки не получены", Kelevra.maskThrowable(e))
+                // Правка пульта могла быть именно про этот путь: сводку с X-Pult всё равно спрашиваем.
+                runCatching { io.nekohasekai.sfa.bg.pult.PultSvyaz.opros("ручное обновление, конфиг не получен") }
                 _state.value = State.Failed(humanError(e))
                 return
             }
 
             // Сводка отдельным запросом: конфиг про состояние подписки и комнату молчит.
             KLog.i(TAG, "обновление подписки: запрашиваю сводку")
-            val loaded = runCatching { loadInfo() }.getOrNull()
+            // Через опрос пульта: X-Pult уходит с запросом, ответ применяется, отсчёт службы считает его своим.
+            val loaded = runCatching { io.nekohasekai.sfa.bg.pult.PultSvyaz.opros("ручное обновление") }.getOrNull()
             KLog.i(
                 TAG,
                 "обновление подписки: сводка ${if (loaded == null) "не пришла" else "получена"}, " +

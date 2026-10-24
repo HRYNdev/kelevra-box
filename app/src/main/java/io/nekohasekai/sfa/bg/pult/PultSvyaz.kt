@@ -1,11 +1,12 @@
 package io.nekohasekai.sfa.bg.pult
 
 import io.nekohasekai.sfa.Kelevra
+import io.nekohasekai.sfa.ZapasnoyPut
 import io.nekohasekai.sfa.bg.AutoMode
 import io.nekohasekai.sfa.bg.DefaultNetworkMonitor
 import io.nekohasekai.sfa.bg.KLog
 import io.nekohasekai.sfa.compose.screen.home.SubscriptionRefresh
-import io.nekohasekai.sfa.compose.screen.home.SvodkaDisk
+import io.nekohasekai.sfa.compose.screen.home.SubscriptionInfo
 import io.nekohasekai.sfa.compose.screen.home.bazaPodpiski
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,8 @@ import java.net.URL
  * Связь с сервером, пока служба жива (PULT.md, «Связь с телефоном»):
  *  - отметки испытания пульта раз в [SHAG_MS];
  *  - опрос /info раз в `opros.info_min` прямо из службы, с `If-None-Match` (304 — дёшево);
+ *  - внеочередной опрос по поводу ([povod]): приложение на переднем плане, смена сети на «не дома» под
+ *    подсказкой белого списка; ручное «Обновить настройки сети» тоже идёт через [opros];
  *  - долгий опрос `…/pult/zhdat?versiya=N` при `kanal.dolgiy_opros` (по умолчанию выключен).
  *
  * Без сети не ходит никуда; ошибки долгого опроса разводят попытки всё шире.
@@ -33,7 +36,24 @@ object PultSvyaz {
     /** Долгий опрос: сервер держит до 55 с, ждём с запасом. */
     private const val ZHDAT_TIMEOUT_MS = 70_000
 
+    /** Не чаще раза в минуту по поводам (передний план, смена сети): иначе сеть-«качели» дёргали бы сервер. */
+    internal const val MIN_POVOD_MS = 60_000L
+
+    /** Опрос из службы после неудачи повторяется не раньше, чем через столько. */
+    internal const val POVTOR_MS = 5 * 60_000L
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Когда /info ушёл и вернулся сводкой, и когда последний раз пробовали. В памяти процесса, не на диске:
+     * сводку на диск пишет любой запрос (экран, расписание профиля, «Обновить настройки сети»), и отсчёт
+     * от неё откладывал опрос пульта, хотя пульт мог быть не принят. Новый процесс или служба — свежий отсчёт.
+     */
+    @Volatile
+    private var uspehMs = 0L
+
+    @Volatile
+    private var popytkaMs = 0L
 
     @Volatile
     private var job: Job? = null
@@ -46,6 +66,9 @@ object PultSvyaz {
         if (job?.isActive == true) return
         job = scope.launch {
             Pult.zagruzitEsliNado()
+            // Подъём службы — свежий отсчёт: правка пульта, пока служба стояла, доедет на первом же круге
+            // (не чаще раза в [POVTOR_MS], 304 дёшево), а не через `opros.info_min`.
+            uspehMs = 0L
             petlya()
         }
         dolgiy = scope.launch { dolgiyOpros() }
@@ -61,23 +84,55 @@ object PultSvyaz {
 
     private fun setEst(): Boolean = DefaultNetworkMonitor.defaultNetwork != null
 
-    /** Пора ли опрашивать /info: с прошлого опроса прошло `opros.info_min`. */
-    internal fun poraOprosa(nowMs: Long, proshlyyMs: Long, intervalMin: Int): Boolean =
-        nowMs - proshlyyMs >= intervalMin * 60_000L
+    /**
+     * Пора ли опрашивать /info: с прошлой удачной сводки прошло `opros.info_min` и с прошлой попытки
+     * (если была) — не меньше [POVTOR_MS]: неудача не должна ждать целый интервал, но и не ходить каждые 30 с.
+     */
+    internal fun poraOprosa(nowMs: Long, proshlyyMs: Long, intervalMin: Int, popytkaMs: Long = 0L): Boolean =
+        nowMs - proshlyyMs >= intervalMin * 60_000L && nowMs - popytkaMs >= POVTOR_MS
+
+    /** Можно ли опросить по поводу: с прошлой попытки прошла минута. */
+    internal fun mozhnoPoPovodu(nowMs: Long, popytkaMs: Long): Boolean = nowMs - popytkaMs >= MIN_POVOD_MS
+
+    /**
+     * Полноценный опрос /info прямо сейчас: заголовок `X-Pult` уходит с запросом, ответ с блоком пульта
+     * применяется ([SubscriptionRefresh.loadInfo]); прямой путь рвётся — тот же запрос через туннель и двери.
+     * Удачная сводка двигает отсчёт опроса службы, неудача — нет. [uslovno] — только для опроса по таймеру.
+     */
+    suspend fun opros(prichina: String, uslovno: Boolean = false): SubscriptionInfo? {
+        Pult.zagruzitEsliNado()
+        popytkaMs = System.currentTimeMillis()
+        KLog.i(TAG, "опрос /info: $prichina")
+        val svodka = runCatching { SubscriptionRefresh.loadInfo(uslovno) }
+            .onFailure { if (it is CancellationException) throw it }
+            .getOrNull()
+        if (svodka != null) uspehMs = System.currentTimeMillis()
+        return svodka
+    }
+
+    /** Внеочередной опрос по поводу (передний план, смена сети); без сети, при `vykl.opros_sluzhby` и чаще раза в минуту — нет. */
+    fun povod(prichina: String) {
+        val now = System.currentTimeMillis()
+        synchronized(this) {
+            if (!setEst() || !mozhnoPoPovodu(now, popytkaMs)) return
+            popytkaMs = now
+        }
+        scope.launch {
+            Pult.zagruzitEsliNado()
+            if (!Pult.vykl("opros_sluzhby")) opros(prichina)
+        }
+    }
 
     private suspend fun petlya() {
-        // Отсчёт — от последней сводки на диске: подъём службы не повод сразу дёргать сервер,
-        // это и так делают экран и расписание профиля.
-        var proshlyy = runCatching { SvodkaDisk.prochest()?.kogdaMs }.getOrNull() ?: 0L
         while (currentCoroutineContextActive()) {
             runCatching {
                 Pult.otmetit(nablyudaem = setEst(), zhivoy = AutoMode.state.value.link == AutoMode.Link.Alive)
             }
             val now = System.currentTimeMillis()
-            if (!Pult.vykl("opros_sluzhby") && setEst() && poraOprosa(now, proshlyy, Pult.int("opros.info_min"))) {
-                proshlyy = now
-                runCatching { SubscriptionRefresh.loadInfo(uslovno = true) }
-                    .onFailure { if (it is CancellationException) throw it }
+            if (!Pult.vykl("opros_sluzhby") && setEst() &&
+                poraOprosa(now, uspehMs, Pult.int("opros.info_min"), popytkaMs)
+            ) {
+                opros("по таймеру", uslovno = true)
             }
             delay(SHAG_MS)
         }
@@ -156,9 +211,26 @@ object PultSvyaz {
         else -> Shag.Pauza(pauza(neudach + 1), neudacha = true)
     }
 
-    /** Один заход долгого опроса: код ответа (-1 — до сервера не дошли) и Retry-After в секундах. */
-    private fun zhdat(baza: String, versiya: Long): Pair<Int, Long?> {
-        val conn = URL(Kelevra.adresSeti("$baza/pult/zhdat?versiya=$versiya")).openConnection() as HttpURLConnection
+    /**
+     * Один заход долгого опроса: код ответа (-1 — до сервера не дошли) и Retry-After в секундах.
+     * Прямой путь, при сбое сети — через туннель ([ZapasnoyPut.sluzhebnyj]): в комнате приложение вне tun.
+     */
+    private fun zhdat(baza: String, versiya: Long): Pair<Int, Long?> =
+        ZapasnoyPut.sluzhebnyj(
+            Kelevra.adresSeti("$baza/pult/zhdat?versiya=$versiya"),
+            { u ->
+                val o = ZapasnoyPut.zaprosCherezTunnel(
+                    u,
+                    zagolovkiDop = Kelevra.deviceHeaders(),
+                    connectMs = 10_000,
+                    readMs = ZHDAT_TIMEOUT_MS,
+                )
+                o.kod to o.retryAfter?.trim()?.toLongOrNull()
+            },
+        ) { u -> zhdatPryamo(u) }
+
+    private fun zhdatPryamo(url: String): Pair<Int, Long?> {
+        val conn = URL(url).openConnection() as HttpURLConnection
         return try {
             conn.connectTimeout = 10_000
             conn.readTimeout = ZHDAT_TIMEOUT_MS

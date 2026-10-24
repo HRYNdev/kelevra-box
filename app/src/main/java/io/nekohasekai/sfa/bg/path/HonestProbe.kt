@@ -168,6 +168,9 @@ object HonestProbe {
      * @param target куда стучаться. `null` — берём следующую цель по кругу.
      * @param collectBody забрать первую строку тела в [Measurement.facts]. Для диагностики
      *   (какой адрес видит внешний мир), в обычных пробах не нужен.
+     * @param enforceMinTimeout держать пол [MIN_TIMEOUT_MILLIS]. По умолчанию да — под
+     *   bufferbloat основной канал и комната иначе объявят смерть живому пути. `false` просит
+     *   проба живости комнаты WB: ей важнее не висеть под общим замком [turn] (см. ниже).
      */
     fun measure(
         entry: AutoModeExits.Endpoint?,
@@ -175,6 +178,7 @@ object HonestProbe {
         timeoutMillis: Int = Pult.int("proba.min_timeout_millis", MIN_TIMEOUT_MILLIS),
         target: Target? = null,
         collectBody: Boolean = false,
+        enforceMinTimeout: Boolean = true,
     ): Measurement {
         if (entry == null) {
             return Measurement.unmeasurable("за путём «$label» не закреплён локальный вход")
@@ -182,7 +186,7 @@ object HonestProbe {
         if (entry.port !in 1..65535) {
             return Measurement.unmeasurable("у пути «$label» негодный порт входа ${entry.port}")
         }
-        val wait = maxOf(timeoutMillis, Pult.int("proba.min_timeout_millis", MIN_TIMEOUT_MILLIS))
+        val wait = oknoOzhidaniya(timeoutMillis, enforceMinTimeout)
         return turn.withLock {
             val goal = target ?: nextTargetInTurn()
             quietDown(goal.host)
@@ -226,6 +230,19 @@ object HonestProbe {
         KLog.i(TAG, "«$label» напрямую по сети → $result")
         result
     }
+
+    /**
+     * Сколько ждём ответа. Пол [MIN_TIMEOUT_MILLIS] бережёт пробы основного канала и комнаты
+     * от bufferbloat (замер 07.08). Проба живости комнаты WB его обходит
+     * (`enforceMinTimeout = false`): иначе она висит под общим замком [turn] все 12 с и держит
+     * остальные пробы.
+     */
+    internal fun oknoOzhidaniya(timeoutMillis: Int, enforceMinTimeout: Boolean): Int =
+        if (enforceMinTimeout) {
+            maxOf(timeoutMillis, Pult.int("proba.min_timeout_millis", MIN_TIMEOUT_MILLIS))
+        } else {
+            timeoutMillis
+        }
 
     /** «хост:порт/путь» → цель; негодная строка — null. */
     internal fun razobratCel(s: String): Target? {

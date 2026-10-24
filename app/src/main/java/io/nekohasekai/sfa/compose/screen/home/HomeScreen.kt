@@ -190,6 +190,22 @@ fun HomeScreen(
     // после включения человек читает «Комната не отвечает», хотя вход только начался.
     val roomDead = roomChosen && roomPath.refused
     val roomRising = roomChosen && !room && !roomDead
+    // Комната WB — отдельный путь со своим звонком (WB Chat), под белым списком первая.
+    // Выбранная и поднятая — разные вещи и здесь тоже: зелёным только по живой пробе.
+    val wbPath = paths[PathId.WB]
+    val wbChosen = running && (
+        AutoMode.standingOn() == PathId.WB ||
+            io.nekohasekai.sfa.bg.WbChatParams.isWbExit(activeOutbound)
+        )
+    val wbAlive = wbChosen && wbPath.status == PathStatus.Alive
+    val wbDead = wbChosen && wbPath.refused
+    // Выход выбран руками: присмотр реестр не ведёт (проба нужна автомату), и «не проверяли»
+    // при готовом ядре — не подъём, а просто нечем мерить. Тогда молчим, а не «поднимаем» вечно.
+    val wbCoreReady = io.nekohasekai.sfa.bg.WbChatCore.state is io.nekohasekai.sfa.bg.WbChatCore.State.Ready
+    val wbRising = wbChosen && !wbAlive && !wbDead &&
+        !(wbPath.status == PathStatus.Unknown && wbCoreReady)
+    val wbTitle = if (wbChosen) PathWords.wbDialTitle(wbRising, wbDead) else null
+    val wbHint = if (wbChosen) PathWords.wbDialHint(wbRising, wbDead, auto.auto) else null
     // Выход человек выбрал сам — автомат отошёл. Это не «поломка», но и не молчание:
     // человек должен видеть, что подбором пути сейчас никто не занимается.
     val manualHold = running && !auto.auto
@@ -213,12 +229,13 @@ fun HomeScreen(
     val squeezed = running && !noNetwork && (manualPath?.squeezed == true || paths[PathId.MAIN].squeezed)
     // Ничего не поднимается, сети нет, или выбранный руками путь не отвечает —
     // круг не должен врать зелёным.
-    val broken = running && (noNetwork || roomDead || linkDead || manualDead)
+    val broken = running && (noNetwork || roomDead || wbDead || linkDead || manualDead)
 
     // Задержку комнаты меряет её собственный присмотр, а помнит — реестр. Своего опроса
     // экран больше не ведёт: цикл раз в три секунды жил только потому, что состояние
     // комнаты нельзя было получить иначе как спросив ядро напрямую.
     val roomLatency = roomPath.latencyMs ?: 0L
+    val wbLatency = wbPath.latencyMs ?: 0L
 
     val state = when {
         busy -> DialState.Busy
@@ -248,6 +265,7 @@ fun HomeScreen(
     val meta = buildString {
         when {
             !running || home || broken -> Unit
+            wbAlive -> append(PathWords.wbDialMeta(wbLatency))
             room -> {
                 append("комната")
                 if (roomLatency > 0) append(" · $roomLatency мс")
@@ -282,6 +300,7 @@ fun HomeScreen(
                 noNetwork -> "Нет сети"
                 searching -> "Поиск пути"
                 roomRising -> "Подъём комнаты"
+                wbTitle != null -> wbTitle
                 // Короткое слово: «Комната не отвечает» вылезало за обод круга.
                 roomDead -> "Комната молчит"
                 squeezed -> "Медленно"
@@ -310,6 +329,7 @@ fun HomeScreen(
                 noNetwork -> "включится, когда появится сеть"
                 searching -> "подбираю рабочий выход"
                 roomRising -> "поднимаю канал через комнату"
+                wbHint != null -> wbHint
                 // В авторежиме присмотр поднимает комнату снова сам, пока она нужна, и совет
                 // «выберите другой выход» был бы неправдой. Выбирать руками есть смысл, только
                 // когда выход выбран вручную. Обе строки короче прежней — та упиралась в края экрана.
@@ -479,7 +499,11 @@ fun HomeScreen(
                         delayMs = ch.delayMs,
                         selected = !auto.auto && ch.selected,
                         subtitle = if (wb) {
-                            "WB Chat · " + io.nekohasekai.sfa.bg.WbChatCore.statusText()
+                            PathWords.wbExitNote(
+                                paths[PathId.WB],
+                                now,
+                                io.nekohasekai.sfa.bg.WbChatCore.statusText(),
+                            )
                         } else {
                             known?.let { PathWords.state(it, now) }
                         },

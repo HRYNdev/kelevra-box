@@ -160,6 +160,61 @@ object ZapasnoyPut {
         return text
     }
 
+    /** Ответ служебного запроса через туннель: код, тело, Retry-After. */
+    class OtvetTunnela(val kod: Int, val telo: String, val retryAfter: String?)
+
+    /** Наш ли это сервер по хосту в адресе (двери из справочника и встроенные). Чужой адрес в туннель не шлём. */
+    internal fun svoyHost(url: String, dveri: List<String> = dveriDlyaPerebora()): Boolean {
+        val host = Regex("^https?://([^/:]+)").find(url)?.groupValues?.get(1)?.lowercase() ?: return false
+        return dveri.any { it.trim().lowercase() == host }
+    }
+
+    /**
+     * Служебный запрос приложения (журнал, пульт) с запасным путём через туннель.
+     *
+     * Повод. В комнате Телемоста/olcRTC приложение выведено из tun ([io.nekohasekai.sfa.bg.TunnelFacts.selfOutsideTun])
+     * и ходит по физической сети; под белым списком иностранные двери там закрыты, и запрос не доходил.
+     * Порядок тот же, что у профиля: сначала прямо (вне комнаты это обычный путь), при сбое сети —
+     * через локальный вход туннеля. Флаг комнаты не спрашиваем: пока прямой путь отвечает, туннель
+     * не нужен, а состояние комнаты можно прочесть с запозданием.
+     *
+     * Через туннель идёт только трафик к НАШИМ серверам ([svoyHost]). Ядра комнаты (wb.ru, TURN,
+     * Телемост) сидят в ядре, а не в этом приложении, и сюда не попадают: петли нет.
+     */
+    fun <T> sluzhebnyj(url: String, cherezTunnel: (String) -> T, pryamoj: (String) -> T): T =
+        poluchit(url, emptyList(), if (svoyHost(url)) tunnelIliNull(cherezTunnel) else null, pryamoj)
+
+    /** Запрос через локальный вход туннеля с телом и заголовками. Сбой сети — исключение. */
+    fun zaprosCherezTunnel(
+        url: String,
+        metod: String = "GET",
+        telo: ByteArray? = null,
+        zagolovkiDop: List<Pair<String, String>> = emptyList(),
+        connectMs: Int = 8000,
+        readMs: Int = 15000,
+        port: Int = LOKALNYJ_PORT,
+    ): OtvetTunnela {
+        val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port))
+        val conn = URL(url).openConnection(proxy) as HttpURLConnection
+        try {
+            conn.requestMethod = metod
+            conn.connectTimeout = connectMs
+            conn.readTimeout = readMs
+            conn.setRequestProperty("User-Agent", "kelevra")
+            zagolovkiDop.forEach { (n, v) -> conn.setRequestProperty(n, v) }
+            if (telo != null) {
+                conn.doOutput = true
+                conn.setFixedLengthStreamingMode(telo.size)
+                conn.outputStream.use { it.write(telo) }
+            }
+            val kod = conn.responseCode
+            val text = (if (kod in 200..299) conn.inputStream else conn.errorStream)?.bufferedReader()?.readText().orEmpty()
+            return OtvetTunnela(kod, text, conn.getHeaderField("Retry-After"))
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     /** Двери для перебора: справочник и прошлые /info из кэша, затем встроенные. Сеть не трогает. */
     fun dveriDlyaPerebora(): List<String> =
         (runCatching { Aktivatsiya.dveriIzKesha() }.getOrDefault(emptyList()) + VSTROENNYE).distinct()

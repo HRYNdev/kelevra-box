@@ -25,6 +25,12 @@ enum class PathId {
     /** Основной канал до узла. */
     MAIN,
 
+    /**
+     * Комната WB: звонок WB Chat 1:1 своим ядром. Под белым списком — основной выход
+     * (решение 24.10.2026), Телемост ([ROOM]) за ним запасным.
+     */
+    WB,
+
     /** Комната: несущая — чужой видеозвонок. */
     ROOM,
 }
@@ -97,6 +103,12 @@ data class PathDef(
         /** Основной канал — обычная жизнь. */
         const val RANK_MAIN = 10
 
+        /**
+         * Комната WB — между основным каналом и Телемостом: под белым списком она первая
+         * (решение 24.10.2026), но всё равно звонок, а не свой канал.
+         */
+        const val RANK_WB = 15
+
         /** Комната дороже: чужой видеозвонок, поднимается секундами. */
         const val RANK_ROOM = 20
 
@@ -104,6 +116,7 @@ data class PathDef(
         // подменные адреса без прошедшего наружу запроса домом больше не считаются.
         val HOME = PathDef(PathId.HOME, "Дома", null, RANK_HOME, ProbeKind.Traffic)
         val MAIN = PathDef(PathId.MAIN, "Основной канал", null, RANK_MAIN, ProbeKind.Traffic)
+        val WB = PathDef(PathId.WB, "Комната WB", null, RANK_WB, ProbeKind.Carrier)
         val ROOM = PathDef(PathId.ROOM, "Комната", null, RANK_ROOM, ProbeKind.Carrier)
     }
 }

@@ -39,7 +39,8 @@ import kotlin.random.Random
  *  2. **TCP к заведомо неразрешённому адресу** (наш VPS, литералом, без DNS).
  *     Тишина → одна контрольная проба к разрешённому адресу, и вердикт
  *     [NetworkMode.Whitelist] готов. На этом пути ни одного TLS-соединения не бывает
- *     вовсе: белый список стоит два дешёвых обмена.
+ *     вовсе: белый список стоит два дешёвых обмена. Отказ (RST) от ВСЕХ неразрешённых
+ *     точек ведёт к тому же контролю: так режет белый список у МегаФона (24.10.2026).
  *  3. **TLS-рукопожатие к канарейке** — настоящему имени, по которому и работает DPI.
  *     Рвут или подвешивают → [NetworkMode.DpiBlacklist].
  *  4. **Короткая передача по этой же сессии** (десятки килобайт) — ловит подвисание,
@@ -408,10 +409,17 @@ object NetworkModeDetector {
                 }
                 return report(signals, wall, started)
             }
-            // Неразрешённый адрес нам ответил — белого списка нет, и держать соединение
-            // с ним больше незачем: дальше работает канарейка.
+            // Неразрешённый адрес нам ответил — белого списка по тишине нет, и держать
+            // соединение с ним больше незачем: дальше работает канарейка.
             owned.closeQuietly()
             owned = null
+            if (tcp.outcome == ProbeOutcome.Refused && !Pult.vykl("otkaz_kak_belyy")) {
+                // Отказали все неразрешённые точки разом — так режет белый список с RST
+                // (МегаФон 24.10.2026). Решает тот же контроль, что и для тишины: один SYN,
+                // ни одного рукопожатия ([NetworkModeDecision.refusedWhitelist]).
+                signals = signals.copy(tcpAllowed = control(network, targets.allowed))
+                return report(signals, wall, started)
+            }
             if (tcp.outcome != ProbeOutcome.Ok) return report(signals, wall, started)
 
             // Проба 2: TCP к канарейке, и сразу TLS поверх ТОГО ЖЕ сокета —
@@ -634,6 +642,7 @@ object NetworkModeDetector {
         if (addresses.isEmpty()) return Opened(ProbeOutcome.Failed, null)
         var outcome = ProbeOutcome.Failed
         var silent = 0
+        var refused = 0
         for (address in addresses) {
             // Защита от своего tun ставится внутри и до привязки к сети: соединять
             // защищённый сокет можно, защищать соединённый — уже нет.
@@ -652,12 +661,19 @@ object NetworkModeDetector {
                     if (!requireAllSilent) return Opened(outcome, null)
                     silent++
                 }
+                if (outcome == ProbeOutcome.Refused) refused++
             }
         }
         // Молчали не все — значит это не сеть с фильтром по адресам, а отдельная точка.
         // Отдаём наверх последний не-тихий исход, чтобы вердикт не встал на тишине.
         if (requireAllSilent && silent in 1 until addresses.size) {
             KLog.i(TAG, "неразрешённые адреса: молчат $silent из ${addresses.size} — это не белый список")
+            return Opened(ProbeOutcome.Unreachable, null)
+        }
+        // Отказ — подпись белого списка с RST, только если отказали все точки: последний
+        // исход «отказ» после осечки на другой точке за неё не сойдёт.
+        if (requireAllSilent && refused in 1 until addresses.size) {
+            KLog.i(TAG, "неразрешённые адреса: отказали $refused из ${addresses.size} — это не белый список")
             return Opened(ProbeOutcome.Unreachable, null)
         }
         return Opened(outcome, null)

@@ -75,7 +75,7 @@ android {
         // Нужен, чтобы приложение видело новую версию — версия ядра между нашими сборками не меняется.
         val kelevraBuild = (System.getenv("KELEVRA_BUILD") ?: "0").toInt()
         versionCode = getVersionProps("VERSION_CODE").toInt() * 1000 + kelevraBuild
-        versionName = "1.14.$kelevraBuild"
+        versionName = System.getenv("KELEVRA_VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "1.14.$kelevraBuild"
         base.archivesName.set("Kelevra-${versionName}")
     }
 
@@ -165,6 +165,8 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
+            // Local build: keep .so byte-identical to sources (CI does not strip either).
+            keepDebugSymbols += listOf("**/libopenflux.so", "**/libbox.so")
         }
     }
 

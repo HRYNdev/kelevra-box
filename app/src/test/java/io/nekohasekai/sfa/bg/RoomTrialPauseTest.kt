@@ -24,6 +24,23 @@ class RoomTrialPauseTest {
         assertEquals(10 * 60_000L, p)
     }
 
+    @Test
+    fun `основной мёртв — пауза не растёт, сколько бы комната ни не вставала`() {
+        var p = 60_000L
+        repeat(8) { p = AutoMode.nextTrialPause(p, mainKnownDead = true) }
+        assertEquals(60_000L, p)
+        // Выросшая до мёртвого основного пауза тоже возвращается к начальной.
+        assertEquals(60_000L, AutoMode.nextTrialPause(10 * 60_000L, mainKnownDead = true))
+        assertEquals(120_000L, AutoMode.nextTrialPause(60_000L, mainKnownDead = false))
+    }
+
+    @Test
+    fun `свежая подсказка белого списка — комнату просим после первого провала`() {
+        assertEquals(1, AutoMode.roomTrialAfter(whitelistHint = true))
+        assertEquals(AutoMode.ROOM_TRIAL_AFTER, AutoMode.roomTrialAfter(whitelistHint = false))
+        assertEquals(AutoMode.ROOM_TRIAL_AFTER, AutoMode.roomTrialAfter())
+    }
+
     // ------------------------------------------------------------ сеть для комнаты
 
     private val silent = NetworkSignals(

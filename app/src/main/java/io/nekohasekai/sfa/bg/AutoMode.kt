@@ -1,6 +1,7 @@
 package io.nekohasekai.sfa.bg
 
 import io.nekohasekai.sfa.bg.pult.Pult
+import io.nekohasekai.sfa.bg.pult.PultSvyaz
 
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -76,6 +77,10 @@ import kotlin.random.Random
  *  3. [Situation.Room] — основной канал не поднимается вообще (при белом списке адрес
  *     VPS недостижим на уровне маршрутизации), а комната стоит: её несущая — видеозвонок,
  *     он в разрешённых. Действие: уходим в комнату.
+ *     Раньше Телемоста пробуется комната WB ([Situation.Wb], [trialRaiseWb]): решение Вовы
+ *     24.10.2026 — под белыми списками основной выход «Комната WB», Телемост запасной.
+ *     Порядок целиком: дома → основной → комната WB → Телемост → ищем путь. Пока ключ пульта
+ *     `avtomat.wb_kandidat` не включён, автомат про WB не знает — всё как было.
  *  4. [Situation.NoNetwork] — сети нет. Действие: **не долбиться**, ждать смены сети.
  *
  * Почему не дёргается. Обстановка меняется только после [CONFIRMATIONS] одинаковых
@@ -125,6 +130,9 @@ object AutoMode {
 
         /** Обычная сеть: работает основной канал. */
         Main,
+
+        /** Основной канал не поднимается, идём комнатой WB (под белым списком она первая). */
+        Wb,
 
         /** Основной канал не поднимается, идём комнатой. */
         Room,
@@ -202,6 +210,7 @@ object AutoMode {
         else -> when (_state.value.situation) {
             Situation.Home -> PathId.HOME
             Situation.Main -> PathId.MAIN
+            Situation.Wb -> PathId.WB
             Situation.Room -> PathId.ROOM
             else -> null
         }
@@ -325,6 +334,17 @@ object AutoMode {
          *   а раньше оба приезжали наверх как `false` и стоили штрафной паузы.
          */
         fun setRoomWanted(wanted: Boolean, reason: String): RoomAck
+
+        /**
+         * Собрать ядро sing-box под комнату WB (отказ QUIC и IPv6 в её сокс), если оно собрано
+         * не так. Звать ДО выбора её выхода и до подъёма её ядра: пересборка закрывает tun.
+         *
+         * @return true — ядро пересобрано, выбор в селекторе надо выставить заново.
+         */
+        fun prepareCoreForWb(reason: String): Boolean = false
+
+        /** Работающее ядро уже собрано с правками под комнату WB — пересобирать ради неё не нужно. */
+        fun coreReadyForWb(): Boolean = false
     }
 
     /**
@@ -395,6 +415,23 @@ object AutoMode {
 
     /** Запас поверх таймаута соединения: пул должен успеть отдать последний ответ. */
     private const val CONNECT_SLACK_MILLIS = 500L
+
+    /**
+     * Отказ (RST) узла основного канала быстрее этого — «мгновенный».
+     *
+     * МегаФон под белым списком 24.10.2026 отвечал на соединение с узлом «connection refused»
+     * за 0,0 с, MOTIV — тишиной до таймаута. Отказ — ответ на один круг пакета, на мобильной
+     * сети это десятки-сотни миллисекунд; полторы секунды — с запасом на медленное радио, и всё
+     * равно втрое меньше [TCP_TIMEOUT_MILLIS]: долгий отказ мгновенным не сочтётся.
+     */
+    internal const val OTKAZ_MGNOVENNYY_MILLIS = 1_500L
+
+    /**
+     * Узел отказывает мгновенно, а прошлый замер режима этой сети видел отказ всех неразрешённых
+     * точек, но не досчитал контроль (сеть ещё настраивалась), — переспросить не раньше этого.
+     * Цена такого замера — четыре SYN без единого рукопожатия ([refusalAsksDetector]).
+     */
+    internal const val OTKAZ_PEREZAMER_MILLIS = 10_000L
 
     /**
      * Сколько раз пробуем подтвердить дом трафиком, прежде чем сказать «не дома».
@@ -721,6 +758,10 @@ object AutoMode {
     @Volatile
     private var observedNetworkKey: String? = null
 
+    /** Отпечаток сети, из-за которой пульт уже опрашивали под белым списком ([pultPoBelomuSpisku]). */
+    @Volatile
+    private var pultOprosKey: String? = null
+
     /** Отпечаток сети, на которой нынешняя обстановка была объявлена. */
     @Volatile
     private var situationNetwork: String? = null
@@ -772,8 +813,44 @@ object AutoMode {
     /** [CONFIRMATIONS] с пульта (`avtomat.podtverzhdeniy`); без пульта — константа. */
     internal fun podtverzhdeniy(): Int = io.nekohasekai.sfa.bg.pult.Pult.int("avtomat.podtverzhdeniy", CONFIRMATIONS)
 
-    /** [ROOM_TRIAL_AFTER] следом за числом подтверждений: на один заход раньше задвижки. */
-    internal fun roomTrialAfter(): Int = (podtverzhdeniy() - 1).coerceAtLeast(1)
+    /**
+     * Сколько провалов основного при свежей подсказке «белый список» до пробного подъёма комнаты
+     * (сначала WB): один — первый же заход. Под белым списком основной недостижим, и ждать
+     * второго провала значит ждать ещё один ритм поиска.
+     */
+    internal const val ROOM_TRIAL_AFTER_WHITELIST = 1
+
+    /**
+     * [ROOM_TRIAL_AFTER] следом за числом подтверждений: на один заход раньше задвижки.
+     *
+     * При свежей подсказке «белый список» ждать второго провала незачем: основной канал под
+     * ним недостижим, и комната — единственная дорога. Просим её после первого
+     * ([ROOM_TRIAL_AFTER_WHITELIST], пульт `avtomat.room_trial_after_belyy`).
+     */
+    internal fun roomTrialAfter(whitelistHint: Boolean = false): Int =
+        if (whitelistHint) {
+            Pult.int("avtomat.room_trial_after_belyy", ROOM_TRIAL_AFTER_WHITELIST).coerceAtLeast(1)
+        } else {
+            (podtverzhdeniy() - 1).coerceAtLeast(1)
+        }
+
+    /**
+     * Идёт ли провал основного в счёт [mainFailures].
+     *
+     * Окно смены сети провал не засчитывает: «сети нет» не доказывает, что канал плох
+     * ([AutoModeNodeWatch]). Свежая подсказка «белый список» — доказывает: она снята этой же
+     * сетью, и разрешённый контроль в ней ответил, то есть сеть уже ходит. Без этого
+     * 24.10.2026 (МегаФон) первый провал шёл мимо счёта, и до комнаты WB было 92–95 с.
+     * Выключатель `vykl.belyy_bez_okna` возвращает окно и при подсказке.
+     *
+     * @param settled сеть устоялась ([AutoModeNodeWatch.settled]).
+     * @param whitelistHint свежая подсказка про эту сеть — [NetworkMode.Whitelist].
+     */
+    internal fun failureCounts(
+        settled: Boolean,
+        whitelistHint: Boolean,
+        off: Boolean = Pult.vykl("belyy_bez_okna"),
+    ): Boolean = settled || (whitelistHint && !off)
 
     /** [SILENCE_HOLD_MILLIS] с пульта (`avtomat.tishina_rezolvera_min`). */
     internal fun silenceHoldMillis(): Long =
@@ -820,12 +897,24 @@ object AutoMode {
     @Volatile
     private var manualExit: String? = null
 
-    /** Сколько заходов подряд основной канал не поднимается. Считает повод для пробного подъёма. */
+    /**
+     * Сколько заходов подряд основной канал не поднимается. Считает повод для пробного подъёма.
+     * `@Volatile`: читает ещё и присмотр комнаты, решая, куда уводить выход ([roomLost]).
+     */
+    @Volatile
     private var mainFailures = 0
 
     /** Чем кончилась честная проба этого захода. Нужна только для записи в реестр. */
     @Volatile
     private var lastMainProbe: ProxyProbe.Result? = null
+
+    /** Этим заходом все адреса узла основного ответили мгновенным отказом ([Knock.Refused]). */
+    @Volatile
+    private var mainRefused = false
+
+    /** Этим заходом адрес узла принял соединение, а канал целиком не прошёл ([hollowPort]). */
+    @Volatile
+    private var mainHollow = false
 
     /**
      * Когда узел основного канала в последний раз принял соединение. `0` — не принимал
@@ -958,7 +1047,7 @@ object AutoMode {
             manualExit = Settings.manualExitName.takeIf { it.isNotBlank() }
             manualRoomMem = Settings.autoModeManualRoom
             lastHomeKey = Settings.autoModeHomeKey.takeIf { it.isNotBlank() }
-            baseLayout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort) }
+            baseLayout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort, wbPort()) }
                 ?: AutoModeExits.Layout.EMPTY
             layout = baseLayout
             nodeIndex = 0
@@ -994,6 +1083,7 @@ object AutoMode {
             peekAt = 0
             peekWanted = false
             honestPeekAt = 0L
+            forgetWb()
             forgetHomeSign()
             // Прошлая сессия про эти пути больше ничего не знает: сеть под нами могла
             // смениться, пока сервиса не было.
@@ -1002,7 +1092,7 @@ object AutoMode {
             // потому, что вокруг что-то не так, как мы думаем. Его вмешательство —
             // такое же событие «обстановка сменилась», как и смена сети.
             NetworkModeDetector.forget("человек переподключил сервис")
-            PathRegistry.bindExits(main = layout.main, room = layout.room)
+            PathRegistry.bindExits(main = layout.main, room = layout.room, wb = layout.wb)
             link = Link.Unknown
             holdNetwork = physicalNetwork()
             holdKey = holdNetwork?.let { networkKey(it) }
@@ -1023,7 +1113,9 @@ object AutoMode {
                 TAG,
                 "автомат включён (${if (Settings.autoModeEnabled) "сам" else "выключен человеком"}): " +
                     "выбор ${layout.chooser ?: "нет"}, основной ${layout.main ?: "нет"}, " +
-                    "комната ${layout.room ?: "нет"}, адресов ${layout.mainEndpoints.size}" +
+                    "комната ${layout.room ?: "нет"}, комната WB ${layout.wb ?: "нет"}" +
+                    (if (layout.wb != null && !wbKandidat()) " (автомату не кандидат)" else "") +
+                    ", адресов ${layout.mainEndpoints.size}" +
                     if (baseLayout.nodes.size > 1) ", очередь узлов ${baseLayout.nodes}" else "",
             )
         }
@@ -1042,6 +1134,7 @@ object AutoMode {
         t?.interrupt()
         t?.join(1_000)
         host = null
+        forgetWb()
         PathRegistry.reset()
         link = Link.Unknown
         publish(Settings.autoModeEnabled, Situation.Unknown)
@@ -1099,6 +1192,9 @@ object AutoMode {
         // Подъём комнаты в прежней сети и молчание порта в ней — про новую сеть не говорят.
         roomTrialPending = false
         portSilentAt = 0L
+        // Пауза между пробами комнаты WB копилась в прежней сети — про новую она не говорит.
+        wbTriedAt = 0L
+        wbTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
         // Ручной выбор — это «стой здесь», а не «выключи автомат навсегда». Он держится,
         // пока мы в той же сети: под неё человек и выбирал. Сеть другая — обстановка
         // другая, и держаться за прошлый выбор значит увезти человека в мёртвый выход.
@@ -1173,12 +1269,92 @@ object AutoMode {
         if (!active) return
         val h = host ?: return
         val main = layout.main ?: return
-        KLog.w(TAG, "комната пропала ($reason) — увожу выход на основной канал")
+        val mainDead = mainKnownDead()
+        val wb = wbOut()
+        val wbLive = wbUp()
+        // Выход уже стоит на комнате WB (автомат выбрал её кандидатом) — пропавший Телемост
+        // его не касается: уводить с живой WB на основной нельзя.
+        val onWb = wb != null && selected == wb
         runCatching { Zapisi.perehod("komnata_propala", reason) }
+        // Под белым списком основной мёртв, и увести на него — значит отдать трафик в узел,
+        // до которого не дойти (24.10.2026: комната встала, присмотр её перезапустил и увёл
+        // выход на основной). Тогда — на WB, если он жив, иначе селектор не трогаем.
+        val target = roomLostTarget(mainDead, wbLive, main, wb, onWb = onWb)
+        if (target != null && onWb && target == wb) {
+            KLog.w(TAG, "комната пропала ($reason), но выход стоит на живой комнате WB — не трогаю")
+            wakeLoop()
+            return
+        }
+        if (target == null) {
+            KLog.w(TAG, "комната пропала ($reason), но основной канал мёртв и WB не стоит — выход не трогаю")
+            wakeLoop()
+            return
+        }
+        KLog.w(
+            TAG,
+            "комната пропала ($reason) — увожу выход " +
+                if (target == main) "на основной канал" else "на WB: основной канал мёртв",
+        )
         selected = null
-        choose(h, main, "комната пропала")
+        choose(h, target, "комната пропала")
         wakeLoop()
     }
+
+    /**
+     * Куда уводить выход, когда комната пропала. Чистая функция: «при мёртвом основном на
+     * основной не уходим никогда» проверяется тестом.
+     *
+     * @param mainKnownDead основной канал заведомо мёртв ([mainKnownDeadIn]).
+     * @param wbLive ядро WB готово и слушает.
+     * @param onWb выход уже стоит на комнате WB: живую WB ради основного не бросаем.
+     * @return тег выхода или `null` — селектор не трогать.
+     */
+    internal fun roomLostTarget(
+        mainKnownDead: Boolean,
+        wbLive: Boolean,
+        main: String?,
+        wb: String?,
+        onWb: Boolean = false,
+    ): String? = when {
+        wbLive && !wb.isNullOrBlank() && (onWb || mainKnownDead) -> wb
+        !mainKnownDead -> main
+        else -> null
+    }
+
+    /**
+     * Основной канал заведомо мёртв: свежая подсказка «белый список» про эту сеть или
+     * провалы подряд уже на пороге подтверждений задвижки.
+     */
+    internal fun mainKnownDeadIn(whitelistHint: Boolean, mainFailures: Int, confirmations: Int): Boolean =
+        whitelistHint || mainFailures >= confirmations
+
+    /**
+     * Переключаться ли на комнату WB с одного наблюдения ([AutoModeGate.offer] с `proven`).
+     *
+     * Задвижка с тремя подтверждениями бережёт от качелей между живыми выходами. Когда основной
+     * заведомо мёртв ([mainKnownDeadIn]), качаться не с чем: каждое следующее подтверждение —
+     * это ещё один заход с пробами мёртвого основного (по 12 с каждая), а человек всё это время
+     * без интернета. 24.10.2026 (МегаФон, белый список): WB везла с 15:24:20, выход переключён
+     * в 15:25:15. «Везёт» здесь — это прошедший через её сокс запрос ([wbAlive]), не догадка.
+     * Выключатель `vykl.wb_srazu` возвращает полные подтверждения.
+     */
+    internal fun wbProven(
+        observed: Situation,
+        mainKnownDead: Boolean,
+        off: Boolean = Pult.vykl("wb_srazu"),
+    ): Boolean = observed == Situation.Wb && mainKnownDead && !off
+
+    /** [mainKnownDeadIn] по живому состоянию. Зовут и чужие потоки (присмотр, предохранитель). */
+    private fun mainKnownDead(): Boolean {
+        val whitelist = runCatching { lastNetwork?.let(::cachedHint) == NetworkMode.Whitelist }.getOrDefault(false)
+        return mainKnownDeadIn(whitelist, mainFailures, podtverzhdeniy())
+    }
+
+    /** Тег выхода WB, если он есть в этой раскладке. */
+    private fun wbTag(): String? = runCatching { WbChatParams.tag.takeIf { it.isNotBlank() } }.getOrNull()
+
+    /** Выход WB в селекторе: из раскладки ([Layout.wb]), иначе по имени из параметров WB. */
+    private fun wbOut(): String? = layout.wb?.takeIf { it.isNotBlank() } ?: wbTag()
 
     /**
      * Нужна ли комната прямо сейчас. Спрашивает присмотр, когда решает, поднимать ли её
@@ -1245,7 +1421,7 @@ object AutoMode {
     /** Перечитывает раскладку выходов и входов из конфига, который сейчас в ядре. */
     private fun refreshLayout(reason: String) {
         val content = runCatching { host?.profileConfig() }.getOrNull() ?: return
-        val parsed = runCatching { AutoModeExits.parse(content, OlcRtcParams.socksPort) }.getOrNull() ?: return
+        val parsed = runCatching { AutoModeExits.parse(content, OlcRtcParams.socksPort, wbPort()) }.getOrNull() ?: return
         // Стоим на запасном узле — и в новой раскладке остаёмся на нём, если он там есть.
         val stoim = layout.main
         val idx = parsed.nodes.indexOf(stoim).takeIf { it >= 0 } ?: 0
@@ -1254,7 +1430,7 @@ object AutoMode {
         baseLayout = parsed
         nodeIndex = idx
         layout = fresh
-        PathRegistry.bindExits(main = fresh.main, room = fresh.room)
+        PathRegistry.bindExits(main = fresh.main, room = fresh.room, wb = fresh.wb)
         KLog.i(
             TAG,
             "раскладка перечитана ($reason): вход основного ${fresh.localProxy?.port ?: "нет"}, " +
@@ -1274,6 +1450,7 @@ object AutoMode {
         setManualRoom(false)
         Settings.autoModeEnabled = true
         roomTrialPending = false
+        forgetWb()
         idle = false
         selected = null
         gate.reset(Situation.Unknown)
@@ -1309,6 +1486,7 @@ object AutoMode {
         KLog.i(TAG, "автомат ${if (enabled) "включён" else "выключен"} человеком")
         Settings.autoModeEnabled = enabled
         roomTrialPending = false
+        forgetWb()
         if (enabled) {
             manualExit = null
             Settings.manualExitName = ""
@@ -1355,6 +1533,7 @@ object AutoMode {
         }
         selected = null
         roomTrialPending = false
+        forgetWb()
         gate.reset(Situation.Unknown)
         situationNetwork = null
         silentHoldAt = 0L
@@ -1423,6 +1602,8 @@ object AutoMode {
         // эмуляторе 07.08.2026).
         if (room) Settings.olcrtcEnabled = true
         Settings.autoModeEnabled = false
+        // Выбор теперь за человеком: пробы комнаты WB автоматом больше нет.
+        forgetWb()
         // Сеть, под которую сделан выбор. Сменится — автомат вернётся сам.
         holdNetwork = physicalNetwork()
         holdKey = holdNetwork?.let { networkKey(it) }
@@ -1558,7 +1739,8 @@ object AutoMode {
             // дешёвая проба. Спешка (серия, набор подтверждений) в этом не нуждается —
             // там заход и так близко.
             when {
-                wait == Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS) && situation == Situation.Room &&
+                wait == Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS) &&
+                    (situation == Situation.Room || situation == Situation.Wb) &&
                     !Pult.vykl("prismotr_komnaty") -> waitInRoom(wait)
                 // Дома проба ловит то, о чём иначе некому сказать: ограничение, наступившее
                 // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
@@ -1704,11 +1886,16 @@ object AutoMode {
         }
         silentHoldAt = 0L
 
+        val proven = wbProven(observed, mainKnownDead())
+        if (proven && observed != gate.current) {
+            KLog.i(TAG, "основной заведомо мёртв, через комнату WB прошёл запрос — подтверждений не жду")
+        }
         val changed = gate.offer(
             observed,
             trust = trustOnce,
             hurried = burst.active && !trustOnce,
             blind = observationBlind,
+            proven = proven,
         )
         pendingSwitch = gate.pending
         settled = burstClosable(changed = changed, pending = gate.pending, confident = observationConfident)
@@ -1917,7 +2104,11 @@ object AutoMode {
             PathRegistry.probing(PathId.MAIN)
         }
         refreshLink()
-        val inRoom = gate.current == Situation.Room
+        // Стоим не на основном: селектор смотрит в комнату или в комнату WB, и основной
+        // канал меряется так же, как из комнаты.
+        val inRoom = gate.current == Situation.Room || gate.current == Situation.Wb
+        mainRefused = false
+        mainHollow = false
         val main = when {
             home -> {
                 peekWanted = false
@@ -1947,11 +2138,33 @@ object AutoMode {
                 works || reserveIfDead(network, host)
             }
         }
-        val mainSettled = nodeWatch.settled(SystemClock.elapsedRealtime(), validated(network))
+        // Узел ответил мгновенным отказом — так режет белый список с RST (МегаФон 24.10.2026).
+        // Сверяем с неразрешёнными и российскими адресами прямо в этом заходе, а не в фоне:
+        // цена при отказе — четыре SYN без рукопожатий, а ответ решает, засчитать ли провал
+        // сейчас и будить ли комнату WB этим же заходом.
+        if (!(home || main) && mainRefused && hint != NetworkMode.Whitelist && !Pult.vykl("otkaz_kak_belyy") &&
+            refusalAsksDetector(NetworkModeDetector.reportFor(network), System.currentTimeMillis())
+        ) {
+            KLog.i(TAG, "узел основного канала отвечает мгновенным отказом — сверяю режим сети сейчас, не в фоне")
+            hint = askNetworkMode(network)
+        } else if (!(home || main) && mainHollow && hint != NetworkMode.Whitelist && !Pult.vykl("pustoy_port") &&
+            refusalAsksDetector(NetworkModeDetector.reportFor(network), System.currentTimeMillis())
+        ) {
+            // Узел «принимает» соединение, а канал молчит до таймаута — так выглядел белый список
+            // МегаФона 24.10.2026 с 15:17: RST-правило выше не срабатывало ни разу.
+            KLog.i(TAG, "адрес узла принимает соединение, а канал пуст — сверяю режим сети сейчас, не в фоне")
+            hint = askNetworkMode(network)
+        }
+        // Фоновый замер мог закончиться, пока шёл заход: его «белый список» нужен уже этому.
+        val whitelistNow = hint == NetworkMode.Whitelist || cachedHint(network) == NetworkMode.Whitelist
+        val netSettled = nodeWatch.settled(SystemClock.elapsedRealtime(), validated(network))
+        val mainSettled = failureCounts(netSettled, whitelistNow)
         if (!(home || main) && !mainSettled) {
             // Сеть только что сменилась (журнал 17.10.2026 про узел — здесь то же про канал):
             // заход «сети нет» не доказывает, что основной канал плох, поэтому счёт не растёт.
             KLog.i(TAG, "основной канал не поднялся, но сеть только что сменилась — заход в счёт провалов не идёт")
+        } else if (!(home || main) && !netSettled) {
+            KLog.i(TAG, "основной канал не поднялся, сеть только что сменилась, но признак белого списка есть — заход в счёт идёт")
         }
         mainFailures = nextMainFailures(mainFailures, ok = home || main, settled = mainSettled)
         if (home || main) {
@@ -1959,13 +2172,28 @@ object AutoMode {
             roomTrialPending = false
         }
 
+        var wb = false
         val room = if (home || main) {
             false
         } else {
             // Комната больше не висит круглосуточно, поэтому «стоит ли она» — это ответ
             // на вопрос, который мы сами и создаём. Пробуем поднять, но только когда
             // основной канал провалился уже [ROOM_TRIAL_AFTER] заходов подряд.
-            if (mainFailures >= roomTrialAfter()) trialRaiseRoom(host)
+            //
+            // Повод тот же и для комнаты WB, и она идёт первой (решение 24.10.2026): ожила —
+            // Телемост не будим; не ожила за [WB_TRIAL_WAIT_MILLIS] — будим Телемост, а WB
+            // держим, пока он не повезёт (но вдвоём не дольше [WB_OVERLAP_MAX_MILLIS]).
+            if (mainFailures >= roomTrialAfter(whitelistNow)) {
+                when (trialRaiseWb(host)) {
+                    WbTrial.Live -> wb = true
+                    WbTrial.Down -> trialRaiseRoom(host)
+                    // Ожидание прервали (сеть сменилась, автомат гасят) — этот заход ничего не будит.
+                    WbTrial.Pending -> Unit
+                }
+            } else {
+                wb = wbAlive()
+            }
+            releaseWbIfDue()
             roomAlive()
         }
         noteRoom()
@@ -1973,6 +2201,10 @@ object AutoMode {
         // Снимок связи — раз за заход и только когда он изменился. Роуминг, при котором
         // Android молчит, виден именно здесь.
         noteLink(network, "заход")
+        if (pultPoBelomuSpisku(pultOprosKey, observedNetworkKey, home, hint)) {
+            pultOprosKey = observedNetworkKey
+            PultSvyaz.povod("сеть не дома, подсказка белого списка")
+        }
         observationNote = "сеть [${observedNetworkKey ?: "?"}]; " +
             "дом: признак DNS ${
                 when (dnsNow) {
@@ -1991,9 +2223,10 @@ object AutoMode {
                 }
             }, подсказка $hint → ${if (home) "дома" else "не дома"}; " +
             "основной ${if (main) "жив" else "нет"} (провалов подряд $mainFailures); " +
+            (if (wbWantedMem || wb) "комната WB ${if (wb) "везёт" else "нет"}; " else "") +
             "комната ${if (room) "стоит" else "нет"}" +
             (if (!observationConfident) "; заход неуверенный" else "")
-        return decide(hasNetwork = true, home = home, main = main, room = room)
+        return decide(hasNetwork = true, home = home, main = main, room = room, wb = wb)
     }
 
     /**
@@ -2015,7 +2248,8 @@ object AutoMode {
      *     обстановки или на её подтверждении) — значит мигание основного канала не роняет
      *     уже поднятую комнату;
      *  3. неудачная попытка удваивает паузу до [ROOM_TRIAL_PAUSE_CAP_MILLIS] — значит
-     *     комната, которая не встаёт вообще, не съедает батарею попытками.
+     *     комната, которая не встаёт вообще, не съедает батарею попытками. Кроме мёртвого
+     *     основного ([mainKnownDead]): тогда комната — единственная дорога, и пауза не растёт.
      */
     private fun trialRaiseRoom(host: Host) {
         // Уже стоит или как раз встаёт — просить нечего. Подъём теперь идёт своим потоком,
@@ -2041,7 +2275,7 @@ object AutoMode {
                 roomTriedAt = 0L
                 KLog.i(TAG, "подъём комнаты отменён сверху — штрафа нет")
             } else {
-                roomTrialPause = nextTrialPause(roomTrialPause)
+                roomTrialPause = nextTrialPause(roomTrialPause, mainKnownDead())
                 roomTriedAt = now
                 PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
                 KLog.i(TAG, "комната не встала (подъём кончился ничем), следующая попытка не раньше чем через ${roomTrialPause / 1000} с")
@@ -2120,7 +2354,7 @@ object AutoMode {
             }
 
             else -> {
-                roomTrialPause = nextTrialPause(roomTrialPause)
+                roomTrialPause = nextTrialPause(roomTrialPause, mainKnownDead())
                 // Остывание помнит реестр, но распоряжается им по-прежнему [roomTrialPause]:
                 // решения из общей памяти на этом шаге не принимает никто.
                 PathRegistry.coolDown(PathId.ROOM, System.currentTimeMillis() + roomTrialPause)
@@ -2129,12 +2363,266 @@ object AutoMode {
         }
     }
 
+    // ---------- комната WB (решение 24.10.2026: под белыми списками первая, Телемост запасной) ----------
+
+    /** Сколько ждём первой удачной пробы только что поднятой комнаты WB, прежде чем будить Телемост. */
+    internal const val WB_TRIAL_WAIT_MILLIS = 30_000L
+
+    /**
+     * Дольше этого оба звонка — комнату WB и Телемост — разом не держим. WB не ожила за
+     * [WB_TRIAL_WAIT_MILLIS], а Телемост встаёт до полутора минут: держать WB, пока он не
+     * повезёт, стоит (вдруг она оживёт первой), но два звонка сразу — двойной след и двойной
+     * трафик, поэтому срок короткий.
+     */
+    internal const val WB_OVERLAP_MAX_MILLIS = 60_000L
+
+    /** Шаг ожидания первой пробы комнаты WB. */
+    private const val WB_WAIT_STEP_MILLIS = 500L
+
+    /** Чем кончилась проба комнаты WB в этом заходе. */
+    internal enum class WbTrial {
+        /** Через её сокс прошёл запрос — Телемост не нужен. */
+        Live,
+
+        /** Не кандидат, пауза между попытками или не ожила за срок — дальше Телемост. */
+        Down,
+
+        /** Ожидание прервали (сеть сменилась, автомат гасят): этот заход ничего не будит. */
+        Pending,
+    }
+
+    /** Автомат пробует комнату WB или стоит на ней. Пишут поток автомата и сбросы. */
+    @Volatile
+    private var wbWantedMem = false
+
+    /** Когда началось нынешнее окно ожидания первой пробы (elapsedRealtime); 0 — не ждём. */
+    @Volatile
+    private var wbTrialSince = 0L
+
+    /** Когда окно ожидания вышло без удачной пробы; 0 — не выходило. От него — [WB_OVERLAP_MAX_MILLIS]. */
+    @Volatile
+    private var wbFailedAt = 0L
+
+    /** Когда комнату WB последний раз поднимали пробно; держит паузу между попытками. */
+    @Volatile
+    private var wbTriedAt = 0L
+
+    /** Пауза между пробами комнаты WB: растёт так же, как у комнаты ([nextTrialPause]). */
+    @Volatile
+    private var wbTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+
+    /** Последний ответ пробы присмотра WB, о котором уже будили заход; `null` — не было. */
+    @Volatile
+    private var wbLastProbeLive: Boolean? = null
+
+    /** Ключ пульта `avtomat.wb_kandidat`: без него автомат комнату WB не пробует вовсе. */
+    internal fun wbKandidat(): Boolean = Pult.bool("avtomat.wb_kandidat", false)
+
+    /** Порт ядра WB для разбора раскладки; 0 — WB нет. */
+    private fun wbPort(): Int = runCatching { WbChatParams.socksPort }.getOrDefault(0)
+
+    /**
+     * Нужна ли комната WB автомату прямо сейчас: он её пробует или на ней стоит. Спрашивают
+     * сервис ([BoxService.wbInConfig] → [TunnelFacts.wbInConfig]) и присмотр WB
+     * ([WbChatWatchdog]) — каждую секунду и из своих потоков, поэтому только память и пульт.
+     */
+    fun wbWanted(): Boolean {
+        if (!active) return false
+        val now = _state.value
+        return wbWantedIn(
+            kandidat = wbKandidat(),
+            auto = now.auto && Pult.bool("funkcii.avtorezhim"),
+            want = wbWantedMem,
+        )
+    }
+
+    /** Та же таблица без Android: ключ пульта, автомат сам и просьба автомата — все три. */
+    internal fun wbWantedIn(kandidat: Boolean, auto: Boolean, want: Boolean): Boolean = kandidat && auto && want
+
+    /** Комнату WB автомату можно пробовать: ключ пульта, её выход в конфиге, параметры и ядро в сборке. */
+    private fun wbCandidate(): Boolean = wbKandidat() && !Pult.vykl("wb_chat") && layout.wb != null &&
+        runCatching { WbChatParams.available && WbChatCore.isAvailable }.getOrDefault(false)
+
+    /** Через сокс комнаты WB прошёл запрос: ядро стоит и последняя проба присмотра удачна. */
+    private fun wbAlive(): Boolean = wbAliveIn(wbUp(), PathRegistry.snapshot.value[PathId.WB].status)
+
+    /** Та же проверка без Android. Поднятое ядро без пройденной пробы живым не считается. */
+    internal fun wbAliveIn(up: Boolean, status: PathStatus): Boolean = up && status == PathStatus.Alive
+
+    /** Можно ли начинать новую пробу комнаты WB: прошлая была достаточно давно. */
+    internal fun wbTrialMayStart(triedAt: Long, now: Long, pause: Long): Boolean =
+        triedAt == 0L || now - triedAt >= pause
+
+    /**
+     * Пора ли отпустить комнату WB, которая не ожила за своё окно: Телемост уже везёт, или
+     * оба звонка держатся разом дольше [overlapMaxMillis]. Ожила — держим, она главнее.
+     *
+     * @param failedAt когда окно ожидания вышло без удачной пробы; 0 — не выходило.
+     */
+    internal fun wbReleaseDue(
+        failedAt: Long,
+        now: Long,
+        roomLive: Boolean,
+        wbLive: Boolean,
+        overlapMaxMillis: Long = WB_OVERLAP_MAX_MILLIS,
+    ): Boolean = when {
+        failedAt == 0L -> false
+        wbLive -> false
+        roomLive -> true
+        else -> now - failedAt >= overlapMaxMillis
+    }
+
+    /**
+     * Пробный подъём комнаты WB — раньше Телемоста.
+     *
+     * Повод тот же, что у комнаты ([roomTrialAfter] провалов основного подряд). Ядро поднимает
+     * не автомат, а присмотр [WbChatWatchdog] — по [wbWanted]; он же меряет её сокс раз в пять
+     * секунд и пишет итог в реестр ([PathId.WB]). Здесь только просьба и ожидание: до
+     * [WB_TRIAL_WAIT_MILLIS] первой удачной пробы. WB встаёт за 3-10 с, поэтому ждём в самом
+     * заходе, а не отдельным потоком, как Телемост: вердикт нужен этому же заходу, иначе
+     * Телемост будили бы зря.
+     *
+     * Ядро sing-box собирается под WB ([Host.prepareCoreForWb]) до подъёма её ядра: пересборка
+     * закрывает tun. Поэтому при уже стоящем Телемосте пробуем, только если пересобирать не
+     * надо ([Host.coreReadyForWb]): пересборка порвала бы его собранную сессию.
+     *
+     * @return [WbTrial.Down] — будить Телемост; WB при этом держится до его готовности
+     *   ([releaseWbIfDue]).
+     */
+    private fun trialRaiseWb(host: Host): WbTrial {
+        if (!wbCandidate()) {
+            if (wbWantedMem) releaseWb("комната WB автомату недоступна")
+            return WbTrial.Down
+        }
+        if (wbAlive()) return wbLive()
+        val now = SystemClock.elapsedRealtime()
+        if (!wbWantedMem) {
+            if (!wbTrialMayStart(wbTriedAt, now, wbTrialPause)) return WbTrial.Down
+            if (roomUp() && !runCatching { host.coreReadyForWb() }.getOrDefault(false)) return WbTrial.Down
+            if (!host.tunnelLive()) {
+                if (runCatching { host.resumeTunnel("комната WB нужна, а туннель погашен") }.getOrDefault(false)) {
+                    selected = null
+                }
+                if (!host.tunnelLive()) {
+                    KLog.i(TAG, "туннель не поднялся — комнату WB в этом заходе не пробую")
+                    return WbTrial.Down
+                }
+            }
+            wbWantedMem = true
+            wbTrialSince = now
+            wbFailedAt = 0L
+            wbTriedAt = now
+            wbLastProbeLive = null
+            PathRegistry.raising(PathId.WB)
+            KLog.i(TAG, "основной канал не поднимается $mainFailures заход(а) подряд — пробую комнату WB раньше Телемоста")
+            if (runCatching { host.prepareCoreForWb("пробую комнату WB") }.getOrDefault(false)) {
+                selected = null
+                refreshLayout("ядро пересобрано под комнату WB")
+            }
+        } else if (wbFailedAt != 0L) {
+            // Окно уже вышло: Телемост разбужен, WB держим до его готовности ([releaseWbIfDue]).
+            return WbTrial.Down
+        } else if (wbTrialSince == 0L) {
+            // Везла и перестала. Присмотр поднимает ядро через пять секунд после выхода — даём
+            // ей то же окно, что и при подъёме, и Телемост пока не будим.
+            wbTrialSince = now
+            KLog.i(TAG, "комната WB перестала везти — жду её до ${WB_TRIAL_WAIT_MILLIS / 1000} с, Телемост пока не бужу")
+        }
+        val deadline = wbTrialSince + WB_TRIAL_WAIT_MILLIS
+        while (SystemClock.elapsedRealtime() < deadline) {
+            // Сеть сменилась или автомат гасят — ждать дальше незачем, окно продолжит следующий заход.
+            if (!active || networkChanged) return WbTrial.Pending
+            if (wbAlive()) return wbLive()
+            Thread.sleep(WB_WAIT_STEP_MILLIS)
+        }
+        if (wbAlive()) return wbLive()
+        wbFailedAt = SystemClock.elapsedRealtime()
+        wbTrialSince = 0L
+        // Как у Телемоста: при мёртвом основном WB — одна из двух дорог наружу, и пауза до
+        // следующей попытки не растёт до десяти минут ([nextTrialPause]).
+        wbTrialPause = nextTrialPause(wbTrialPause, mainKnownDead())
+        KLog.i(
+            TAG,
+            "комната WB не ожила за ${WB_TRIAL_WAIT_MILLIS / 1000} с (${WbChatCore.statusText()}) — бужу Телемост, " +
+                "WB держу до его готовности, но не дольше ${WB_OVERLAP_MAX_MILLIS / 1000} с",
+        )
+        return WbTrial.Down
+    }
+
+    /** Комната WB везёт: окно ожидания закрыто, пауза между попытками — с начала. */
+    private fun wbLive(): WbTrial {
+        if (wbTrialSince != 0L || wbFailedAt != 0L) KLog.i(TAG, "комната WB везёт — Телемост не бужу")
+        wbTrialSince = 0L
+        wbFailedAt = 0L
+        wbTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
+        return WbTrial.Live
+    }
+
+    /** WB не ожила, Телемост разбужен — отпустить её, когда пора ([wbReleaseDue]). */
+    private fun releaseWbIfDue() {
+        if (!wbWantedMem) return
+        val now = SystemClock.elapsedRealtime()
+        val roomLive = roomAlive()
+        if (!wbReleaseDue(wbFailedAt, now, roomLive = roomLive, wbLive = wbAlive())) return
+        releaseWb(
+            if (roomLive) {
+                "Телемост везёт, комната WB не ожила"
+            } else {
+                "комната WB не ожила, а Телемост не повёз за ${(now - wbFailedAt) / 1000} с"
+            },
+        )
+    }
+
+    /**
+     * Комната WB автомату больше не нужна. Ядро гасит её присмотр (за секунду, по [wbWanted]);
+     * выход с неё уводим раньше, чтобы селектор не смотрел в неслушающий сокс.
+     */
+    private fun releaseWb(why: String) {
+        if (!wbWantedMem) return
+        wbWantedMem = false
+        wbTrialSince = 0L
+        wbFailedAt = 0L
+        wbLastProbeLive = null
+        val h = host
+        if (h != null && selected != null && selected == layout.wb) {
+            choose(h, if (roomAlive()) layout.room else layout.main, "комната WB гаснет")
+        }
+        KLog.i(TAG, "комната WB автомату больше не нужна ($why) — её ядро гасит присмотр")
+    }
+
+    /** Забыть всё про пробы комнаты WB: новый подъём автомата, ручной выбор, сброс. */
+    private fun forgetWb() {
+        wbWantedMem = false
+        wbTrialSince = 0L
+        wbFailedAt = 0L
+        wbTriedAt = 0L
+        wbTrialPause = ROOM_TRIAL_PAUSE_MILLIS
+        wbLastProbeLive = null
+    }
+
+    /**
+     * Присмотр WB померил её сокс ([WbChatWatchdog]). Ответ сменился — будим заход, не дожидаясь
+     * ритма: стоя на WB, её смерть иначе заметили бы только через три минуты.
+     */
+    fun onWbProbe(live: Boolean) {
+        if (!active || !wbWantedMem) return
+        if (wbLastProbeLive == live) return
+        wbLastProbeLive = live
+        KLog.i(TAG, "проба комнаты WB: ${if (live) "везёт" else "не везёт"} — иду на заход, не дожидаясь ритма")
+        wakeLoop()
+    }
+
     /** Насколько свеж замер, которому верим при запрете комнаты по тишине. */
     internal const val ROOM_GATE_FRESH_MILLIS = 15_000L
 
-    /** Пауза перед следующей пробной попыткой после неудачи: вдвое длиннее, но не выше потолка. */
-    internal fun nextTrialPause(current: Long): Long =
-        (current * 2).coerceIn(
+    /**
+     * Пауза перед следующей пробной попыткой после неудачи: вдвое длиннее, но не выше потолка.
+     *
+     * @param mainKnownDead основной мёртв — ждать его незачем, комната единственная дорога:
+     *   пауза остаётся начальной, а не растёт до десяти минут.
+     */
+    internal fun nextTrialPause(current: Long, mainKnownDead: Boolean = false): Long =
+        if (mainKnownDead) Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS) else (current * 2).coerceIn(
             Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS),
             // Потолок не ниже начальной паузы: иначе coerceIn бросит на значениях с пульта.
             Pult.long("avtomat.room_trial_pause_cap_millis", ROOM_TRIAL_PAUSE_CAP_MILLIS)
@@ -2168,10 +2656,12 @@ object AutoMode {
      * Собственно решение. Вынесено отдельно и без единого обращения к Android, чтобы
      * таблицу «что видим → куда идём» можно было проверить, а не пересказать.
      */
-    internal fun decide(hasNetwork: Boolean, home: Boolean, main: Boolean, room: Boolean): Situation = when {
+    internal fun decide(hasNetwork: Boolean, home: Boolean, main: Boolean, room: Boolean, wb: Boolean = false): Situation = when {
         !hasNetwork -> Situation.NoNetwork
         home -> Situation.Home
         main -> Situation.Main
+        // Комната WB раньше Телемоста: решение Вовы 24.10.2026.
+        wb -> Situation.Wb
         room -> Situation.Room
         else -> Situation.Searching
     }
@@ -2184,7 +2674,8 @@ object AutoMode {
      * человек и так не выйдет.
      */
     internal fun working(situation: Situation): Boolean =
-        situation == Situation.Home || situation == Situation.Main || situation == Situation.Room
+        situation == Situation.Home || situation == Situation.Main || situation == Situation.Wb ||
+            situation == Situation.Room
 
     /**
      * Держим ли вердикт вместо того, чтобы его менять.
@@ -2245,6 +2736,8 @@ object AutoMode {
                 // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
                 // следующей смены обстановки — то есть ровно то, чего дом и избегает.
                 if (host.suspendTunnel("дома обход делает роутер")) selected = null
+                // Дома не нужна и комната WB: туннель погашен, её присмотр гасит ядро сам.
+                releaseWb("дома обход делает роутер")
                 // Туннеля дома нет, и запасной узел, выбранный до дома, ничего не значит: из дома
                 // выходим с первого узла очереди. Раньше очередь сбрасывал только [start], а
                 // возврат ([maybeReturnToPrimary]) дома не идёт — и «Финляндия», выбранная за
@@ -2256,6 +2749,12 @@ object AutoMode {
                 // Ядро поднялось заново — выбор внутри селектора вернулся к тому,
                 // что записано в конфиге, и его надо выставить снова.
                 if (host.resumeTunnel("основной канал поднимается")) selected = null
+                // Комнату WB гасим после того, как увели с неё выход: её присмотр гасит ядро
+                // за секунду, и селектор не должен смотреть в неслушающий сокс.
+                if (wbWantedMem) {
+                    choose(host, layout.main, "обстановка «основной канал»")
+                    releaseWb("идём основным каналом")
+                }
                 // Ушли на основной канал — видеозвонок больше не нужен. Держать его
                 // «на всякий случай» нельзя: круглосуточная сессия и есть то, чего
                 // вся схема избегает.
@@ -2263,11 +2762,26 @@ object AutoMode {
                 choose(host, layout.main, "обстановка «основной канал»")
             }
 
+            Situation.Wb -> {
+                if (host.resumeTunnel("основной канал не поднимается — комната WB")) selected = null
+                // Комната WB везёт — Телемост не нужен; стоит — гасим (решение 24.10.2026).
+                if (setRoom(host, false, "идём комнатой WB").changed) selected = null
+                // Правки под WB обычно уже легли на пробном подъёме; это страховка.
+                if (runCatching { host.prepareCoreForWb("обстановка «комната WB»") }.getOrDefault(false)) {
+                    selected = null
+                    refreshLayout("ядро пересобрано под комнату WB")
+                }
+                // Сокс WB слушает её ядро; пока оно не готово, выход туда не ставим.
+                if (wbUp()) choose(host, layout.wb, "обстановка «комната WB»")
+            }
+
             Situation.Room -> {
                 if (host.resumeTunnel("основной канал не поднимается", roomNext = true)) selected = null
                 // Обычно комната уже поднята пробно — вызов идемпотентный и ничего не делает.
                 if (setRoom(host, true, "уходим в комнату").changed) selected = null
                 choose(host, layout.room, "обстановка «комната»")
+                // Телемост везёт, комната WB не ожила — держать её больше незачем.
+                if (!wbAlive()) releaseWb("комната везёт, комната WB не ожила")
             }
 
             Situation.Searching -> {
@@ -2287,11 +2801,19 @@ object AutoMode {
                 // не дождалась ответа, автомат погасил её через 31 секунду и заплатил
                 // вторым подъёмом — 66 секунд на ровном месте. У присмотра для того же
                 // вопроса три отказа подряд, и он же лечит канал сам, не роняя видеозвонок.
+                //
+                // И не гасим вовсе, пока основной мёртв ([mainKnownDead]): гашение пересобирает
+                // ядро, а пересборка ставит селектор на первый в конфиге — на основной. Комнату
+                // дальше лечит присмотр, а выход уводим на WB, если он жив ([roomLostTarget]).
                 val judged = OlcRtcWatchdog.condemned
-                if (!roomSettling() && (!repeat || judged) &&
-                    setRoom(host, false, "комната канала не дала").changed
-                ) {
-                    selected = null
+                if (!roomSettling() && (!repeat || judged)) {
+                    if (!mainKnownDead()) {
+                        if (setRoom(host, false, "комната канала не дала").changed) selected = null
+                    } else {
+                        if (!repeat) KLog.i(TAG, "ищу путь: основной канал мёртв — комнату не гашу, её лечит присмотр")
+                        val wb = roomLostTarget(mainKnownDead = true, wbLive = wbUp(), main = layout.main, wb = wbOut())
+                        if (judged && wb != null && selected != wb) choose(host, wb, "комната не везёт, основной мёртв")
+                    }
                 }
                 // Пока ищем, выход не трогали вовсе, и селектор оставался на том, что стоит
                 // в конфиге первым, то есть на основном канале — даже когда комната УЖЕ
@@ -2305,8 +2827,19 @@ object AutoMode {
                 // уводился в комнату, и соединения висели до таймаута. Пока проба не прошла,
                 // выход остаётся прежним — тот же вердикт, по которому комнату признаёт
                 // обычный заход ([roomAlive]).
+                // Комната WB раньше Телемоста — та же логика: только по пройденной пробе.
+                val wbTarget = searchingTarget(layout.wb, selected, wbUp(), wbAlive())
                 val target = searchingTarget(layout.room, selected, roomUp(), roomAlive())
-                if (target != null) {
+                if (wbTarget != null) {
+                    if (runCatching { host.prepareCoreForWb("ищу путь, комната WB везёт") }.getOrDefault(false)) {
+                        selected = null
+                        refreshLayout("ядро пересобрано под комнату WB")
+                    }
+                    KLog.i(TAG, "ищу путь, но комната WB уже везёт — иду ей, не дожидаясь подтверждений")
+                    choose(host, wbTarget, "канала нет, через комнату WB прошёл запрос")
+                } else if (selected != null && selected == layout.wb && wbAlive()) {
+                    // Уже стоим на живой комнате WB — Телемостом её не перебиваем.
+                } else if (target != null) {
                     KLog.i(TAG, "ищу путь, но комната уже везёт — иду ей, не дожидаясь подтверждений")
                     choose(host, target, "канала нет, через комнату прошёл запрос")
                 } else if (layout.room != null && selected != layout.room && roomUp()) {
@@ -2317,7 +2850,10 @@ object AutoMode {
             // Сети нет и обстановка неизвестна: не поднимаем ничего. Комнату при этом
             // гасим — без сети она всё равно мертва, а присмотр за ней будет впустую
             // долбиться в подъём. Поднимется сеть — придёт событие, и заход случится сам.
-            Situation.NoNetwork -> if (setRoom(host, false, "сети нет").changed) selected = null
+            Situation.NoNetwork -> {
+                if (setRoom(host, false, "сети нет").changed) selected = null
+                releaseWb("сети нет")
+            }
 
             Situation.Unknown -> Unit
         }
@@ -2387,6 +2923,7 @@ object AutoMode {
     /** Какой выход соответствует обстановке. Нужен, когда [selected] стёрт пересборкой ядра. */
     private fun exitFor(situation: Situation): String? = when (situation) {
         Situation.Room -> layout.room
+        Situation.Wb -> layout.wb
         Situation.Main -> layout.main
         else -> null
     }
@@ -2414,7 +2951,8 @@ object AutoMode {
     private fun delayFor(situation: Situation): Long = when (situation) {
         Situation.Home -> Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS)
         Situation.Main -> Pult.long("avtomat.round_main_millis", ROUND_MAIN_MILLIS)
-        Situation.Room -> Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS)
+        // Комната WB — тот же медленный путь, что и комната: возврат на основной тем же ритмом.
+        Situation.Room, Situation.Wb -> Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS)
         // Сети нет — работы для нас нет, но и спать навсегда нельзя. Раньше здесь стояло
         // «ждём только события от системы» (`Long.MAX_VALUE` = `wait(0)`), а вердикт «сети
         // нет» принимается по ОДНОМУ наблюдению. Ошиблись один раз — и разбудить нас может
@@ -3076,7 +3614,7 @@ object AutoMode {
         massovyeOtkazyAt = now
         KLog.i(TAG, "реальные соединения массово падают ($prichina) — на заходе спрошу режим сети")
         val current = gate.current
-        if (current != Situation.Main && current != Situation.Room) return
+        if (current != Situation.Main && current != Situation.Room && current != Situation.Wb) return
         if (massovyeBudilAt != 0L && now - massovyeBudilAt < Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)) return
         massovyeBudilAt = now
         wakeLoop()
@@ -3111,6 +3649,13 @@ object AutoMode {
         massovyeOtkazyAt != 0L && SystemClock.elapsedRealtime() - massovyeOtkazyAt < Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)
 
     /** Подсказка про эту сеть, пока она свежая. Ничего не меряет. */
+    /**
+     * Сеть сменилась на «не дома» под подсказкой белого списка — повод спросить пульт: правка могла быть
+     * про именно такую сеть, а опрос пойдёт запасным путём ([io.nekohasekai.sfa.ZapasnoyPut]). Один раз на сеть.
+     */
+    internal fun pultPoBelomuSpisku(oproshennaya: String?, tekushchaya: String?, home: Boolean, hint: NetworkMode): Boolean =
+        hint == NetworkMode.Whitelist && !home && tekushchaya != null && tekushchaya != oproshennaya
+
     private fun cachedHint(network: Network): NetworkMode {
         val report = NetworkModeDetector.reportFor(network) ?: return NetworkMode.Unknown
         val age = System.currentTimeMillis() - report.atMillis
@@ -3225,23 +3770,25 @@ object AutoMode {
     private fun mainWorks(network: Network, host: Host, inRoom: Boolean = false): Boolean {
         lastMainProbe = null
         val endpoints = layout.mainEndpoints
-        val portOpen = if (endpoints.isEmpty()) {
+        val knock = if (endpoints.isEmpty()) {
             // Раскладку не поняли — не выдумываем отказ: гнать всех в комнату из-за
             // непрочитанного конфига хуже, чем не заметить белый список.
             null
         } else {
-            anyConnects(network, endpoints, Pult.int("avtomat.tcp_timeout_millis", TCP_TIMEOUT_MILLIS)).also { open ->
+            knockAll(network, endpoints, Pult.int("avtomat.tcp_timeout_millis", TCP_TIMEOUT_MILLIS)).also { answer ->
                 KLog.i(
                     TAG,
-                    if (open) {
-                        "основной канал: адрес узла принимает соединение"
-                    } else {
-                        "основной канал: ни один из ${endpoints.size} адресов не отвечает"
+                    when (answer) {
+                        Knock.Open -> "основной канал: адрес узла принимает соединение"
+                        Knock.Refused -> "основной канал: все адреса узла (${endpoints.size}) отвечают мгновенным отказом (RST)"
+                        Knock.Other -> "основной канал: ни один из ${endpoints.size} адресов не отвечает"
                     },
                 )
-                if (open) nodeAnswered("узел основного канала принял соединение", network, portOnly = true)
             }
         }
+        mainRefused = knock == Knock.Refused
+        mainHollow = false
+        val portOpen = knock?.let { it == Knock.Open }
         // Узел молчит — приглядке есть что искать. Отозвался (или адресов мы не знаем) —
         // искать нечего.
         peekWanted = portOpen == false
@@ -3272,6 +3819,18 @@ object AutoMode {
             !host.tunnelLive() -> null
             else -> probeThroughMain(host, proxy)
         }
+        mainHollow = hollowPort(portOpen, trafficFlows)
+        if (mainHollow && nodeAnsweredAt != 0L) {
+            // Принятое соединение без единого байта за ним — не ответ узла. 24.10.2026 (МегаФон,
+            // белый список) адрес узла «принимал соединение» каждым заходом даже при погашенном
+            // tun (15:22:47.827, 15:27:09.222), а канал молчал до таймаута 12 с. Довод «узел
+            // отвечает» держал определитель режима закрытым ([askDetector]) весь эпизод.
+            nodeAnsweredAt = 0L
+            KLog.i(TAG, "основной канал: адрес принял соединение, но канал целиком пуст — довод «узел отвечает» снимаю")
+        }
+        // Довод «узел отвечает» — только когда за принятым соединением не оказалось пустоты:
+        // канал прошёл или проверить его было нечем (туннель погашен, входа нет).
+        if (portOpen == true && !mainHollow) nodeAnswered("узел основного канала принял соединение", network, portOnly = true)
         // Честная проба выше отвечает только на «идёт ли трафик». Троттлинг она не видит:
         // её ответ весит двести байт и проскакивает сквозь задушенную полосу целым.
         // Поэтому у живого канала отдельно спрашиваем, сколько он тянет ([SpeedProbe]).
@@ -3466,7 +4025,7 @@ object AutoMode {
         nodeIndex = 0
         layout = baseLayout
         portSilentAt = 0L
-        PathRegistry.bindExits(main = layout.main, room = layout.room)
+        PathRegistry.bindExits(main = layout.main, room = layout.room, wb = layout.wb)
         KLog.i(TAG, "очередь узлов снова с первого: «$was» → «${layout.main}» ($why)")
     }
 
@@ -3478,7 +4037,7 @@ object AutoMode {
         layout = baseLayout.forNode(tag)
         nodeWatch.switched()
         portSilentAt = 0L
-        PathRegistry.bindExits(main = layout.main, room = layout.room)
+        PathRegistry.bindExits(main = layout.main, room = layout.room, wb = layout.wb)
         // Узел только что проверен ([nodeAlive]) — иначе экран до следующего захода показывал бы
         // отказ прежнего узла, то есть «связи нет» при живой связи.
         PathRegistry.alive(PathId.MAIN, reason = "узел «$tag»")
@@ -3670,13 +4229,95 @@ object AutoMode {
         network: Network,
         endpoint: AutoModeExits.Endpoint,
         timeoutMillis: Int,
-    ): Boolean = runCatching {
-        val address = network.getAllByName(endpoint.host).firstOrNull() ?: return false
+    ): Boolean = knock(network, endpoint, timeoutMillis) == Knock.Open
+
+    /**
+     * Пустой порт: адрес узла принял соединение, а запрос через канал не прошёл. Чистая функция.
+     * Не мерили канал (`trafficFlows == null`: туннель погашен, входа нет) — не пустой: судить не по чему.
+     * Выключатель `vykl.pustoy_port` возвращает старое «принял — значит отвечает».
+     */
+    internal fun hollowPort(
+        portOpen: Boolean?,
+        trafficFlows: Boolean?,
+        off: Boolean = Pult.vykl("pustoy_port"),
+    ): Boolean = !off && portOpen == true && trafficFlows == false
+
+    /** Чем адрес узла ответил на попытку соединения. */
+    internal enum class Knock {
+        /** Соединение принято. */
+        Open,
+
+        /** Мгновенный отказ (RST за [OTKAZ_MGNOVENNYY_MILLIS]): так режет белый список у МегаФона. */
+        Refused,
+
+        /** Тишина до таймаута, долгий отказ, имя не резолвится — что угодно ещё. */
+        Other,
+    }
+
+    /**
+     * Исход соединения, которое не встало: мгновенный ли это отказ. Чистая функция: долгий
+     * отказ и тишина мгновенным отказом не считаются — проверяется тестом.
+     */
+    internal fun refusalKnock(
+        outcome: ProbeOutcome,
+        tookMillis: Long,
+        instantMillis: Long = Pult.long("avtomat.otkaz_mgnovennyy_millis", OTKAZ_MGNOVENNYY_MILLIS),
+    ): Knock = if (outcome == ProbeOutcome.Refused && tookMillis in 0..instantMillis) Knock.Refused else Knock.Other
+
+    /**
+     * Итог по всем адресам узла: принял хоть один — [Knock.Open]; мгновенно отказали все —
+     * [Knock.Refused]; иначе (в том числе не дождались кого-то) — [Knock.Other].
+     */
+    internal fun knockVerdict(answers: List<Knock>): Knock = when {
+        answers.any { it == Knock.Open } -> Knock.Open
+        answers.isNotEmpty() && answers.all { it == Knock.Refused } -> Knock.Refused
+        else -> Knock.Other
+    }
+
+    private fun knock(
+        network: Network,
+        endpoint: AutoModeExits.Endpoint,
+        timeoutMillis: Int,
+    ): Knock = runCatching {
+        val address = network.getAllByName(endpoint.host).firstOrNull() ?: return Knock.Other
         ProbeSocket.open { network.bindSocket(it) }.use { socket ->
-            socket.connect(InetSocketAddress(address, endpoint.port), timeoutMillis)
-            true
+            val started = SystemClock.elapsedRealtime()
+            try {
+                socket.connect(InetSocketAddress(address, endpoint.port), timeoutMillis)
+                Knock.Open
+            } catch (error: Exception) {
+                refusalKnock(ProbeFailure.onConnect(error), SystemClock.elapsedRealtime() - started)
+            }
         }
-    }.getOrElse { false }
+    }.getOrElse { Knock.Other }
+
+    /**
+     * Есть ли смысл в замере режима сети прямо в заходе, раз узел основного отказал мгновенно.
+     *
+     * Свежий вердикт про эту сеть не перемеряем — кроме одного: прошлый замер видел отказ всех
+     * неразрешённых точек ([ProbeOutcome.Refused]), а вердикта не дал (контроль не встал: сеть
+     * ещё настраивалась). Такой замер дёшев — четыре SYN, — и переспросить его можно через
+     * [OTKAZ_PEREZAMER_MILLIS]. Замер, в котором неразрешённые ответили (лежит один наш VPS),
+     * живёт полный срок подсказки: там белого списка нет, а замер дорогой — с рукопожатием.
+     *
+     * @param cached вердикт определителя про эту сеть ([NetworkModeDetector.reportFor]).
+     * @param nowWallMillis стенные часы: [NetworkModeReport.atMillis] в них.
+     */
+    internal fun refusalAsksDetector(
+        cached: NetworkModeReport?,
+        nowWallMillis: Long,
+        ttlMillis: Long = Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS),
+        retryMillis: Long = Pult.long("avtomat.otkaz_perezamer_millis", OTKAZ_PEREZAMER_MILLIS),
+    ): Boolean {
+        if (cached == null) return true
+        val age = nowWallMillis - cached.atMillis
+        if (age < 0) return true
+        return when {
+            cached.mode == NetworkMode.Whitelist -> age >= ttlMillis
+            cached.signals.tcpUnlisted == ProbeOutcome.Refused -> age >= retryMillis
+            else -> age >= ttlMillis
+        }
+    }
 
     /**
      * Примет ли соединение **хоть один** из адресов узла.
@@ -3692,23 +4333,37 @@ object AutoMode {
         network: Network,
         endpoints: List<AutoModeExits.Endpoint>,
         timeoutMillis: Int,
-    ): Boolean {
-        if (endpoints.isEmpty()) return false
-        if (endpoints.size == 1) return connects(network, endpoints[0], timeoutMillis)
+    ): Boolean = knockAll(network, endpoints, timeoutMillis) == Knock.Open
+
+    /**
+     * То же, что [anyConnects], но с ответом «как именно не приняли»: мгновенный отказ всех
+     * адресов ([Knock.Refused]) отличается от тишины. Первый принявший адрес по-прежнему
+     * закрывает вопрос; отказы приходят за круг пакета, так что ждать их все ничего не стоит.
+     */
+    private fun knockAll(
+        network: Network,
+        endpoints: List<AutoModeExits.Endpoint>,
+        timeoutMillis: Int,
+    ): Knock {
+        if (endpoints.isEmpty()) return Knock.Other
+        if (endpoints.size == 1) return knock(network, endpoints[0], timeoutMillis)
         val pool = Executors.newFixedThreadPool(endpoints.size)
         try {
-            val answers = ExecutorCompletionService<Boolean>(pool)
+            val answers = ExecutorCompletionService<Knock>(pool)
             endpoints.forEach { endpoint ->
-                answers.submit { connects(network, endpoint, timeoutMillis) }
+                answers.submit { knock(network, endpoint, timeoutMillis) }
             }
             val deadline = SystemClock.elapsedRealtime() + timeoutMillis + Pult.long("avtomat.connect_slack_millis", CONNECT_SLACK_MILLIS)
+            val got = ArrayList<Knock>(endpoints.size)
             repeat(endpoints.size) {
                 val left = deadline - SystemClock.elapsedRealtime()
-                if (left <= 0) return false
-                val done = runCatching { answers.poll(left, TimeUnit.MILLISECONDS) }.getOrNull() ?: return false
-                if (runCatching { done.get() }.getOrDefault(false)) return true
+                if (left <= 0) return Knock.Other
+                val done = runCatching { answers.poll(left, TimeUnit.MILLISECONDS) }.getOrNull() ?: return Knock.Other
+                val answer = runCatching { done.get() }.getOrDefault(Knock.Other)
+                if (answer == Knock.Open) return Knock.Open
+                got += answer
             }
-            return false
+            return knockVerdict(got)
         } finally {
             pool.shutdownNow()
         }
@@ -3934,6 +4589,7 @@ object AutoMode {
     private fun name(situation: Situation): String = when (situation) {
         Situation.Home -> "дома"
         Situation.Main -> "основной канал"
+        Situation.Wb -> "комната WB"
         Situation.Room -> "комната"
         Situation.Searching -> "ничего не поднимается"
         Situation.NoNetwork -> "сети нет"

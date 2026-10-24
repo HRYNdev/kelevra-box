@@ -150,4 +150,22 @@ internal object TunnelFacts {
      */
     fun reloadByHuman(askedAt: Long, now: Long, windowMillis: Long): Boolean =
         askedAt > 0 && now >= askedAt && now - askedAt <= windowMillis
+
+    /**
+     * Нужны ли ядру правки под комнату WB (отказ QUIC и IPv6 в её сокс) и держать ли её ядро.
+     *
+     * Два хозяина и ни одного общего: при ручном выборе — человек (выбран выход WB, как и
+     * было), при автомате — сам автомат, когда он её пробует или на ней стоит
+     * ([AutoMode.wbWanted], решение 24.10.2026: под белым списком WB первая, Телемост
+     * запасной). Ручной выбор, оставшийся в настройках при включённом автомате, ничего не
+     * значит — так было и до автомата с WB.
+     *
+     * @param available сервер выдал WB Chat и в нём всё, без чего ядро не войдёт в звонок.
+     * @param auto автомат включён человеком.
+     * @param manualExit выход, выбранный руками (пусто — не выбирал).
+     * @param wbTag тег выхода WB с сервера (пусто — выхода нет).
+     * @param autoWantsWb автомат сейчас пробует WB или стоит на ней.
+     */
+    fun wbInConfig(available: Boolean, auto: Boolean, manualExit: String, wbTag: String, autoWantsWb: Boolean): Boolean =
+        available && if (auto) autoWantsWb else wbTag.isNotBlank() && manualExit == wbTag
 }

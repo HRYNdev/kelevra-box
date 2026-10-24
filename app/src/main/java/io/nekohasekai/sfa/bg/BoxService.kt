@@ -266,6 +266,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         override fun setRoomWanted(wanted: Boolean, reason: String): AutoMode.RoomAck =
             this@BoxService.setRoomWanted(wanted, reason)
+
+        override fun prepareCoreForWb(reason: String): Boolean = this@BoxService.prepareCoreForWb(reason)
+
+        override fun coreReadyForWb(): Boolean = coreWbConfig
     }
 
     private suspend fun startService() {
@@ -730,7 +734,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
 
         // WB Chat — отдельный выход со своим ядром. Ядро живёт всё время, пока служба поднята,
         // и его собственный трафик не должен уйти в собственный сокс ([WbChatConfigPatch]).
-        // Правки комнаты (отказ QUIC и IPv6) кладём, только пока этот выход выбран руками:
+        // Правки комнаты (отказ QUIC и IPv6) кладём, только пока этот выход выбран руками или
+        // его пробует / на нём стоит автомат ([wbInConfig]):
         // правило не знает, куда смотрит селектор, и постоянный отказ резал бы QUIC и IPv6
         // на обычных выходах. Комнату автомата (порт olcRTC/Телемоста) это не трогает.
         val wbPort = WbChatParams.socksPort
@@ -800,7 +805,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     private fun checkPathsHonestly(reason: String) {
         val content = runningConfig ?: return
-        val layout = AutoModeExits.parse(content, OlcRtcParams.socksPort)
+        val layout = AutoModeExits.parse(content, OlcRtcParams.socksPort, WbChatParams.socksPort)
         val entries = layout.probeEntries
         if (entries.isEmpty()) {
             KLog.w(TAG, "проверка путей ($reason): закреплённых входов нет, мерить нечем")
@@ -817,7 +822,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // самом первом холодном старте этот заход может случиться раньше него —
         // привязываем сами по тому же конфигу. Вызов безопасный: bindExits не трогает
         // уже собранные замеры, только имена (см. его комментарий).
-        PathRegistry.bindExits(main = layout.main, room = layout.room)
+        PathRegistry.bindExits(main = layout.main, room = layout.room, wb = layout.wb)
         // Автомату о новой раскладке уже сказал startCore: проверочные входы занимают
         // свободные порты, и без этого он мерил бы основной канал по номеру из прошлой
         // жизни ядра (поймано на телефоне 11.08.2026). Второй раз здесь не говорим.
@@ -1102,14 +1107,34 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     private fun roomInConfig(): Boolean = Settings.olcrtcEnabled && OlcRtcParams.komnataRazreshenaPultom &&
         (roomWanted || roomAhead || OlcRtcCore.state is OlcRtcCore.State.Ready)
 
-    /** Нужны ли правки под выход WB Chat: он есть и выбран руками (автомат его не выбирает). */
-    private fun wbInConfig(): Boolean = WbChatParams.available &&
-        !Settings.autoModeEnabled &&
-        WbChatParams.isWbExit(Settings.manualExitName)
+    /**
+     * Нужны ли правки под выход WB Chat ([TunnelFacts.wbInConfig]): он есть и выбран руками —
+     * как раньше, — либо его пробует или на нём стоит автомат ([AutoMode.wbWanted]).
+     */
+    private fun wbInConfig(): Boolean = TunnelFacts.wbInConfig(
+        available = WbChatParams.available,
+        auto = Settings.autoModeEnabled,
+        manualExit = Settings.manualExitName,
+        wbTag = WbChatParams.tag,
+        autoWantsWb = runCatching { AutoMode.wbWanted() }.getOrDefault(false),
+    )
+
+    /**
+     * Готовит ядро к выходу WB по просьбе автомата: собрано не под нынешнее состояние (правки
+     * WB ещё не легли) — пересобирает ([resyncCore]). Идёт ДО выбора выхода WB и до подъёма её
+     * ядра: пересборка закрывает tun, а звонок, собранный раньше неё, мог через него ходить
+     * (мимо tun его адреса уводит только Android 13+, [WbChatConfigPatch.TUN_EXCLUDE]).
+     *
+     * @return true, если ядро пересобрали — выбор в селекторе надо выставить заново.
+     */
+    private fun prepareCoreForWb(reason: String): Boolean = synchronized(tunnelLock) {
+        if (serviceStopping || tunnelSuspended) return@synchronized false
+        resyncCore("комната WB: $reason")?.changed == true
+    }
 
     /**
      * Присмотр за ядром WB Chat: держит его, пока служба поднята, туннель не погашен и
-     * выход WB выбран руками ([wbInConfig]). Не выбран — ядро погашено: звонок WB с
+     * выход WB выбран руками или нужен автомату ([wbInConfig]). Не нужен — ядро погашено: звонок WB с
      * 16 каналами иначе висел фоном при любом выходе (замер 15.10: «Комната WB · готов»
      * при выбранных Нидерландах), жёг мобильный трафик и при смене сети сбивал звонок
      * другого ядра того же аккаунта.
@@ -1120,7 +1145,15 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 KLog.i(TAG, "WB Chat выключен пультом — ядро не поднимаю")
                 return
             }
-            WbChatWatchdog.start(wanted = { !serviceStopping && !tunnelSuspended && wbInConfig() })
+            WbChatWatchdog.start(
+                wanted = {
+                    // Автомату ядро WB поднимаем, только когда sing-box уже собран под неё
+                    // ([prepareCoreForWb]): пересборка после входа в звонок могла бы его порвать.
+                    // Ручной выбор — как был.
+                    !serviceStopping && !tunnelSuspended && wbInConfig() &&
+                        (!Settings.autoModeEnabled || coreWbConfig)
+                },
+            )
         }.onFailure { KLog.w(TAG, "WB Chat: присмотр не запустился: ${it.message}") }
     }
 

@@ -61,6 +61,13 @@ object PathChip {
                 else -> SEARCH
             }
 
+            // Комната WB в семь знаков не влезает — капсула говорит то же «Комната».
+            chosen == PathId.WB -> when (snapshot[PathId.WB].status) {
+                PathStatus.Alive -> ROOM
+                PathStatus.Dead, PathStatus.Unavailable -> DOWN
+                else -> SEARCH
+            }
+
             manualExit != null && !auto -> when (snapshot.byExit(manualExit)?.status) {
                 PathStatus.Dead, PathStatus.Unavailable -> DOWN
                 else -> codeOf(manualExit) ?: TUNNEL

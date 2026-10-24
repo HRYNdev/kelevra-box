@@ -157,6 +157,40 @@ class PultPodklyuchenieTest {
     }
 
     @Test
+    fun `опрос службы считает от удачной сводки, а неудача повторяется не раньше пяти минут`() {
+        val min = 60_000L
+        // свежий процесс или служба: отсчёт с нуля — первый же круг опрашивает
+        assertTrue(PultSvyaz.poraOprosa(nowMs = 100 * min, proshlyyMs = 0L, intervalMin = 60))
+        // сводка только что пришла — ждём интервал
+        assertFalse(PultSvyaz.poraOprosa(nowMs = 100 * min, proshlyyMs = 99 * min, intervalMin = 60))
+        // интервал вышел, но пробовали минуту назад (сбой) — ещё рано
+        assertFalse(PultSvyaz.poraOprosa(nowMs = 200 * min, proshlyyMs = 0L, intervalMin = 60, popytkaMs = 199 * min))
+        // через пять минут после сбоя — повторяем
+        assertTrue(PultSvyaz.poraOprosa(nowMs = 200 * min, proshlyyMs = 0L, intervalMin = 60, popytkaMs = 195 * min))
+    }
+
+    @Test
+    fun `по поводу — передний план и смена сети — опрос не чаще раза в минуту`() {
+        assertTrue(PultSvyaz.mozhnoPoPovodu(nowMs = 1_000_000L, popytkaMs = 0L))
+        assertFalse(PultSvyaz.mozhnoPoPovodu(nowMs = 1_000_000L, popytkaMs = 1_000_000L - 59_999L))
+        assertTrue(PultSvyaz.mozhnoPoPovodu(nowMs = 1_000_000L, popytkaMs = 1_000_000L - 60_000L))
+    }
+
+    @Test
+    fun `сеть не дома под подсказкой белого списка — повод спросить пульт один раз на сеть`() {
+        val wl = io.nekohasekai.sfa.bg.NetworkMode.Whitelist
+        assertTrue(AutoMode.pultPoBelomuSpisku(null, "lte-1", home = false, hint = wl))
+        // эту сеть уже опрашивали
+        assertFalse(AutoMode.pultPoBelomuSpisku("lte-1", "lte-1", home = false, hint = wl))
+        // другая сеть под белым списком — снова повод
+        assertTrue(AutoMode.pultPoBelomuSpisku("lte-1", "lte-2", home = false, hint = wl))
+        // дома или без подсказки — не повод
+        assertFalse(AutoMode.pultPoBelomuSpisku(null, "wifi", home = true, hint = wl))
+        assertFalse(AutoMode.pultPoBelomuSpisku(null, "lte-1", home = false, hint = io.nekohasekai.sfa.bg.NetworkMode.Unknown))
+        assertFalse(AutoMode.pultPoBelomuSpisku(null, null, home = false, hint = wl))
+    }
+
+    @Test
     fun `выключатель подсистемы — ключ vykl`() {
         assertFalse(Pult.vykl("lifeline"))
         pult("vykl.lifeline" to true)

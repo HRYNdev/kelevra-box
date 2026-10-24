@@ -32,6 +32,7 @@ object PathRegistry {
     private val defs = linkedMapOf(
         PathId.HOME to PathDef.HOME,
         PathId.MAIN to PathDef.MAIN,
+        PathId.WB to PathDef.WB,
         PathId.ROOM to PathDef.ROOM,
     )
 
@@ -65,12 +66,16 @@ object PathRegistry {
     /**
      * Имена выходов из раскладки конфига. Приходят позже самих путей: раскладку отдаёт
      * работающее ядро, а помнить про пути надо и до него.
+     *
+     * @param wb выход комнаты WB ([io.nekohasekai.sfa.bg.AutoModeExits.Layout.wb]); `null` — его нет.
      */
-    fun bindExits(main: String?, room: String?) {
+    fun bindExits(main: String?, room: String?, wb: String? = null) {
         edit {
             defs[PathId.MAIN] = defs.getValue(PathId.MAIN).copy(exitTag = main)
+            defs[PathId.WB] = defs.getValue(PathId.WB).copy(exitTag = wb)
             defs[PathId.ROOM] = defs.getValue(PathId.ROOM).copy(exitTag = room)
             states[PathId.MAIN] = states.getValue(PathId.MAIN).copy(def = defs.getValue(PathId.MAIN))
+            states[PathId.WB] = states.getValue(PathId.WB).copy(def = defs.getValue(PathId.WB))
             states[PathId.ROOM] = states.getValue(PathId.ROOM).copy(def = defs.getValue(PathId.ROOM))
         }
     }

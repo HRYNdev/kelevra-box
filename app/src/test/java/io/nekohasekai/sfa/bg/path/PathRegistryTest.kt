@@ -260,10 +260,12 @@ class PathRegistryTest {
     @Test
     fun `пути в снимке идут от самого приятного к самому дорогому`() {
         val order = PathRegistry.snapshot.value.all.map { it.def.id }
-        assertEquals(listOf(PathId.HOME, PathId.MAIN, PathId.ROOM), order)
+        // Комната WB встала между основным каналом и Телемостом (решение 24.10.2026).
+        assertEquals(listOf(PathId.HOME, PathId.MAIN, PathId.WB, PathId.ROOM), order)
         // Ранг — класс качества, а не место в очереди: промежутки оставлены под новые пути.
         assertTrue(PathDef.RANK_HOME < PathDef.RANK_MAIN)
-        assertTrue(PathDef.RANK_MAIN < PathDef.RANK_ROOM)
+        assertTrue(PathDef.RANK_MAIN < PathDef.RANK_WB)
+        assertTrue(PathDef.RANK_WB < PathDef.RANK_ROOM)
         assertTrue("между рангами должно быть место", PathDef.RANK_MAIN - PathDef.RANK_HOME > 1)
     }
 

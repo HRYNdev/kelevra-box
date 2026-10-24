@@ -235,4 +235,22 @@ class ProbeInboundPatchTest {
         assertNull(layout.entryFor(layout.main))
         assertTrue(HonestProbe.measure(layout.entryFor(layout.main), "основной").verdict == HonestProbe.Verdict.Unmeasurable)
     }
+
+    // ---------------------------------------------- проба живости комнаты WB не ждёт 12 с
+
+    @Test
+    fun `проба WB не держит общий замок 12 с`() {
+        // Основной канал и комната держат пол MIN_TIMEOUT_MILLIS: под bufferbloat иначе
+        // объявят смерть живому пути.
+        assertEquals(HonestProbe.MIN_TIMEOUT_MILLIS, HonestProbe.oknoOzhidaniya(4_000, enforceMinTimeout = true))
+        assertEquals(HonestProbe.MIN_TIMEOUT_MILLIS, HonestProbe.oknoOzhidaniya(HonestProbe.MIN_TIMEOUT_MILLIS, enforceMinTimeout = true))
+
+        // Проба комнаты WB пол обходит: её 4 с не вырастают до 12 с, и она не висит под
+        // общим замком [turn], стопоря остальные пробы.
+        assertEquals(WbChatCore.WB_PROBE_TIMEOUT_MILLIS, HonestProbe.oknoOzhidaniya(WbChatCore.WB_PROBE_TIMEOUT_MILLIS, enforceMinTimeout = false))
+        assertTrue(
+            "проба WB не должна ждать 12 с",
+            HonestProbe.oknoOzhidaniya(WbChatCore.WB_PROBE_TIMEOUT_MILLIS, enforceMinTimeout = false) < HonestProbe.MIN_TIMEOUT_MILLIS,
+        )
+    }
 }
