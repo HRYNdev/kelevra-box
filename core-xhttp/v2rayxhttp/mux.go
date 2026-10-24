@@ -99,9 +99,27 @@ func (m *XmuxManager) newXmuxClient() *XmuxClient {
 	return xmuxClient
 }
 
+// GetXmuxClient выбирает соединение без учёта сессии (так берёт его цикл
+// packet-up при смене соединения посреди сессии, как у Xray).
 func (m *XmuxManager) GetXmuxClient(ctx context.Context) *XmuxClient {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
+	return m.pickLocked()
+}
+
+// AcquireXmuxClient выбирает соединение для новой сессии и сразу, под тем же
+// замком менеджера, засчитывает на нём одну открытую сессию. Без этого
+// одновременные вызовы (страница открывает 6 соединений разом) видят одну и ту
+// же нагрузку и складываются на одно соединение. Освобождать — AddOpenUsage(-1).
+func (m *XmuxManager) AcquireXmuxClient(ctx context.Context) *XmuxClient {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	xmuxClient := m.pickLocked()
+	xmuxClient.AddOpenUsage(1)
+	return xmuxClient
+}
+
+func (m *XmuxManager) pickLocked() *XmuxClient {
 	var evicted []*XmuxClient
 	for i := 0; i < len(m.xmuxClients); {
 		xmuxClient := m.xmuxClients[i]
@@ -115,6 +133,8 @@ func (m *XmuxManager) GetXmuxClient(ctx context.Context) *XmuxClient {
 			i++
 		}
 	}
+	// выбывшее соединение физически закрывается, только когда на нём не
+	// осталось открытых сессий (XmuxClient.Close), живые потоки доживают
 	for _, c := range evicted {
 		c.Close()
 	}
@@ -124,23 +144,43 @@ func (m *XmuxManager) GetXmuxClient(ctx context.Context) *XmuxClient {
 	if m.connections > 0 && len(m.xmuxClients) < m.connections {
 		return m.newXmuxClient()
 	}
-	xmuxClients := make([]*XmuxClient, 0)
-	if m.concurrency > 0 {
-		for _, xmuxClient := range m.xmuxClients {
-			if xmuxClient.GetOpenUsage() < m.concurrency {
-				xmuxClients = append(xmuxClients, xmuxClient)
-			}
-		}
-	} else {
-		xmuxClients = m.xmuxClients
-	}
-	if len(xmuxClients) == 0 {
+	xmuxClient := m.leastLoadedLocked()
+	if xmuxClient == nil {
+		// все соединения упёрлись в max_concurrency
 		return m.newXmuxClient()
 	}
-	i, _ := rand.Int(rand.Reader, big.NewInt(int64(len(xmuxClients))))
-	xmuxClient := xmuxClients[i.Int64()]
 	if xmuxClient.leftUsage > 0 {
 		xmuxClient.leftUsage -= 1
 	}
 	return xmuxClient
+}
+
+// leastLoadedLocked: соединение с наименьшим числом открытых сессий среди тех,
+// что не упёрлись в max_concurrency; при равенстве — случайное из равных.
+// У Xray выбор чисто случайный: при max_connections 2 страница из 6 потоков
+// с вероятностью 1/32 целиком ложится в одно соединение, рядом с загрузкой.
+func (m *XmuxManager) leastLoadedLocked() *XmuxClient {
+	var best []*XmuxClient
+	bestUsage := math.MaxInt
+	for _, xmuxClient := range m.xmuxClients {
+		usage := xmuxClient.GetOpenUsage()
+		if m.concurrency > 0 && usage >= m.concurrency {
+			continue
+		}
+		if usage < bestUsage {
+			bestUsage = usage
+			best = best[:0]
+		}
+		if usage == bestUsage {
+			best = append(best, xmuxClient)
+		}
+	}
+	if len(best) == 0 {
+		return nil
+	}
+	if len(best) == 1 {
+		return best[0]
+	}
+	i, _ := rand.Int(rand.Reader, big.NewInt(int64(len(best))))
+	return best[i.Int64()]
 }

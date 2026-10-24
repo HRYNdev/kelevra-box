@@ -54,8 +54,15 @@ class InstallResultReceiver : BroadcastReceiver() {
             }
             PackageInstaller.STATUS_SUCCESS -> {
                 Log.d(TAG, "Installation successful")
-                Log.i(TAG_ISHOD, "установка обновления прошла")
-                runCatching { Zapisi.zapisat("obnovlenie", mapOf("ishod" to "proshla")) }
+                val tihaya = intent.getBooleanExtra(SystemPackageInstaller.EXTRA_TIHAYA, false)
+                val telefon = SystemPackageInstaller.telefon()
+                Log.i(TAG_ISHOD, "установка обновления прошла, установка ${IshodUstanovki.rezhim(tihaya)}, телефон $telefon")
+                runCatching {
+                    Zapisi.zapisat(
+                        "obnovlenie",
+                        mapOf("ishod" to "proshla", "telefon" to telefon, "rezhim" to IshodUstanovki.rezhim(tihaya)),
+                    )
+                }
                 UpdateState.setInstallStatus(UpdateState.InstallStatus.Success)
                 val pending = goAsync()
                 GlobalScope.launch(Dispatchers.IO) {
@@ -68,9 +75,16 @@ class InstallResultReceiver : BroadcastReceiver() {
             }
             else -> {
                 Log.e(TAG, "Installation failed: $status - $message")
+                val tihaya = intent.getBooleanExtra(SystemPackageInstaller.EXTRA_TIHAYA, false)
+                val telefon = SystemPackageInstaller.telefon()
                 val prichina = IshodUstanovki.razobrat(status, message)
-                // Состояние ставится сразу: окно отказа должно появиться, пока человек смотрит.
-                UpdateState.setInstallStatus(UpdateState.InstallStatus.Failed(IshodUstanovki.tekst(prichina), prichina))
+                // Повтор с окном решается до показа отказа: человек, нажавший «Обновить»,
+                // должен увидеть окно системы, а не «не разрешил» на долю секунды.
+                val mozhetBytPovtor = IshodUstanovki.povtoritSOknom(status, message, tihaya, uzhePovtoryali = false)
+                if (!mozhetBytPovtor) {
+                    // Состояние ставится сразу: окно отказа должно появиться, пока человек смотрит.
+                    UpdateState.setInstallStatus(UpdateState.InstallStatus.Failed(IshodUstanovki.tekst(prichina), prichina))
+                }
                 val pending = goAsync()
                 GlobalScope.launch(Dispatchers.IO) {
                     try {
@@ -79,7 +93,10 @@ class InstallResultReceiver : BroadcastReceiver() {
                             UpdateState.loadFromCache()
                             UpdateState.updateInfo.value
                         }
-                        Log.w(TAG_ISHOD, IshodUstanovki.strokaZhurnala(info?.versionName ?: "неизвестна", prichina, status, message))
+                        Log.w(
+                            TAG_ISHOD,
+                            IshodUstanovki.strokaZhurnala(info?.versionName ?: "неизвестна", prichina, status, message, telefon, tihaya),
+                        )
                         runCatching {
                             Zapisi.zapisat(
                                 "obnovlenie",
@@ -89,8 +106,16 @@ class InstallResultReceiver : BroadcastReceiver() {
                                     "prichina" to prichina.name,
                                     "kod" to status,
                                     "sistema" to message,
+                                    "telefon" to telefon,
+                                    "rezhim" to IshodUstanovki.rezhim(tihaya),
                                 ),
                             )
+                        }
+                        if (mozhetBytPovtor && povtoritSOknom(context, info?.versionCode ?: 0, telefon)) {
+                            return@launch
+                        }
+                        if (mozhetBytPovtor) {
+                            UpdateState.setInstallStatus(UpdateState.InstallStatus.Failed(IshodUstanovki.tekst(prichina), prichina))
                         }
                         if (prichina == OtkazUstanovki.BITYY_FAYL) {
                             // Файл, который система не разобрала, второй раз ставить бессмысленно.
@@ -105,5 +130,35 @@ class InstallResultReceiver : BroadcastReceiver() {
                 }
             }
         }
+    }
+
+    /**
+     * Один немедленный повтор тем же файлом, но с окном подтверждения системы
+     * (IshodUstanovki.povtoritSOknom). Признак «уже пробовали» — номер версии в Settings:
+     * второй отказ той же версии идёт обычным путём (напоминание раз в сутки).
+     * false — повтора не было (уже пробовали, нет файла или сессия не создалась).
+     */
+    private fun povtoritSOknom(context: Context, versionCodeIzSvedeniy: Int, telefon: String): Boolean {
+        val apk = UpdateState.cachedApkFile.value ?: Settings.cachedApkPath.takeIf { it.isNotEmpty() }?.let { java.io.File(it) }
+        if (apk == null || !apk.exists() || apk.length() <= 0L) {
+            Log.w(TAG_ISHOD, "повтор с окном невозможен: файла обновления нет")
+            return false
+        }
+        // Сведения о версии могли не подняться (свежий процесс) — тогда номер из имени файла.
+        val versionCode = versionCodeIzSvedeniy.takeIf { it > 0 } ?: IshodUstanovki.versiyaIzImeni(apk.name)
+        // Номер не узнать — признак не поставить; зацикливания всё равно нет: сессия с окном
+        // приходит с EXTRA_TIHAYA=false и второй раз не повторяется.
+        if (versionCode > 0 && Settings.updatePovtorSOknom == versionCode) {
+            Log.i(TAG_ISHOD, "повтор с окном для этой версии уже был, второй раз не повторяю")
+            return false
+        }
+        // Признак ставится ДО повтора: если процесс умрёт посреди сессии, второго круга не будет.
+        Settings.updatePovtorSOknom = versionCode
+        Log.i(TAG_ISHOD, "тихая установка отклонена проверкой системы, повторяю с окном подтверждения, телефон $telefon")
+        runCatching { Zapisi.zapisat("obnovlenie", mapOf("ishod" to "povtor_s_oknom", "telefon" to telefon)) }
+        UpdateState.setInstallStatus(UpdateState.InstallStatus.Installing)
+        return runCatching { SystemPackageInstaller.install(context.applicationContext, apk, sOknom = true) }
+            .onFailure { e -> Log.w(TAG_ISHOD, "повтор с окном не начался: ${e.message}") }
+            .isSuccess
     }
 }

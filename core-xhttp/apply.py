@@ -98,6 +98,11 @@ def main():
         )
     for name in ("xhttp.go", "range.go"):
         shutil.copy2(os.path.join(HERE, name), os.path.join(core, "option", name))
+    # помощник правки 7 (ChaCha первым в Reality), см. ниже
+    shutil.copy2(
+        os.path.join(HERE, "tls", "kelevra_reality_chacha.go"),
+        os.path.join(core, "common", "tls", "kelevra_reality_chacha.go"),
+    )
 
     # 2. константа типа транспорта
     patch(
@@ -217,6 +222,188 @@ def main():
     )
 
     print("паника rule_set при пересборке ядра: правка наложена")
+
+    # --------------------------------------------------------------------------------
+    # 6. Reality: X25519MLKEM768 в ClientHello — только по признаку в профиле.
+    #
+    # Xray-core с v26.9.8 (XTLS/REALITY 8cdf7bf9, 08.09.2026) отвергает ClientHello без
+    # ключа X25519MLKEM768 перед X25519: сервер молча уводит соединение на цель, клиент
+    # пишет `reality verification failed`. Апстрим sing-box (по v1.14.3 включительно)
+    # вырезает этот ключ из ClientHello ВСЕГДА — sing-box#4520, открыт с 11.09.2026.
+    #
+    # Новое рукопожатие включается не всем сразу, а выходу, у которого в профиле стоит
+    # признак `tls.reality.support_x25519mlkem768: true` — то же поле и тот же смысл, что
+    # в sing-box-extended («не вырезать ключ»). Без признака работает код апстрима как
+    # есть: ClientHello такой же, как у ядра без правки (тест
+    # tests/reality_priznak_clienthello_test.go сверяет с пресетом uTLS по каждому полю).
+    #
+    # Почему поле, а не «всегда»: опции разбираются с DisallowUnknownFields, старое ядро
+    # (без этой правки) на незнакомом поле падает целиком. Поэтому сервер пишет признак
+    # только клиентам, которые его знают (по User-Agent), и только тем людям и
+    # устройствам, кому новое рукопожатие включено — кольцом, без выпуска.
+    #
+    # С признаком — перенос коммита iskhakovt/sing-box@dfd19d104fd1dbed9428694e166bf79283c73686
+    # (предложен в #4520, апстрим не принял на 20.10.2026; взят по SHA, не по ветке):
+    # X25519MLKEM768 остаётся, только когда отпечаток шлёт И группу, И ключ (chrome:
+    # GREASE, X25519MLKEM768, X25519 — как настоящий Chrome и Xray). Если одно без
+    # другого (randomized выбирает их независимо) или отпечаток ML-KEM не шлёт вовсе
+    # (firefox/safari/edge/ios/qq в metacubex/utls) — вырезается, как у апстрима: группа
+    # без ключа даёт HelloRetryRequest, который REALITY не передаёт; ключ без группы
+    # запрещён RFC 8446 §4.2.8. Сессия по-прежнему запечатывается отдельным ключом
+    # X25519 (KeyShareKeys.Ecdhe), его понимают все версии сервера.
+    #
+    # Чем платим (только с признаком): сервер без поддержки X25519MLKEM768 (Xray до
+    # v25.5.16, sing-box до 1.12) с отпечатком chrome не пустит, если цель выберет
+    # ML-KEM. У нас Xray 26.3.27 — таблица в #4520: ✓ с правкой и без.
+    # --------------------------------------------------------------------------------
+    patch(
+        os.path.join(core, "option", "tls.go"),
+        [(
+            "type OutboundRealityOptions struct {\n"
+            "\tEnabled   bool   `json:\"enabled,omitempty\"`\n"
+            "\tPublicKey string `json:\"public_key,omitempty\"`\n"
+            "\tShortID   string `json:\"short_id,omitempty\"`\n"
+            "}\n",
+            "type OutboundRealityOptions struct {\n"
+            "\tEnabled   bool   `json:\"enabled,omitempty\"`\n"
+            "\tPublicKey string `json:\"public_key,omitempty\"`\n"
+            "\tShortID   string `json:\"short_id,omitempty\"`\n"
+            "\t// Kelevra (core-xhttp/apply.py, правка 6): не вырезать X25519MLKEM768 из\n"
+            "\t// ClientHello (имя и смысл — как в sing-box-extended).\n"
+            "\tSupportX25519MLKEM768 bool `json:\"support_x25519mlkem768,omitempty\"`\n"
+            "}\n",
+        )],
+    )
+    rc = os.path.join(core, "common", "tls", "reality_client.go")
+    patch(
+        rc,
+        [
+            (
+                "\tpublicKey []byte\n"
+                "\tshortID   [8]byte\n"
+                "}\n",
+                "\tpublicKey []byte\n"
+                "\tshortID   [8]byte\n"
+                "\t// Kelevra (core-xhttp/apply.py, правка 6): reality.support_x25519mlkem768\n"
+                "\tkelevraMLKEM bool\n"
+                "}\n",
+            ),
+            (
+                "&RealityClientConfig{ctx, uClient.(*UTLSClientConfig), publicKey, shortID}",
+                "&RealityClientConfig{ctx, uClient.(*UTLSClientConfig), publicKey, shortID, options.Reality.SupportX25519MLKEM768}",
+            ),
+            (
+                "\t\te.uClient.Clone().(*UTLSClientConfig),\n"
+                "\t\te.publicKey,\n"
+                "\t\te.shortID,\n"
+                "\t}\n",
+                "\t\te.uClient.Clone().(*UTLSClientConfig),\n"
+                "\t\te.publicKey,\n"
+                "\t\te.shortID,\n"
+                "\t\te.kelevraMLKEM,\n"
+                "\t}\n",
+            ),
+            (
+                "\tfor _, extension := range uConn.Extensions {\n"
+                "\t\tif ce, ok := extension.(*utls.SupportedCurvesExtension); ok {\n"
+                "\t\t\tce.Curves = common.Filter(ce.Curves, func(curveID utls.CurveID) bool {\n"
+                "\t\t\t\treturn curveID != utls.X25519MLKEM768\n"
+                "\t\t\t})\n"
+                "\t\t}\n"
+                "\t\tif ks, ok := extension.(*utls.KeyShareExtension); ok {\n"
+                "\t\t\tks.KeyShares = common.Filter(ks.KeyShares, func(share utls.KeyShare) bool {\n"
+                "\t\t\t\treturn share.Group != utls.X25519MLKEM768\n"
+                "\t\t\t})\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\terr = uConn.BuildHandshakeState()\n"
+                "\tif err != nil {\n"
+                "\t\treturn nil, err\n"
+                "\t}\n",
+                "\t// Kelevra (core-xhttp/apply.py, правка 6): X25519MLKEM768 остаётся, только когда\n"
+                "\t// профиль просит (reality.support_x25519mlkem768) и отпечаток шлёт и группу, и\n"
+                "\t// ключ. Иначе — код апстрима как есть: ClientHello как у ядра без правки.\n"
+                "\tvar mlkemCurve, mlkemKeyShare bool\n"
+                "\tif e.kelevraMLKEM {\n"
+                "\t\tfor _, extension := range uConn.Extensions {\n"
+                "\t\t\tswitch ext := extension.(type) {\n"
+                "\t\t\tcase *utls.SupportedCurvesExtension:\n"
+                "\t\t\t\tmlkemCurve = common.Contains(ext.Curves, utls.X25519MLKEM768)\n"
+                "\t\t\tcase *utls.KeyShareExtension:\n"
+                "\t\t\t\tmlkemKeyShare = common.Any(ext.KeyShares, func(share utls.KeyShare) bool {\n"
+                "\t\t\t\t\treturn share.Group == utls.X25519MLKEM768\n"
+                "\t\t\t\t})\n"
+                "\t\t\t}\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\t// Группа без ключа даёт HelloRetryRequest, который REALITY не передаёт;\n"
+                "\t// ключ без группы запрещён RFC 8446 4.2.8 — тогда вырезаем, как апстрим.\n"
+                "\tif !mlkemCurve || !mlkemKeyShare {\n"
+                "\t\tfor _, extension := range uConn.Extensions {\n"
+                "\t\t\tif ce, ok := extension.(*utls.SupportedCurvesExtension); ok {\n"
+                "\t\t\t\tce.Curves = common.Filter(ce.Curves, func(curveID utls.CurveID) bool {\n"
+                "\t\t\t\t\treturn curveID != utls.X25519MLKEM768\n"
+                "\t\t\t\t})\n"
+                "\t\t\t}\n"
+                "\t\t\tif ks, ok := extension.(*utls.KeyShareExtension); ok {\n"
+                "\t\t\t\tks.KeyShares = common.Filter(ks.KeyShares, func(share utls.KeyShare) bool {\n"
+                "\t\t\t\t\treturn share.Group != utls.X25519MLKEM768\n"
+                "\t\t\t\t})\n"
+                "\t\t\t}\n"
+                "\t\t}\n"
+                "\t\terr = uConn.BuildHandshakeState()\n"
+                "\t\tif err != nil {\n"
+                "\t\t\treturn nil, err\n"
+                "\t\t}\n"
+                "\t}\n",
+            ),
+        ],
+    )
+
+    print("reality: X25519MLKEM768 в ClientHello по признаку support_x25519mlkem768: правка наложена")
+
+    # --------------------------------------------------------------------------------
+    # 7. Reality: ChaCha20-Poly1305 первым, когда в ClientHello есть X25519MLKEM768.
+    #
+    # Правка 6 (по признаку) оставляет X25519MLKEM768 у chrome, и ClientHello становится
+    # таким же, как у настоящего Chrome на процессоре с AES: AES-GCM первым в
+    # шифрах. Замер 23.10.2026 на домашней линии (51 пачка, после каждой — контроль
+    # без ML-KEM): именно этот вид — chrome + ML-KEM + AES первым — режется окнами
+    # по нескольку минут (0-1 из 10 рукопожатий, и в sing-box, и в голом uTLS без
+    # Reality). Тот же chrome + ML-KEM с ChaCha20 первым проходит 100% к тем же
+    # узлам и портам; положение SNI и число TCP-сегментов роли не играют.
+    #
+    # Порядок берём как у BoringSSL на процессоре без ускорения AES (ChaCha первым
+    # и в TLS 1.3, и в TLS 1.2) — такой ClientHello Chrome шлёт в природе, набор
+    # шифров тот же, меняется только порядок. Сервер Reality (Xray) говорит только
+    # TLS 1.3, ему годится любой шифр из списка; какой выбрать, решает цель.
+    #
+    # Привязка. ChaCha первым ровно тогда, когда правка 6 оставила X25519MLKEM768 (то
+    # есть у выхода в профиле признак support_x25519mlkem768, а отпечаток шлёт группу и
+    # ключ) и отпечаток из семейства Chromium. Без признака, а также без ML-KEM
+    # (randomized его выкинул, firefox/safari его не шлют) ClientHello не меняется.
+    # Отдельного поля нет: ML-KEM с AES первым режется, включать одно без другого
+    # незачем, а выключается всё вместе — снятием признака на сервере.
+    # --------------------------------------------------------------------------------
+    patch_v_funkcii(
+        os.path.join(core, "common", "tls", "reality_client.go"),
+        [(
+            "func (e *RealityClientConfig) ClientHandshake(",
+            "\tif len(uConfig.NextProtos) > 0 {\n",
+            "\t// Kelevra (core-xhttp/apply.py, правка 7): с X25519MLKEM768 у отпечатков\n"
+            "\t// Chromium ChaCha20-Poly1305 идёт первым (kelevra_reality_chacha.go).\n"
+            "\tif kelevraRealityChaCha(uConn, e.uClient.id, mlkemCurve && mlkemKeyShare) {\n"
+            "\t\terr = uConn.BuildHandshakeState()\n"
+            "\t\tif err != nil {\n"
+            "\t\t\treturn nil, err\n"
+            "\t\t}\n"
+            "\t}\n"
+            "\n"
+            "\tif len(uConfig.NextProtos) > 0 {\n",
+        )],
+    )
+
+    print("reality: ChaCha20 первым при X25519MLKEM768 у chrome: правка наложена")
 
 
 if __name__ == "__main__":

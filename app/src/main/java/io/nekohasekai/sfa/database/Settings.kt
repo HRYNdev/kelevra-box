@@ -271,6 +271,8 @@ object Settings {
     var lastShownUpdateVersion by dataStore.int(SettingsKey.LAST_SHOWN_UPDATE_VERSION) { 0 }
     /** Отказы установки подряд на одну версию, «номер версии:отказов». */
     var updateInstallFailures by dataStore.string(SettingsKey.UPDATE_INSTALL_FAILURES) { "" }
+    /** Номер версии, для которой уже был повтор установки с окном после VERIFICATION_FAILURE. */
+    var updatePovtorSOknom by dataStore.int(SettingsKey.UPDATE_POVTOR_S_OKNOM) { 0 }
 
     fun serviceClass(): Class<*> = when (serviceMode) {
         ServiceMode.VPN -> VPNService::class.java
