@@ -18,8 +18,8 @@
 set -euo pipefail
 
 REPO=${OPENFLUX_REPO:-git@github.com:HRYNdev/openflux-wbchat.git}
-TAG=wbchat-11
-COMMIT=bbb5a571b68ebe46799a3880cd815e1919bd98bc
+TAG=wbchat-12
+COMMIT=337c9a0b0da70d9387c7ef19682183e126a137e9
 ABIS=${ABIS:-"arm64-v8a x86_64 armeabi-v7a"}
 GO=${GO:-go}
 NDK=${ANDROID_NDK_HOME:?ANDROID_NDK_HOME не задан}

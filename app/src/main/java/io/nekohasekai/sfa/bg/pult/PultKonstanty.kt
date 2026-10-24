@@ -19,6 +19,9 @@ object PultKonstanty {
     private fun vykl(imya: String, opisanie: String, gde: String) =
         Klyuch("vykl.$imya", Tip.LOGICH, false, opisanie = opisanie, gde = gde)
 
+    private fun logich(imya: String, umolch: Boolean, opisanie: String, gde: String) =
+        Klyuch(imya, Tip.LOGICH, umolch, opisanie = opisanie, gde = gde)
+
     /** Имя хоста (домен без схемы). */
     val DOMEN = Regex("""^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$""")
 
@@ -71,6 +74,9 @@ object PultKonstanty {
         c("uzel.node_measurement_fresh_millis", 30000, 3000, 300000, "Сколько замер разового опроса путей (nodeMeasured) считается свежим, мс", "AutoMode.NODE_MEASUREMENT_FRESH_MILLIS"),
         c("avtomat.port_silence_gap_millis", 10000, 1000, 100000, "Второй пик молчания порта не раньше чем через столько после первого, мс", "AutoMode.PORT_SILENCE_GAP_MILLIS"),
         c("avtomat.port_silence_stale_millis", 120000, 12000, 1200000, "Давнее молчание порта за первый пик не считаем, мс", "AutoMode.PORT_SILENCE_STALE_MILLIS"),
+        c("avtomat.otkaz_mgnovennyy_millis", 1500, 150, 15000, "Отказ (RST) узла основного быстрее этого — мгновенный: так режет белый список у МегаФона, мс", "AutoMode.OTKAZ_MGNOVENNYY_MILLIS"),
+        c("avtomat.otkaz_perezamer_millis", 10000, 1000, 100000, "Узел отказывает мгновенно, а прошлый замер режима видел отказ всех неразрешённых без контроля — переспросить не раньше, мс", "AutoMode.OTKAZ_PEREZAMER_MILLIS"),
+        c("avtomat.room_trial_after_belyy", 1, 1, 4, "Сколько провалов основного при свежей подсказке «белый список» до пробного подъёма комнаты (сначала WB)", "AutoMode.ROOM_TRIAL_AFTER_WHITELIST"),
         c("corelog.okno_svodki_ms", 600000, 60000, 6000000, "Сводка за окно: сколько соединений, сколько отказов и каких, мс", "CoreLog.OKNO_SVODKI_MS"),
         c("corelog.dolya_trevogi", 15, 1, 100, "С какой доли отказов окно считается бедой и просит отправку, %", "CoreLog.DOLYA_TREVOGI"),
         c("corelog.bystro_okno_ms", 30000, 3000, 300000, "Короткое окно для шторма, рядом с десятиминутным, мс", "CoreLog.BYSTRO_OKNO_MS"),
@@ -97,6 +103,7 @@ object PultKonstanty {
         c("proba.direct_connect_timeout_millis", 4000, 400, 40000, "Прямое соединение до цели: столько ждём ответа на SYN, мс", "HonestProbe.DIRECT_CONNECT_TIMEOUT_MILLIS"),
         c("proba.quiet_millis", 2000, 200, 20000, "К одному имени — не чаще раза в это время, мс", "HonestProbe.QUIET_MILLIS"),
         c("proba.name_budget_millis", 1500, 150, 15000, "Сколько ждём адрес цели своим резолвером, прежде чем спросить систему, мс", "HonestProbe.NAME_BUDGET_MILLIS"),
+        c("proba.wb_timeout_millis", 4000, 400, 40000, "Ожидание ответа в пробе живости комнаты WB; пол min_timeout_millis на неё не распространяется, мс", "WbChatCore.WB_PROBE_TIMEOUT_MILLIS"),
         c("skorost.entry_timeout_millis", 2000, 200, 20000, "Вход на петле: не ответил за две секунды — его там нет, мс", "SpeedProbe.ENTRY_TIMEOUT_MILLIS"),
         c("skorost.read_timeout_millis", 8000, 800, 80000, "Ждём каждую порцию, мс", "SpeedProbe.READ_TIMEOUT_MILLIS"),
         c("skorost.budget_millis", 15000, 1500, 150000, "Дольше этого замер не тянем: ответ «медленно» уже получен, мс", "SpeedProbe.BUDGET_MILLIS"),
@@ -112,6 +119,8 @@ object PultKonstanty {
         c("komnata.storozh.max_restarts", 5, 1, 20, "Столько подъёмов подряд идут по нарастающей паузе; дальше — редкие попытки", "OlcRtcWatchdog.MAX_RESTARTS"),
         c("komnata.storozh.rare_retry_millis", 120000, 12000, 1200000, "Пауза между редкими попытками, когда частые кончились, мс", "OlcRtcWatchdog.RARE_RETRY_MILLIS"),
         c("komnata.storozh.healthy_reset_millis", 120000, 12000, 1200000, "Сколько канал должен продержаться живым, чтобы забыть прошлые подъёмы, мс", "OlcRtcWatchdog.HEALTHY_RESET_MILLIS"),
+        c("komnata.storozh.grace_millis", 180000, 18000, 1800000, "Окно «встаёт» от Ready: пока через комнату не прошла ни одна проба, не перезапускаем и выход не уводим, мс", "OlcRtcWatchdog.GRACE_MILLIS"),
+        c("komnata.storozh.failures_unproven", 6, 1, 24, "Столько отказов без единой удачи после окна «встаёт» считаем смертью комнаты", "OlcRtcWatchdog.FAILURES_UNPROVEN"),
         c("komnata.yadro.default_ready_timeout_millis", 25000, 2500, 250000, "Сколько ждём готовности одной попытки, мс", "OlcRtcCore.DEFAULT_READY_TIMEOUT_MILLIS"),
         c("komnata.yadro.default_attempts", 3, 1, 12, "Сколько раз пробуем", "OlcRtcCore.DEFAULT_ATTEMPTS"),
         c("komnata.yadro.default_retry_pause_millis", 5000, 500, 50000, "Пауза между попытками: дать ноге дойти до следующего захода, мс", "OlcRtcCore.DEFAULT_RETRY_PAUSE_MILLIS"),
@@ -159,7 +168,20 @@ object PultKonstanty {
         vykl("otkazy_uzla", "отказы соединений через узел не будят автомат", "CoreLog.otkazUzla"),
         vykl("puls", "без заголовка X-Sostoyanie", "Kelevra.deviceHeaders"),
         vykl("opros_sluzhby", "служба не опрашивает /info сама (остаётся расписание профиля)", "PultSvyaz"),
+        vykl("otkaz_kak_belyy", "отказ (RST) узла и всех неразрешённых адресов при живом контроле не считается белым списком (как до 24.10)", "AutoMode.mainWorks / NetworkModeDecision.refusedWhitelist"),
+        vykl("belyy_bez_okna", "провал основного в окне смены сети не засчитывается и при подсказке «белый список» (как до 24.10)", "AutoMode.failureCounts"),
+        vykl("wb_srazu", "при заведомо мёртвом основном на живую комнату WB — по полным подтверждениям, а не с одной пробы (как до 24.10)", "AutoMode.wbProven"),
+        vykl("pustoy_port", "принятое узлом соединение без прошедшего канала по-прежнему считается ответом узла (как до 24.10)", "AutoMode.hollowPort"),
     )
 
-    val KLYUCHI: List<Klyuch> = CHISLA + SPISKI + VYKLYUCHATELI
+    /**
+     * Включатели нового поведения: по умолчанию выключены, мозг включает их по устройствам.
+     * `avtomat.wb_kandidat` — решение 24.10.2026: под белыми списками автомат пробует комнату WB
+     * раньше Телемоста (порядок дома → основной → комната WB → Телемост → поиск).
+     */
+    private val VKLYUCHATELI: List<Klyuch> = listOf(
+        logich("avtomat.wb_kandidat", false, "автомат пробует комнату WB раньше Телемоста, когда основной канал не поднимается", "AutoMode.trialRaiseWb"),
+    )
+
+    val KLYUCHI: List<Klyuch> = CHISLA + SPISKI + VYKLYUCHATELI + VKLYUCHATELI
 }

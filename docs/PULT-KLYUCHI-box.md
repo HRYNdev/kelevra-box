@@ -9,6 +9,8 @@
 | `avtomat.hint_ttl_millis` | int | 30000–3000000 | 300000 | Сколько живёт подсказка про режим сети, мс | AutoMode.HINT_TTL_MILLIS |
 | `avtomat.manual_hold_millis` | int | 360000–36000000 | 3600000 | Сколько живёт выбор, сделанный руками, если сеть под нами так и не сменилась, мс | AutoMode.MANUAL_HOLD_MILLIS |
 | `avtomat.node_answer_trust_millis` | int | 9000–900000 | 90000 | Сколько ответ узла считается свежим доводом, мс | AutoMode.NODE_ANSWER_TRUST_MILLIS |
+| `avtomat.otkaz_mgnovennyy_millis` | int | 150–15000 | 1500 | Отказ (RST) узла основного быстрее этого — мгновенный: так режет белый список у МегаФона, мс | AutoMode.OTKAZ_MGNOVENNYY_MILLIS |
+| `avtomat.otkaz_perezamer_millis` | int | 1000–100000 | 10000 | Узел отказывает мгновенно, а прошлый замер режима видел отказ всех неразрешённых без контроля — переспросить не раньше, мс | AutoMode.OTKAZ_PEREZAMER_MILLIS |
 | `avtomat.podtverzhdeniy` | int | 1–10 | 3 | сколько одинаковых наблюдений подряд меняют обстановку | AutoMode.CONFIRMATIONS |
 | `avtomat.port_silence_gap_millis` | int | 1000–100000 | 10000 | Второй пик молчания порта не раньше чем через столько после первого, мс | AutoMode.PORT_SILENCE_GAP_MILLIS |
 | `avtomat.port_silence_stale_millis` | int | 12000–1200000 | 120000 | Давнее молчание порта за первый пик не считаем, мс | AutoMode.PORT_SILENCE_STALE_MILLIS |
@@ -18,6 +20,7 @@
 | `avtomat.room_peek_max_millis` | int | 4000–400000 | 40000 | Верхняя граница паузы приглядки из комнаты, мс | AutoMode.ROOM_PEEK_MAX_MILLIS |
 | `avtomat.room_peek_min_millis` | int | 2000–200000 | 20000 | Приглядка из комнаты: разброс паузы между дешёвыми пробами узла, мс | AutoMode.ROOM_PEEK_MIN_MILLIS |
 | `avtomat.room_peek_timeout_millis` | int | 250–25000 | 2500 | Потолок ожидания приглядки, мс | AutoMode.ROOM_PEEK_TIMEOUT_MILLIS |
+| `avtomat.room_trial_after_belyy` | int | 1–4 | 1 | Сколько провалов основного при свежей подсказке «белый список» до пробного подъёма комнаты (сначала WB) | AutoMode.ROOM_TRIAL_AFTER_WHITELIST |
 | `avtomat.room_trial_pause_cap_millis` | int | 60000–6000000 | 600000 | Комната не встаёт — паузу растим, чтобы не жечь батарею попытками в пустоту, мс | AutoMode.ROOM_TRIAL_PAUSE_CAP_MILLIS |
 | `avtomat.room_trial_pause_millis` | int | 6000–600000 | 60000 | Начальная пауза между пробными подъёмами комнаты, мс | AutoMode.ROOM_TRIAL_PAUSE_MILLIS |
 | `avtomat.round_home_millis` | int | 30000–3000000 | 300000 | Полный заход дома, мс | AutoMode.ROUND_HOME_MILLIS |
@@ -32,6 +35,7 @@
 | `avtomat.silent_recheck_rounds` | int | 1–40 | 10 | Сколько быстрых перепроверок подряд на молчании резолверов | AutoMode.SILENT_RECHECK_ROUNDS |
 | `avtomat.tcp_timeout_millis` | int | 400–40000 | 4000 | Потолок ожидания рукопожатия с узлом основного канала, мс | AutoMode.TCP_TIMEOUT_MILLIS |
 | `avtomat.tishina_rezolvera_min` | int | 1–120 | 15 | сколько держим вердикт, пока резолверы молчат, мин | AutoMode.SILENCE_HOLD_MILLIS |
+| `avtomat.wb_kandidat` | bool | — | false | автомат пробует комнату WB раньше Телемоста, когда основной канал не поднимается | AutoMode.trialRaiseWb |
 | `belyj_spisok.domeny` | список | ≤ 5000 строк, домен | из кода | белый список оператора: домены напрямую (заменяет вшитый в APK) | BelyjSpisok.domeny |
 | `belyj_spisok.podseti` | список | ≤ 5000 строк, подсеть CIDR | из кода | белый список оператора: подсети напрямую (заменяет вшитый в APK) | BelyjSpisok.podseti |
 | `corelog.bystro_dolya` | int | 1–100 | 50 | И какая при этом доля: сотня отказов на десятках тысяч соединений — не шторм, % | CoreLog.BYSTRO_DOLYA |
@@ -55,6 +59,8 @@
 | `kanal.dolgiy_opros` | bool | — | false | долгий опрос …/pult/zhdat из службы (мгновенные команды) | PultSvyaz |
 | `komnata.storozh.check_interval_millis` | int | 500–50000 | 5000 | Как часто спрашиваем канал, мс | OlcRtcWatchdog.CHECK_INTERVAL_MILLIS |
 | `komnata.storozh.failures_before_restart` | int | 1–12 | 3 | Столько отказов подряд считаем смертью комнаты, а не её пересборкой | OlcRtcWatchdog.FAILURES_BEFORE_RESTART |
+| `komnata.storozh.failures_unproven` | int | 1–24 | 6 | Столько отказов без единой удачи после окна «встаёт» считаем смертью комнаты | OlcRtcWatchdog.FAILURES_UNPROVEN |
+| `komnata.storozh.grace_millis` | int | 18000–1800000 | 180000 | Окно «встаёт» от Ready: пока через комнату не прошла ни одна проба, не перезапускаем и выход не уводим, мс | OlcRtcWatchdog.GRACE_MILLIS |
 | `komnata.storozh.healthy_reset_millis` | int | 12000–1200000 | 120000 | Сколько канал должен продержаться живым, чтобы забыть прошлые подъёмы, мс | OlcRtcWatchdog.HEALTHY_RESET_MILLIS |
 | `komnata.storozh.max_restarts` | int | 1–20 | 5 | Столько подъёмов подряд идут по нарастающей паузе; дальше — редкие попытки | OlcRtcWatchdog.MAX_RESTARTS |
 | `komnata.storozh.rare_retry_millis` | int | 12000–1200000 | 120000 | Пауза между редкими попытками, когда частые кончились, мс | OlcRtcWatchdog.RARE_RETRY_MILLIS |
@@ -75,6 +81,7 @@
 | `proba.min_timeout_millis` | int | 1200–120000 | 12000 | Нижняя граница ожидания ответа, мс | HonestProbe.MIN_TIMEOUT_MILLIS |
 | `proba.name_budget_millis` | int | 150–15000 | 1500 | Сколько ждём адрес цели своим резолвером, прежде чем спросить систему, мс | HonestProbe.NAME_BUDGET_MILLIS |
 | `proba.quiet_millis` | int | 200–20000 | 2000 | К одному имени — не чаще раза в это время, мс | HonestProbe.QUIET_MILLIS |
+| `proba.wb_timeout_millis` | int | 400–40000 | 4000 | Ожидание ответа в пробе живости комнаты WB; пол min_timeout_millis на неё не распространяется, мс | WbChatCore.WB_PROBE_TIMEOUT_MILLIS |
 | `rezhim_seti.bulk_budget_millis` | int | 600–60000 | 6000 | Сколько всего смотрим на поток, даже если он исправно течёт, мс | NetworkModeDetector.BULK_BUDGET_MILLIS |
 | `rezhim_seti.bulk_bytes` | int | 8192–524288 | 65536 | Сколько байт хотим прокачать, байт | NetworkModeDetector.BULK_BYTES |
 | `rezhim_seti.control_confident_tries` | int | 1–10 | 2 | Столько разрешённых адресов должен перебрать контроль, чтобы его провал считался уверенным | NetworkModeDecision.CONTROL_CONFIDENT_TRIES |
@@ -101,18 +108,22 @@
 | `uzel.uzel_budit_millis` | int | 6000–600000 | 60000 | Не чаще этого отказы узла будят автомат, мс | AutoMode.UZEL_BUDIT_MILLIS |
 | `uzel.uzel_okno_ms` | int | 3000–300000 | 30000 | Окно, в котором считаются отказы через узлы (uzel.porog_otkazov), мс | CoreLog.UZEL_OKNO_MS |
 | `uzel.vozvrat_na_pervyy_min` | int | 1–120 | 4 | через сколько минут на запасном узле пробовать первый | AutoModeNodeWatch.RETURN_AFTER_MILLIS |
+| `vykl.belyy_bez_okna` | bool | — | false | провал основного в окне смены сети не засчитывается и при подсказке «белый список» (как до 24.10) | AutoMode.failureCounts |
 | `vykl.kesh_vybora` | bool | — | false | выбор выхода снова запоминается в кэше ядра | BoxService: CacheSelectPatch |
 | `vykl.nabory_iz_kesha` | bool | — | false | наборы правил не подменяются своим кэшем — ядро тянет их само | BoxService: RuleSetLocalPatch |
 | `vykl.opros_sluzhby` | bool | — | false | служба не опрашивает /info сама (остаётся расписание профиля) | PultSvyaz |
+| `vykl.otkaz_kak_belyy` | bool | — | false | отказ (RST) узла и всех неразрешённых адресов при живом контроле не считается белым списком (как до 24.10) | AutoMode.mainWorks / NetworkModeDecision.refusedWhitelist |
 | `vykl.otkazy_uzla` | bool | — | false | отказы соединений через узел не будят автомат | CoreLog.otkazUzla |
 | `vykl.prismotr_doma` | bool | — | false | без короткой пробы дома между заходами | AutoMode.waitAtHome / HomeWatch |
 | `vykl.prismotr_komnaty` | bool | — | false | без приглядки к основному пути из комнаты | AutoMode.waitInRoom |
 | `vykl.puls` | bool | — | false | без заголовка X-Sostoyanie | Kelevra.deviceHeaders |
+| `vykl.pustoy_port` | bool | — | false | принятое узлом соединение без прошедшего канала по-прежнему считается ответом узла (как до 24.10) | AutoMode.hollowPort |
 | `vykl.skorost` | bool | — | false | без замера скорости основного канала | AutoMode: SpeedProbe |
 | `vykl.storozh_komnaty` | bool | — | false | присмотр за комнатой не запускается | BoxService: OlcRtcWatchdog |
 | `vykl.vhody_proby` | bool | — | false | без своих входов честной пробы (пути не меряются) | BoxService: ProbeInboundPatch |
 | `vykl.vozvrat_zalipshego` | bool | — | false | залипший выбор автомата не возвращается на default | BoxService: AutoModeSticky.release |
 | `vykl.wb_chat` | bool | — | false | ядро WB Chat не поднимается | BoxService: WbChatWatchdog |
+| `vykl.wb_srazu` | bool | — | false | при заведомо мёртвом основном на живую комнату WB — по полным подтверждениям, а не с одной пробы (как до 24.10) | AutoMode.wbProven |
 | `wb.storozh.fails_before_slow` | int | 1–12 | 3 | Неудач подряд до медленных подъёмов WB Chat | WbChatWatchdog.FAILS_BEFORE_SLOW |
 | `wb.storozh.healthy_millis` | int | 6000–600000 | 60000 | Сколько ядро должно простоять готовым, чтобы его смерть не считалась неудачей, мс | WbChatWatchdog.HEALTHY_MILLIS |
 | `wb.storozh.restart_pause_millis` | int | 500–50000 | 5000 | Пауза перед новым подъёмом ядра WB Chat, мс | WbChatWatchdog.RESTART_PAUSE_MILLIS |

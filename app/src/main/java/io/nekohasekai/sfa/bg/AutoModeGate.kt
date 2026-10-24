@@ -77,6 +77,10 @@ internal class AutoModeGate(private val confirmationsOf: () -> Int) {
      * @param hurried наблюдение сделано внутри серии перепроверок после смены сети.
      * @param blind заход ничего не узнал (резолверы промолчали). Обе поблажки выше
      *   отменяются: догадка не становится доказательством оттого, что сеть свежая.
+     * @param proven кандидат доказан делом, а держаться не за что: основной канал заведомо
+     *   мёртв, а через комнату WB прошёл запрос. Хватает одного наблюдения — подтверждать
+     *   нечем, кроме как ещё одним провалом основного (МегаФон 24.10.2026: 56 с от живой WB
+     *   до переключения). Слепой заход этой поблажки тоже не получает.
      * @return true — обстановка сменилась, пора действовать.
      */
     fun offer(
@@ -84,6 +88,7 @@ internal class AutoModeGate(private val confirmationsOf: () -> Int) {
         trust: Boolean = false,
         hurried: Boolean = false,
         blind: Boolean = false,
+        proven: Boolean = false,
     ): Boolean {
         if (observed == current) {
             candidate = observed
@@ -105,6 +110,7 @@ internal class AutoModeGate(private val confirmationsOf: () -> Int) {
             // Слепой заход поблажек не получает — ни за смену сети, ни за серию.
             blind -> confirmations
             trust -> 1
+            proven -> 1
             hurried -> hurriedConfirmations
             else -> confirmations
         }

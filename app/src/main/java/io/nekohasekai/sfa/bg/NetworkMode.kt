@@ -82,7 +82,12 @@ enum class ProbeOutcome {
      */
     Silence,
 
-    /** Явный отказ (RST): на том конце ответили «нет». Это НЕ подпись белого списка. */
+    /**
+     * Явный отказ (RST): на том конце ответили «нет». Один отказ — НЕ подпись белого списка:
+     * так отвечает и закрытый порт. Подписью он становится, только когда отказывают ВСЕ
+     * неразрешённые точки (среди них публичные резолверы, которые 443 не закрывают), а
+     * разрешённый контроль отвечает — см. [NetworkModeDecision.refusedWhitelist].
+     */
     Refused,
 
     /** Сеть/хост недостижимы (ICMP unreachable, нет маршрута). Тоже ответ, тоже не тишина. */
@@ -185,6 +190,7 @@ data class NetworkModeReport(
  * Порядок разбора повторяет порядок проб — от дешёвого к дорогому:
  *  1. нет физической сети → мерить нечего;
  *  2. тишина к неразрешённому + живой контроль → белый список (дальше не идём);
+ *     отказ (RST) от всех неразрешённых + живой контроль → тоже белый список;
  *  3. неразрешённый адрес достижим → смотрим TLS и передачу; TLS к канарейке сломан —
  *     два контрольных рукопожатия отделяют белый список по TLS от DPI;
  *  4. всё остальное → честное «не знаю».
@@ -196,10 +202,12 @@ object NetworkModeDecision {
         return when (signals.tcpUnlisted) {
             ProbeOutcome.Silence -> silence(signals)
             ProbeOutcome.Ok -> reachable(signals)
-            // Отказ и недостижимость — это ОТВЕТ, а под белым списком ответа не бывает.
-            // Значит точно не он. Но и TLS проверять негде: порт нам не отдали.
+            // Отказ всех неразрешённых точек — белый список с RST, если контроль жив
+            // ([refusedWhitelist]). Иначе это ответ, и TLS проверять негде: порт нам не отдали.
+            ProbeOutcome.Refused -> if (refusedWhitelist(signals)) NetworkMode.Whitelist else NetworkMode.Unknown
+            // Недостижимость — это ОТВЕТ, а под белым списком по тишине ответа не бывает.
             // Честный итог — «не знаю», а не «норма»: мишень пробы сломана, не сеть.
-            ProbeOutcome.Refused, ProbeOutcome.Unreachable -> NetworkMode.Unknown
+            ProbeOutcome.Unreachable -> NetworkMode.Unknown
             else -> NetworkMode.Unknown
         }
     }
@@ -216,6 +224,23 @@ object NetworkModeDecision {
         // Различить нечем — значит не различаем.
         else -> NetworkMode.Unknown
     }
+
+    /**
+     * Белый список, который режет не тишиной, а отказом: все неразрешённые точки ответили RST,
+     * а разрешённый контроль принял соединение.
+     *
+     * Повод — МегаФон 24.10.2026: под белым списком соединение с узлом основного канала
+     * получало «connection refused» за 0,0 с, а определитель по старому правилу «отказ — это
+     * ответ» выдавал «не знаю», и автомат ждал до 85 с, прежде чем поднять комнату. В обычной
+     * сети так не бывает: неразрешённые точки — наш VPS и два публичных резолвера, и 443 у
+     * резолверов открыт всегда; лежащий VPS отказывает один, резолверы при этом отвечают —
+     * а «молчат не все» сюда не доходит ([NetworkModeDetector] отдаёт отказ, только если
+     * отказали все). Без живого контроля — «не знаю»: так же выглядит сеть, где отказывает всё.
+     * Выключатель `vykl.otkaz_kak_belyy` возвращает старое «отказ — не подпись».
+     */
+    fun refusedWhitelist(signals: NetworkSignals): Boolean =
+        signals.tcpUnlisted == ProbeOutcome.Refused && signals.tcpAllowed == ProbeOutcome.Ok &&
+            !Pult.vykl("otkaz_kak_belyy")
 
     /**
      * TCP доходит куда угодно — белого списка нет. Остаётся отличить норму от DPI,
@@ -341,7 +366,9 @@ object NetworkModeDecision {
     /** Короткое «почему так» для отчёта и лога. */
     fun explain(mode: NetworkMode, signals: NetworkSignals): String = when (mode) {
         NetworkMode.NoNetwork -> "физической сети под нами нет"
-        NetworkMode.Whitelist -> if (signals.tcpUnlisted == ProbeOutcome.Ok && signals.bulkUnlisted != ProbeOutcome.Skipped) {
+        NetworkMode.Whitelist -> if (signals.tcpUnlisted == ProbeOutcome.Refused) {
+            "все неразрешённые адреса отвечают отказом (RST), разрешённый отвечает"
+        } else if (signals.tcpUnlisted == ProbeOutcome.Ok && signals.bulkUnlisted != ProbeOutcome.Skipped) {
             "TCP и рукопожатие к неразрешённому проходят, но поток встаёт на ${signals.bulkUnlistedBytes} Б " +
                 "(${signals.bulkUnlisted}), с разрешённого идёт (${signals.bulkAllowedBytes} Б)"
         } else if (signals.tcpUnlisted == ProbeOutcome.Ok) {

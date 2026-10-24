@@ -76,6 +76,13 @@ object PathWords {
             else -> "Комната не отвечает"
         }
 
+        // Автомат стоит на комнате WB (под белым списком она первая, Телемост запасной).
+        chosen == PathId.WB -> when (snapshot[PathId.WB].status) {
+            PathStatus.Alive -> "Комната WB"
+            PathStatus.Raising, PathStatus.Probing, PathStatus.Unknown -> "Подъём комнаты WB"
+            else -> "Комната WB не отвечает"
+        }
+
         // Выход выбрал человек: автомат отошёл до смены сети, но мерить пришпиленный
         // путь никто не запрещал. Раньше здесь просто повторяли выбранное имя — и
         // получалось, что шторка радостно писала «Нидерланды», хотя честная проба
@@ -101,6 +108,50 @@ object PathWords {
         snapshot[PathId.MAIN].refused && !snapshot[PathId.HOME].usable -> "Поиск пути"
 
         else -> "Проверка связи"
+    }
+
+    /**
+     * Круг на главном экране, когда стоим на комнате WB. Слова короче, чем у Телемоста:
+     * «Комната WB не отвечает» вылезало бы за обод круга так же, как вылезало у комнаты.
+     *
+     * @param rising комната ещё не поднялась и не отказала.
+     * @param dead комната действительно отказалась.
+     * @return `null` — комната живая, надпись общая («Подключено»).
+     */
+    fun wbDialTitle(rising: Boolean, dead: Boolean): String? = when {
+        dead -> "WB молчит"
+        rising -> "Подъём WB"
+        else -> null
+    }
+
+    /** Подсказка под кругом для комнаты WB; `null` — сказать нечего. */
+    fun wbDialHint(rising: Boolean, dead: Boolean, auto: Boolean): String? = when {
+        // Как у Телемоста: автомат поднимает комнату снова сам, совет «выберите другой»
+        // уместен только когда выход выбран руками.
+        dead && auto -> "комната WB поднимается заново"
+        dead -> "комната WB не поднялась, выберите другой выход"
+        rising -> "поднимаю канал через звонок WB"
+        else -> null
+    }
+
+    /** Мелкая строка под кругом: «комната WB · 210 мс». */
+    fun wbDialMeta(latencyMs: Long): String =
+        if (latencyMs > 0) "комната WB · $latencyMs мс" else "комната WB"
+
+    /**
+     * Строка выхода «Комната WB» в списке выходов.
+     *
+     * Пока реестр про комнату WB что-то знает (проба прошла, отказала, поднимается) —
+     * говорим его словами, как у остальных путей. Не знает (выход не выбран, присмотр не
+     * идёт) — состояние собственного ядра, как было.
+     *
+     * @param coreText `WbChatCore.statusText()`.
+     */
+    fun wbExitNote(path: PathState, now: Long, coreText: String): String = when (path.status) {
+        PathStatus.Alive, PathStatus.Dead, PathStatus.Raising, PathStatus.Probing ->
+            "WB Chat · " + state(path, now)
+
+        else -> "WB Chat · $coreText"
     }
 
     /**

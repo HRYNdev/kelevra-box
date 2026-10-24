@@ -3,6 +3,8 @@ package io.nekohasekai.sfa.bg
 import android.os.Build
 import android.os.SystemClock
 import io.nekohasekai.sfa.Application
+import io.nekohasekai.sfa.bg.path.HonestProbe
+import io.nekohasekai.sfa.bg.pult.Pult
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -14,7 +16,8 @@ import java.net.Socket
  * состояние и свой рабочий каталог (`filesDir/openflux-wb`): Телемост и WB Chat работают
  * одновременно на разных портах и друг о друге не знают. Ядро поднимает локальный SOCKS5,
  * который в профиле sing-box — отдельный socks-выход (тег с сервера) внутри ручного
- * селектора. Автомат про этот выход не знает: его выбирает человек.
+ * селектора. Его выбирает человек, а под белым списком — и автомат, раньше Телемоста
+ * ([AutoMode.wbWanted], решение 24.10.2026).
  *
  * Ядро само завершается (код 3), когда звонок кончился или оборвался, — это норма:
  * перезапускает его [WbChatWatchdog]. Остановка — SIGTERM (на нём ядро кладёт трубку WB),
@@ -43,6 +46,9 @@ object WbChatCore {
     private const val BINARY = "libopenflux.so"
 
     const val READY_TIMEOUT_MILLIS = 60_000
+
+    /** Ожидание ответа в пробе живости комнаты WB. Коротко — проба держит общий замок проб. */
+    const val WB_PROBE_TIMEOUT_MILLIS = 4_000
 
     private const val STOP_TIMEOUT_MILLIS = 3_000L
 
@@ -213,6 +219,27 @@ object WbChatCore {
         val why = if (!readySeen) "звонок не встал" else "SOCKS не открылся"
         stop()
         return fail("WB Chat не собрался за ${READY_TIMEOUT_MILLIS / 1000} с: $why")
+    }
+
+    /**
+     * Гонит через сокс WB Chat живой запрос и меряет ответ — та же честная проба, что у комнаты
+     * и основного канала ([HonestProbe]). Сокс ядра слушает только петлю, то есть закреплён за
+     * этим выходом по построению. Блокирующий вызов, только с фонового потока.
+     *
+     * Звать — присмотру ([WbChatWatchdog]), и только пока комната WB нужна автомату: в ручном
+     * выборе её никто не мерил и не мерит.
+     */
+    fun probe(): HonestProbe.Measurement {
+        val port = runningParams?.socksPort
+        if (port == null || !isRunning()) return HonestProbe.Measurement.unmeasurable("ядро WB Chat не запущено")
+        // Короткий таймаут и без пола MIN_TIMEOUT_MILLIS: проба держит общий замок [HonestProbe.turn],
+        // и 12 с ожидания застопорили бы пробы основного канала и комнаты. 4 с хватает: сокс на петле.
+        return HonestProbe.measure(
+            AutoModeExits.Endpoint("127.0.0.1", port),
+            "комната WB",
+            timeoutMillis = Pult.int("proba.wb_timeout_millis", WB_PROBE_TIMEOUT_MILLIS),
+            enforceMinTimeout = false,
+        )
     }
 
     /** Ядро было готово, а теперь вышло само: записать причину и вернуть код выхода. */

@@ -301,4 +301,62 @@ class PathWordsTest {
             assertFalse("«$words» обещает связь, которой нет", words.contains("Подключено"))
         }
     }
+
+    // ------------------------------------------------------------ комната WB
+
+    @Test
+    fun `комната WB говорит своим состоянием в шторке`() {
+        PathRegistry.dead(PathId.HOME, "подменных адресов нет")
+
+        PathRegistry.raising(PathId.WB)
+        assertEquals("Подъём комнаты WB", headline(chosen = PathId.WB))
+
+        PathRegistry.alive(PathId.WB, latencyMs = 300)
+        assertEquals("Комната WB", headline(chosen = PathId.WB))
+
+        PathRegistry.dead(PathId.WB, "данных нет")
+        assertEquals("Комната WB не отвечает", headline(chosen = PathId.WB))
+    }
+
+    @Test
+    fun `круг комнаты WB - короткие слова, живая комната молчит`() {
+        assertEquals("Подъём WB", PathWords.wbDialTitle(rising = true, dead = false))
+        assertEquals("WB молчит", PathWords.wbDialTitle(rising = false, dead = true))
+        assertEquals(null, PathWords.wbDialTitle(rising = false, dead = false))
+        // Влезает в обод круга: у Телемоста самое длинное слово - «Комната молчит» (14 знаков).
+        listOf(
+            PathWords.wbDialTitle(true, false),
+            PathWords.wbDialTitle(false, true),
+        ).forEach { assertTrue("«$it» длиннее «Комната молчит»", it!!.length <= "Комната молчит".length) }
+    }
+
+    @Test
+    fun `подсказка под кругом WB - в авто комната поднимается сама, руками - советуем другой выход`() {
+        assertEquals("комната WB поднимается заново", PathWords.wbDialHint(false, true, auto = true))
+        assertEquals("комната WB не поднялась, выберите другой выход", PathWords.wbDialHint(false, true, auto = false))
+        assertEquals("поднимаю канал через звонок WB", PathWords.wbDialHint(true, false, auto = true))
+        assertEquals(null, PathWords.wbDialHint(false, false, auto = true))
+    }
+
+    @Test
+    fun `мелкая строка круга WB - с задержкой и без`() {
+        assertEquals("комната WB · 210 мс", PathWords.wbDialMeta(210))
+        assertEquals("комната WB", PathWords.wbDialMeta(0))
+    }
+
+    @Test
+    fun `строка выхода WB - реестр, если он знает, иначе ядро`() {
+        PathRegistry.alive(PathId.WB, latencyMs = 210)
+        now += 40_000L
+        assertEquals(
+            "WB Chat · работает, 210 мс, 40 секунд назад",
+            PathWords.wbExitNote(snapshot()[PathId.WB], now, "готов"),
+        )
+
+        PathRegistry.dead(PathId.WB, "данных нет")
+        assertTrue(PathWords.wbExitNote(snapshot()[PathId.WB], now, "готов").startsWith("WB Chat · не отвечает"))
+
+        PathRegistry.unchecked(PathId.WB, "комната WB автомату не нужна")
+        assertEquals("WB Chat · не запущен", PathWords.wbExitNote(snapshot()[PathId.WB], now, "не запущен"))
+    }
 }

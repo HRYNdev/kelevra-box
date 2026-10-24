@@ -46,6 +46,8 @@ object AppLifecycleObserver : DefaultLifecycleObserver {
 
     override fun onStart(owner: LifecycleOwner) {
         _isForeground.value = true
+        // Человек открыл приложение — самое время подтянуть правку пульта (не чаще раза в минуту).
+        runCatching { io.nekohasekai.sfa.bg.pult.PultSvyaz.povod("приложение на переднем плане") }
     }
 
     override fun onStop(owner: LifecycleOwner) {

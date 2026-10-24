@@ -103,14 +103,21 @@ class NetworkModeLogicTest {
     }
 
     @Test
-    fun `явный отказ — не подпись белого списка`() {
-        for (control in ProbeOutcome.entries) {
+    fun `явный отказ без живого контроля — не подпись белого списка`() {
+        for (control in ProbeOutcome.entries.filter { it != ProbeOutcome.Ok }) {
             assertNotEquals(
                 "отказ при контроле $control не должен читаться как белый список",
                 NetworkMode.Whitelist,
                 decide(signals(tcpUnlisted = ProbeOutcome.Refused, tcpAllowed = control)),
             )
         }
+    }
+
+    @Test
+    fun `отказ всех неразрешённых при живом контроле — белый список с RST (МегаФон 24-10)`() {
+        val s = signals(tcpUnlisted = ProbeOutcome.Refused, tcpAllowed = ProbeOutcome.Ok)
+        assertEquals(NetworkMode.Whitelist, decide(s))
+        assertTrue(NetworkModeDecision.explain(NetworkMode.Whitelist, s).contains("отказом"))
     }
 
     @Test
@@ -232,7 +239,7 @@ class NetworkModeLogicTest {
      * неразрешённому сломан, TLS к разрешённому прошёл. Любой другой набор — не белый список.
      */
     @Test
-    fun `белый список не объявляется никогда, кроме связки «тишина плюс живой контроль» или «TCP есть, TLS рвут всем, кроме разрешённого»`() {
+    fun `белый список не объявляется никогда, кроме связки «тишина или отказ всех плюс живой контроль» или «TCP есть, TLS рвут всем, кроме разрешённого»`() {
         val broken = setOf(ProbeOutcome.Reset, ProbeOutcome.Stalled)
         val passed = setOf(ProbeOutcome.Ok, ProbeOutcome.Answered)
         for (unlisted in ProbeOutcome.entries) {
@@ -250,11 +257,13 @@ class NetworkModeLogicTest {
                             )
                             if (decide(s) != NetworkMode.Whitelist) continue
                             val bySilence = unlisted == ProbeOutcome.Silence && allowed == ProbeOutcome.Ok
+                            // Белый список с RST (МегаФон 24.10.2026): отказали все неразрешённые.
+                            val byRefusal = unlisted == ProbeOutcome.Refused && allowed == ProbeOutcome.Ok
                             val byTls = unlisted == ProbeOutcome.Ok &&
                                 (canary in broken || canary == ProbeOutcome.Failed) &&
                                 tlsUnlisted in broken &&
                                 tlsAllowed in passed
-                            assertTrue("белый список объявлен по признакам $s", bySilence || byTls)
+                            assertTrue("белый список объявлен по признакам $s", bySilence || byRefusal || byTls)
                         }
                     }
                 }

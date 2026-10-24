@@ -69,6 +69,13 @@ object AutoModeExits {
          * ядро пишет отказ соединения по конечному выходу, а автомату нужен узел.
          */
         val nodeOutbounds: Map<String, List<String>> = emptyMap(),
+        /**
+         * Выход комнаты WB внутри того же селектора: socks на петле с портом ядра WB Chat
+         * ([WbChatParams.socksPort]). Под белым списком автомат идёт им раньше Телемоста
+         * (решение 24.10.2026). Ни основным, ни узлом очереди он не бывает. `null` — сервер
+         * его не выдал или порт WB не передали.
+         */
+        val wb: String? = null,
     ) {
         /** Узел очереди, к которому относится выход [tag] (сам узел или его конечный выход). */
         fun nodeOf(tag: String): String? =
@@ -132,10 +139,15 @@ object AutoModeExits {
      * @return разложенные выходы; при любой неожиданности — [Layout.EMPTY],
      *   потому что автомат без раскладки просто не переключает, а не падает.
      */
-    fun parse(content: String, socksPort: Int): Layout = runCatching { parse0(content, socksPort) }
-        .getOrElse { Layout.EMPTY }
+    fun parse(content: String, socksPort: Int, wbSocksPort: Int = 0): Layout =
+        runCatching { parse0(content, socksPort, wbSocksPort) }
+            .getOrElse { Layout.EMPTY }
 
-    private fun parse0(content: String, socksPort: Int): Layout {
+    /**
+     * @param wbSocksPort порт SOCKS ядра WB Chat ([WbChatParams.socksPort]); `0` — WB нет,
+     *   [Layout.wb] остаётся пустым.
+     */
+    private fun parse0(content: String, socksPort: Int, wbSocksPort: Int): Layout {
         val root = JSONObject(content)
         val outbounds = root.optJSONArray("outbounds") ?: return Layout.EMPTY
 
@@ -160,9 +172,17 @@ object AutoModeExits {
         }?.key ?: byTag.entries.firstOrNull { it.value.optString("type") == "selector" }?.key
 
         // Основной — первый выход селектора, который не комната и не другой socks на петле
-        // (выход WB Chat: его выбирает человек, автомату он не основной канал).
+        // (выход WB Chat: основным каналом он не бывает, у него своё место — [Layout.wb]).
         val main = chooser?.let { tag ->
             members(byTag.getValue(tag)).firstOrNull { it != room && !loopbackSocks(byTag[it]) }
+        }
+
+        // Комната WB — socks на петле с портом ядра WB Chat, в том же селекторе. Опознаём по
+        // порту, как и комнату: имя приходит с сервера. Порт совпал с комнатным — это комната.
+        val wb = chooser?.takeIf { wbSocksPort in 1..65535 && wbSocksPort != socksPort }?.let { tag ->
+            members(byTag.getValue(tag)).firstOrNull {
+                it != room && loopbackSocks(byTag[it]) && byTag[it]?.optInt("server_port") == wbSocksPort
+            }
         }
 
         val endpoints = endpointsOf(main, byTag, mutableSetOf())
@@ -215,6 +235,7 @@ object AutoModeExits {
             nodeEndpoints = nodeEndpoints,
             sharedProxy = localProxy(root, socksPort),
             nodeOutbounds = nodeOutbounds,
+            wb = wb,
         )
     }
 
