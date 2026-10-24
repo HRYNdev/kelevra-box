@@ -851,6 +851,50 @@ object LogUploadWork {
         return ИтогПопытки.Отправлено
     }
 
+    /** Сколько ждать подъёма туннеля перед посылкой, если служба должна работать. */
+    internal const val ZHDAT_TUNNEL_MS = 20_000L
+
+    /** Пауза после того, как туннель поднялся у нас на глазах: система переводит сеть. */
+    internal const val POSLE_PODYOMA_MS = 3_000L
+
+    /**
+     * Не начинать посылку, пока поднимается своя служба.
+     *
+     * Зачем (разбор 24.10.2026, журналы nginx VPS1/VPS2 и телефона 14-1 23.10 13:01–13:02 и
+     * 15:00): система подняла процесс ради часовой работы, работа начала POST /logs, а через
+     * полсекунды стартовала служба и подняла VPN. Android сменил сеть: JobScheduler остановил
+     * все работы с условием «есть сеть» («Job was cancelled»), сокет посылки — «Connection
+     * reset». Сервер получал обрывок («архив логов недовезён», 408 при замёрзшем сокете),
+     * журнал уезжал повтором через 7 минут. Так рвались 11 из 15 обрывов на VPS1 и 3 из 4
+     * телефонных на VPS2 за 10–24.10.
+     *
+     * Ждём, только если служба должна работать ([nuzhen]) и её вход ещё не слушает ([podnyat]);
+     * не дождались за [srokMs] — шлём как есть (служба могла не подняться вовсе). Возвращает,
+     * сколько ждали.
+     */
+    internal suspend fun dozhdatsyaTunnelya(
+        nuzhen: () -> Boolean = { runCatching { Settings.startedByUser }.getOrDefault(false) },
+        podnyat: () -> Boolean = { ZapasnoyPut.tunnelPodnyat() },
+        srokMs: Long = Pult.long("zhurnal.zhdat_tunnel_ms", ZHDAT_TUNNEL_MS),
+        shagMs: Long = 500L,
+        spat: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
+    ): Long {
+        if (srokMs <= 0 || !nuzhen() || podnyat()) return 0L
+        var zhdali = 0L
+        while (zhdali < srokMs) {
+            spat(shagMs)
+            zhdali += shagMs
+            if (podnyat()) {
+                spat(POSLE_PODYOMA_MS)
+                zhdali += POSLE_PODYOMA_MS
+                KLog.i(TAG, "посылка ждала подъёма туннеля ${zhdali / 1000} с")
+                return zhdali
+            }
+        }
+        KLog.i(TAG, "туннель не поднялся за ${srokMs / 1000} с — шлю как есть")
+        return zhdali
+    }
+
     class UploadTask(appContext: Context, params: WorkerParameters) : CoroutineWorker(appContext, params) {
         override suspend fun doWork(): Result {
             io.nekohasekai.sfa.bg.pult.Pult.zagruzitEsliNado()
@@ -860,6 +904,7 @@ object LogUploadWork {
             ) {
                 sleduyushchiyChasto(CHASTO_MINUT)
             }
+            dozhdatsyaTunnelya()
             val ok = runCatching { runOnce() }
                 .onFailure { KLog.w(TAG, "отправка логов упала", it) }
                 .getOrDefault(false)
