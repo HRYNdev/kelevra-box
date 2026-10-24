@@ -143,6 +143,10 @@ object IshodUstanovki {
     /** Файл привязан к версии: иначе после выхода новой версии ставился старый скачанный. */
     fun imyaFayla(versionCode: Int): String = "update-$versionCode.apk"
 
+    /** Номер версии из имени файла [imyaFayla]; чужое имя — 0. */
+    fun versiyaIzImeni(imya: String): Int =
+        Regex("""^update-(\d+)\.apk$""").matchEntire(imya)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+
     /** Уникальное имя временного файла на один вызов: два воркера одной версии не пишут в один файл. */
     fun imyaChastichnogoFayla(versionCode: Int): String =
         "${imyaFayla(versionCode)}.${java.util.UUID.randomUUID()}.part"
@@ -186,9 +190,52 @@ object IshodUstanovki {
         return ProverkaFayla.OK
     }
 
+    /**
+     * Повторить ли установку сразу, уже с окном подтверждения системы.
+     *
+     * Журнал телефона 12-1 (Samsung SM-A525F, Android 14), 22.10.2026: тихая сессия
+     * (USER_ACTION_NOT_REQUIRED) получила `status=3 INSTALL_FAILED_VERIFICATION_FAILURE:
+     * Install not allowed` за 6 с без окна, а повтор тем же файлом через 15 с показал окно
+     * подтверждения и встал. Какое звено системы отказало тихой сессии — не установлено,
+     * поэтому повторяем ровно то, что сработало: та же сессия, но с окном.
+     *
+     * Один раз на версию ([uzhePovtoryali]) и только после тихой попытки ([bylaTihaya]):
+     * отказ сессии с окном второй раз не повторяется, зацикливания нет.
+     */
+    fun povtoritSOknom(status: Int, soobshchenie: String?, bylaTihaya: Boolean, uzhePovtoryali: Boolean): Boolean =
+        status == STATUS_FAILURE_ABORTED &&
+            "VERIFICATION_FAILURE" in soobshchenie.orEmpty().uppercase() &&
+            bylaTihaya &&
+            !uzhePovtoryali
+
+    /** Как шла установка: «тихая» (без окна системы) или «с окном». */
+    fun rezhim(tihaya: Boolean): String = if (tihaya) "тихая" else "с окном"
+
+    /** Телефон для журнала: «производитель модель», без повтора производителя в модели. */
+    fun telefon(proizvoditel: String?, model: String?): String {
+        val p = proizvoditel.orEmpty().trim()
+        val m = model.orEmpty().trim()
+        return when {
+            p.isEmpty() && m.isEmpty() -> "—"
+            p.isEmpty() -> m
+            m.isEmpty() -> p
+            m.startsWith(p, ignoreCase = true) -> m
+            else -> "$p $m"
+        }
+    }
+
     /** Строка служебного журнала: по ней разбор идёт по фактам, а не по догадкам. */
-    fun strokaZhurnala(versiya: String, prichina: OtkazUstanovki, status: Int, soobshchenie: String?): String =
-        "установка обновления не прошла: версия $versiya, причина $prichina, код $status, система: ${soobshchenie ?: "—"}"
+    fun strokaZhurnala(
+        versiya: String,
+        prichina: OtkazUstanovki,
+        status: Int,
+        soobshchenie: String?,
+        telefon: String? = null,
+        tihaya: Boolean? = null,
+    ): String =
+        "установка обновления не прошла: версия $versiya, причина $prichina, код $status, система: ${soobshchenie ?: "—"}" +
+            (telefon?.let { ", телефон: $it" } ?: "") +
+            (tihaya?.let { ", установка: ${rezhim(it)}" } ?: "")
 
     fun tekst(prichina: OtkazUstanovki): String = when (prichina) {
         OtkazUstanovki.PROVERKA ->

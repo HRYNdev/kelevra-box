@@ -164,4 +164,5 @@ object SettingsKey {
     const val CACHED_APK_PATH = "cached_apk_path"
     const val LAST_SHOWN_UPDATE_VERSION = "last_shown_update_version"
     const val UPDATE_INSTALL_FAILURES = "update_install_failures"
+    const val UPDATE_POVTOR_S_OKNOM = "update_povtor_s_oknom"
 }
