@@ -10,13 +10,19 @@ import org.junit.Test
  */
 class LogZhdatTunnelTest {
 
-    private fun zhdat(nuzhen: Boolean, podnyatPosle: Int?, srokMs: Long = 20_000L): Pair<Long, Int> {
+    private fun zhdat(
+        nuzhen: Boolean,
+        podnyatPosle: Int?,
+        srokMs: Long = 20_000L,
+        domaPosle: Int? = null,
+    ): Pair<Long, Int> {
         var oprosov = 0
         var spali = 0L
         val zhdali = runBlocking {
             LogUploadWork.dozhdatsyaTunnelya(
                 nuzhen = { nuzhen },
                 podnyat = { oprosov++; podnyatPosle != null && oprosov > podnyatPosle },
+                doma = { domaPosle != null && oprosov > domaPosle },
                 srokMs = srokMs,
                 shagMs = 500L,
                 spat = { spali += it },
@@ -52,5 +58,17 @@ class LogZhdatTunnelTest {
     @Test
     fun `срок ноль из пульта выключает ожидание`() {
         assertEquals(0L, zhdat(nuzhen = true, podnyatPosle = null, srokMs = 0L).first)
+    }
+
+    @Test
+    fun `дома на входе — не ждём вовсе`() {
+        // domaPosle = -1: doma() истинна уже на первом опросе (oprosov = 0)
+        assertEquals(0L, zhdat(nuzhen = true, podnyatPosle = null, domaPosle = -1).first)
+    }
+
+    @Test
+    fun `дома выяснилось на третьем шаге — выходим, не достаивая до срока`() {
+        val (zhdali, _) = zhdat(nuzhen = true, podnyatPosle = null, domaPosle = 3)
+        assertEquals(3 * 500L, zhdali)
     }
 }
