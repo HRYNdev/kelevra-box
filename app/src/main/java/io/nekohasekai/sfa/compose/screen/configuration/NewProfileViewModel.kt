@@ -269,7 +269,7 @@ class NewProfileViewModel(application: Application) : AndroidViewModel(applicati
             }
 
         // Validate config
-        Libbox.checkConfig(configContent)
+        io.nekohasekai.sfa.bg.MlkemPriznak.proverit(configContent)
         configFile.writeText(configContent)
 
         // Create profile in database and select it
@@ -301,7 +301,7 @@ class NewProfileViewModel(application: Application) : AndroidViewModel(applicati
 
         // Fetch initial config - this MUST succeed for remote profiles
         val content = HTTPClient().use { it.getString(state.remoteUrl) }
-        Libbox.checkConfig(content)
+        io.nekohasekai.sfa.bg.MlkemPriznak.proverit(content)
         val configContent = content
 
         configFile.writeText(configContent)

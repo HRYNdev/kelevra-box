@@ -218,7 +218,7 @@ private suspend fun importByCode(vvod: String): VhodPoKodu.Sohraneno {
 /** Скачивает настройки по адресу профиля и записывает; профиль этого кода уже есть: обновляется он. */
 private suspend fun zagruzitProfil(url: String, vvedennyeKody: List<String>): VhodPoKodu.Sohraneno {
     val content = HTTPClient().use { it.getString(Kelevra.adresSeti(url)) }
-    Libbox.checkConfig(content)
+    io.nekohasekai.sfa.bg.MlkemPriznak.proverit(content)
 
     val imeyushijsya = ProfileManager.list().firstOrNull {
         it.typed.type == TypedProfile.Type.Remote && Priglashenie.totZhe(url, it.typed.remoteURL, vvedennyeKody)

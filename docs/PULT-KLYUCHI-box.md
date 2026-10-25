@@ -108,6 +108,7 @@
 | `uzel.uzel_budit_millis` | int | 6000–600000 | 60000 | Не чаще этого отказы узла будят автомат, мс | AutoMode.UZEL_BUDIT_MILLIS |
 | `uzel.uzel_okno_ms` | int | 3000–300000 | 30000 | Окно, в котором считаются отказы через узлы (uzel.porog_otkazov), мс | CoreLog.UZEL_OKNO_MS |
 | `uzel.vozvrat_na_pervyy_min` | int | 1–120 | 4 | через сколько минут на запасном узле пробовать первый | AutoModeNodeWatch.RETURN_AFTER_MILLIS |
+| `vykl.belye_iz_profilya` | bool | — | false | разрешённое при белом списке сверх снимка — снова вшитый список, а не набор из профиля | BoxService: BelyeDobavki |
 | `vykl.belyy_bez_okna` | bool | — | false | провал основного в окне смены сети не засчитывается и при подсказке «белый список» (как до 24.10) | AutoMode.failureCounts |
 | `vykl.kesh_vybora` | bool | — | false | выбор выхода снова запоминается в кэше ядра | BoxService: CacheSelectPatch |
 | `vykl.nabory_iz_kesha` | bool | — | false | наборы правил не подменяются своим кэшем — ядро тянет их само | BoxService: RuleSetLocalPatch |
@@ -120,6 +121,7 @@
 | `vykl.pustoy_port` | bool | — | false | принятое узлом соединение без прошедшего канала по-прежнему считается ответом узла (как до 24.10) | AutoMode.hollowPort |
 | `vykl.skorost` | bool | — | false | без замера скорости основного канала | AutoMode: SpeedProbe |
 | `vykl.storozh_komnaty` | bool | — | false | присмотр за комнатой не запускается | BoxService: OlcRtcWatchdog |
+| `vykl.svoi_taymer` | bool | — | false | живые наборы (svoi-*, интервал 2 мин) не докачиваются своим таймером — только при проверке путей | BoxService: svoiTik |
 | `vykl.vhody_proby` | bool | — | false | без своих входов честной пробы (пути не меряются) | BoxService: ProbeInboundPatch |
 | `vykl.vozvrat_zalipshego` | bool | — | false | залипший выбор автомата не возвращается на default | BoxService: AutoModeSticky.release |
 | `vykl.wb_chat` | bool | — | false | ядро WB Chat не поднимается | BoxService: WbChatWatchdog |

@@ -92,7 +92,7 @@ object PultIspolnitel : Pult.Ispolnitel {
                 override suspend fun skachatKonfig(url: String): String =
                     HTTPClient().use { it.getString(Kelevra.adresSeti(url)) }
 
-                override fun proveritKonfig(konfig: String) = Libbox.checkConfig(konfig)
+                override fun proveritKonfig(konfig: String) = io.nekohasekai.sfa.bg.MlkemPriznak.proverit(konfig)
 
                 override suspend fun perepisat(novyyUrl: String, konfig: String) {
                     File(profile.typed.path).writeText(konfig)

@@ -198,7 +198,7 @@ object SubscriptionRefresh {
             val content = try {
                 KLog.i(TAG, "обновление подписки: запрашиваю настройки у сервера")
                 val text = io.nekohasekai.sfa.ZapasnoyPut.tekst(Kelevra.adresSeti(profile.typed.remoteURL))
-                Libbox.checkConfig(text)
+                io.nekohasekai.sfa.bg.MlkemPriznak.proverit(text)
                 text
             } catch (e: Exception) {
                 // Текст ошибки от HTTP-клиента/ядра часто повторяет запрошенный URL —

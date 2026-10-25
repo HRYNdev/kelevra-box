@@ -157,7 +157,9 @@ object PultKonstanty {
      */
     private val VYKLYUCHATELI: List<Klyuch> = listOf(
         vykl("nabory_iz_kesha", "наборы правил не подменяются своим кэшем — ядро тянет их само", "BoxService: RuleSetLocalPatch"),
-        vykl("kesh_vybora", "выбор выхода снова запоминается в кэше ядра", "BoxService: CacheSelectPatch"),
+        vykl("svoi_taymer", "живые наборы (svoi-*, интервал 2 мин) не докачиваются своим таймером — только при проверке путей", "BoxService: svoiTik"),
+        vykl("belye_iz_profilya", "разрешённое при белом списке сверх снимка — снова вшитый список, а не набор из профиля", "BoxService: BelyeDobavki"),
+        vykl("kesh_vybora","выбор выхода снова запоминается в кэше ядра", "BoxService: CacheSelectPatch"),
         vykl("vhody_proby", "без своих входов честной пробы (пути не меряются)", "BoxService: ProbeInboundPatch"),
         vykl("vozvrat_zalipshego", "залипший выбор автомата не возвращается на default", "BoxService: AutoModeSticky.release"),
         vykl("prismotr_doma", "без короткой пробы дома между заходами", "AutoMode.waitAtHome / HomeWatch"),

@@ -335,7 +335,8 @@ object OlcRtcConfigPatch {
      * комнатой), страховки ([LifelinePatch]). Порядок:
      *  1. Отказ по UDP/443, если его нет выше, — до разрешённого: UDP под белым списком
      *     режется почти весь, и QUIC к разрешённому сайту висел бы вместо перехода на TCP.
-     *  2. Домены белого списка и [DOBAVKI_DOMENOV] — напрямую, `domain_suffix`.
+     *  2. Домены белого списка и добавки [dobavki] — напрямую, `domain_suffix`. Добавки
+     *     берутся из профиля ([BelyeDobavki]), без него — вшитые [DOBAVKI_DOMENOV].
      *  3. Приложения [PAKETY_RAZRESHYONNYE] — напрямую, отдельным правилом: поля внутри
      *     одного правила sing-box складывает через «И», и вместе с доменами правило ловило
      *     бы только их пересечение.
@@ -365,8 +366,9 @@ object OlcRtcConfigPatch {
         socksPort: Int,
         domeny: Collection<String>,
         podseti: Collection<String> = emptyList(),
+        dobavki: Collection<String> = DOBAVKI_DOMENOV,
     ): Result =
-        runCatching { patchFinal(content, socksPort, domeny, podseti) }.getOrElse {
+        runCatching { patchFinal(content, socksPort, domeny, podseti, dobavki) }.getOrElse {
             Result(content, "белый список: правка маршрутов не легла (${it.javaClass.simpleName}), конфиг как есть", false)
         }
 
@@ -374,8 +376,8 @@ object OlcRtcConfigPatch {
      * Снимок плюс добавки, без повторов и без имён, которые уже накрыты родителем:
      * `domain_suffix: ozon.ru` ловит и `adv.ozon.ru`.
      */
-    internal fun razreshyonnyeDomeny(izSpiska: Collection<String>): List<String> {
-        val all = (izSpiska.asSequence() + DOBAVKI_DOMENOV.asSequence())
+    internal fun razreshyonnyeDomeny(izSpiska: Collection<String>, dobavki: Collection<String> = DOBAVKI_DOMENOV): List<String> {
+        val all = (izSpiska.asSequence() + dobavki.asSequence())
             .map { it.trim().trim('.').lowercase() }
             .filter { it.contains('.') }
             .toCollection(LinkedHashSet())
@@ -385,7 +387,13 @@ object OlcRtcConfigPatch {
         }
     }
 
-    private fun patchFinal(content: String, socksPort: Int, domeny: Collection<String>, podseti: Collection<String>): Result {
+    private fun patchFinal(
+        content: String,
+        socksPort: Int,
+        domeny: Collection<String>,
+        podseti: Collection<String>,
+        dobavki: Collection<String>,
+    ): Result {
         val root = JSONObject(content)
         val outbounds = root.optJSONArray("outbounds") ?: return Result(content, "в конфиге нет выходов", false)
         val socks = socksTags(outbounds, socksPort)
@@ -409,7 +417,7 @@ object OlcRtcConfigPatch {
             rules.put(quicRejectRule())
             added += "отказ udp/443"
         }
-        val suffixes = razreshyonnyeDomeny(domeny)
+        val suffixes = razreshyonnyeDomeny(domeny, dobavki)
         if (suffixes.isNotEmpty()) {
             rules.put(JSONObject().put("outbound", direct).put("domain_suffix", JSONArray(suffixes)))
             added += "домены напрямую (${suffixes.size})"

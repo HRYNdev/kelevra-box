@@ -322,6 +322,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 }
                 AutoMode.start(autoModeHost, AutoMode.Situation.Home)
                 io.nekohasekai.sfa.bg.pult.PultSvyaz.start()
+                startSvoiTaymer()
                 // Ядра тут нет, тиков статуса не будет — но обстановка меняться будет,
                 // и шторка обязана идти за ней. Запускаем ПОСЛЕ AutoMode.start: первое же
                 // значение придёт уже настоящим, без мигания текста. Тики подключит
@@ -395,6 +396,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             AutoMode.start(autoModeHost)
             // Связь с сервером, пока служба жива: опрос /info, испытание пульта, долгий опрос.
             io.nekohasekai.sfa.bg.pult.PultSvyaz.start()
+            startSvoiTaymer()
             // После подъёма tun, не до: ядро WB Chat ходит через tun (см. WbChatConfigPatch),
             // и появившийся позже tun сменил бы ему исходящий порт посреди звонка.
             startWbChat()
@@ -647,7 +649,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * «не проверено». Врать «работает» она в этом случае не имеет права.
      */
     private fun effectiveConfig(content: String): String {
-        var result = content
+        // Признак ML-KEM, которого ядро этой сборки не знает, — прочь до всех правок ([MlkemPriznak]).
+        var result = MlkemPriznak.dlyaYadra(content)
 
         // Правки под комнату кладём, пока она нужна, а не только пока уже поднята: ядро
         // обязано быть собрано под комнату ДО входа в неё (см. [TunnelFacts.coreConfigStale]).
@@ -659,7 +662,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Выключатели пульта (`vykl.*`): заплатка, которая оказалась виновата, гасится с
         // сервера без выпуска. Без пульта не выключено ничего.
         if (!Pult.vykl("nabory_iz_kesha")) {
-            val rules = RuleSetLocalPatch.useCached(result, RuleSetCache.cached())
+            val rules = RuleSetLocalPatch.useCached(result, RuleSetCache.cached(), RuleSetCache::zaglushka)
             RuleSetLocalPatch.log(rules)
             RuleSetCache.report(rules)
             // Список нужен докачке: после правки удалённых наборов в конфиге уже нет,
@@ -718,7 +721,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 ttlMillis = Pult.long("avtomat.hint_ttl_millis", AutoMode.HINT_TTL_MILLIS),
             )
         ) {
-            val rest = OlcRtcConfigPatch.finalViaRoom(result, OlcRtcParams.socksPort, BelyjSpisok.domeny(), BelyjSpisok.podseti())
+            // «Российское» сверх снимка — из профиля (набор своих правил «при белом списке»),
+            // без него — вшитое. Выключатель пульта возвращает вшитое без выпуска.
+            val dobavki = if (Pult.vykl("belye_iz_profilya")) {
+                OlcRtcConfigPatch.DOBAVKI_DOMENOV
+            } else {
+                BelyeDobavki.iz(result, RuleSetCache.cached()).also { KLog.i(TAG, it.note) }.domeny
+            }
+            val rest = OlcRtcConfigPatch.finalViaRoom(result, OlcRtcParams.socksPort, BelyjSpisok.domeny(), BelyjSpisok.podseti(), dobavki)
             OlcRtcConfigPatch.log(rest)
             result = rest.content
         }
@@ -906,6 +916,53 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         thread(name = "ruleset-refresh", isDaemon = true) {
             RuleSetCache.refresh(remotes, port, reason)
         }
+    }
+
+    /**
+     * Таймер живых наборов (`svoi-*`, интервал из профиля 2 минуты, решение 25.10.2026
+     * «одна истина»): правка правил в панели доходит до телефона за минуты и без перезапуска
+     * туннеля — новый файл ложится в кэш, ядро само перечитывает подменённый набор.
+     *
+     * Только пока ядро поднято: дома ядра нет, наборы ему не нужны. Качаем через общий вход
+     * ядра — он смотрит туда же, куда селектор, то есть по пути, по которому сейчас ходит сам
+     * человек; наш домен там ведёт в туннель страховкой ([LifelinePatch]). Общего входа нет —
+     * закреплённый вход основного узла, иначе socks поднятой комнаты.
+     */
+    @Volatile
+    private var svoiTaymer: kotlinx.coroutines.Job? = null
+
+    @OptIn(DelicateCoroutinesApi::class)
+    @Synchronized
+    private fun startSvoiTaymer() {
+        if (svoiTaymer?.isActive == true) return
+        svoiTaymer = GlobalScope.launch(Dispatchers.IO) {
+            while (true) {
+                val period = RuleSetCache.shortPeriod(ruleSetRemotes)
+                kotlinx.coroutines.delay(if (period > 0) period else RuleSetCache.SHORT_LIMIT / 30)
+                if (period <= 0) continue
+                runCatching { svoiTik() }.onFailure { KLog.w(TAG, "живые наборы: ${it.message}") }
+            }
+        }
+    }
+
+    @Synchronized
+    private fun stopSvoiTaymer() {
+        svoiTaymer?.cancel()
+        svoiTaymer = null
+    }
+
+    private fun svoiTik() {
+        if (serviceStopping || tunnelSuspended || Pult.vykl("svoi_taymer")) return
+        val config = runningConfig ?: return
+        val zhivye = RuleSetCache.shortLived(ruleSetRemotes)
+        if (zhivye.isEmpty()) return
+        val layout = AutoModeExits.parse(config, OlcRtcParams.socksPort, WbChatParams.socksPort)
+        val roomUp = OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.isRunning()
+        val port = layout.sharedProxy?.port
+            ?: layout.entryFor(layout.main)?.port
+            ?: OlcRtcParams.socksPort.takeIf { roomUp && it > 0 }
+            ?: return
+        RuleSetCache.refresh(zhivye, port, "живые наборы по таймеру", tikho = true)
     }
 
     /**
@@ -1541,6 +1598,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // обстановка, в которой надо срочно что-то поднять.
         AutoMode.stop()
         io.nekohasekai.sfa.bg.pult.PultSvyaz.stop()
+        stopSvoiTaymer()
         // Сервис уходит — его protect(fd) больше ничего не делает, и держать крючок
         // значит обещать пробам защиту, которой уже нет.
         ProbeSocket.useProtector(null)
@@ -1596,6 +1654,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         zhiva = false
         AutoMode.stop()
         io.nekohasekai.sfa.bg.pult.PultSvyaz.stop()
+        stopSvoiTaymer()
         ProbeSocket.useProtector(null)
         val pfd = fileDescriptor
         if (pfd != null) {
