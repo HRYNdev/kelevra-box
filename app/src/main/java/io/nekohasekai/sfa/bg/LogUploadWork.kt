@@ -871,15 +871,29 @@ object LogUploadWork {
      * Ждём, только если служба должна работать ([nuzhen]) и её вход ещё не слушает ([podnyat]);
      * не дождались за [srokMs] — шлём как есть (служба могла не подняться вовсе). Возвращает,
      * сколько ждали.
+     *
+     * Дома ([doma]) туннель не поднимается вообще ([BoxService] держит `tunnelSuspended=true`
+     * и зовёт `AutoMode.start(host, Situation.Home)`) — ждать его там нечем, кроме как
+     * впустую стоять весь [srokMs]. Поэтому: [doma] уже true на входе — не ждём вовсе;
+     * [doma] стала true по ходу ожидания (холодный процесс: обстановка ещё [AutoMode.Situation.Unknown],
+     * пока служба не решит «дома») — выходим сразу, не достаивая до [srokMs].
      */
     internal suspend fun dozhdatsyaTunnelya(
         nuzhen: () -> Boolean = { runCatching { Settings.startedByUser }.getOrDefault(false) },
         podnyat: () -> Boolean = { ZapasnoyPut.tunnelPodnyat() },
+        doma: () -> Boolean = {
+            runCatching { AutoMode.state.value.situation == AutoMode.Situation.Home }.getOrDefault(false)
+        },
         srokMs: Long = Pult.long("zhurnal.zhdat_tunnel_ms", ZHDAT_TUNNEL_MS),
         shagMs: Long = 500L,
         spat: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     ): Long {
-        if (srokMs <= 0 || !nuzhen() || podnyat()) return 0L
+        if (srokMs <= 0 || !nuzhen()) return 0L
+        if (doma()) {
+            KLog.i(TAG, "дома — туннеля не будет, шлю сразу")
+            return 0L
+        }
+        if (podnyat()) return 0L
         var zhdali = 0L
         while (zhdali < srokMs) {
             spat(shagMs)
@@ -888,6 +902,10 @@ object LogUploadWork {
                 spat(POSLE_PODYOMA_MS)
                 zhdali += POSLE_PODYOMA_MS
                 KLog.i(TAG, "посылка ждала подъёма туннеля ${zhdali / 1000} с")
+                return zhdali
+            }
+            if (doma()) {
+                KLog.i(TAG, "дома — туннеля не будет, шлю сразу")
                 return zhdali
             }
         }
