@@ -445,7 +445,7 @@ class DashboardViewModel :
             try {
                 // Fetch remote config
                 val content = HTTPClient().use { it.getString(profile.typed.remoteURL) }
-                Libbox.checkConfig(content)
+                io.nekohasekai.sfa.bg.MlkemPriznak.proverit(content)
 
                 // Check if content changed
                 val file = File(profile.typed.path)

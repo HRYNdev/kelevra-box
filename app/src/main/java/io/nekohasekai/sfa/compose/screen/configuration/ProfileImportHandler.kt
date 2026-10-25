@@ -282,7 +282,7 @@ class ProfileImportHandler(private val context: Context) {
 
             // конфиг тянем сразу: профиль без него бесполезен
             val content = HTTPClient().use { it.getString(io.nekohasekai.sfa.Kelevra.adresSeti(url)) }
-            Libbox.checkConfig(content)
+            io.nekohasekai.sfa.bg.MlkemPriznak.proverit(content)
             configFile.writeText(content)
 
             ProfileManager.create(profile, andSelect = true)
@@ -390,7 +390,7 @@ class ProfileImportHandler(private val context: Context) {
             // Validate the JSON configuration using sing-box
             try {
                 // Try to check the configuration
-                Libbox.checkConfig(jsonContent)
+                io.nekohasekai.sfa.bg.MlkemPriznak.proverit(jsonContent)
             } catch (e: Exception) {
                 // Configuration validation failed
                 return ImportResult.Error(

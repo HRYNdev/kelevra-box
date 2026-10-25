@@ -42,8 +42,15 @@ object RuleSetLocalPatch {
     /** Потолок повторов старта на битых наборах: больше наборов, чем есть, не выкинуть. */
     const val MAX_SETS = 64
 
-    /** Удалённый набор, каким его прислал сервер: по этому списку работает докачка. */
-    data class Remote(val tag: String, val url: String, val format: String)
+    /**
+     * Удалённый набор, каким его прислал сервер: по этому списку работает докачка.
+     *
+     * @param updateMillis `update_interval` набора из профиля в миллисекундах, `0` — не задан
+     *   или не разобрался. Наборы своих правил (`svoi-*`, решение 25.10.2026 «одна истина»)
+     *   приходят с интервалом 2 минуты: правка в панели должна доходить за минуты, а не за
+     *   сутки, как у больших чужих наборов ([RuleSetCache.freshFor]).
+     */
+    data class Remote(val tag: String, val url: String, val format: String, val updateMillis: Long = 0L)
 
     data class Result(
         val content: String,
@@ -55,6 +62,11 @@ object RuleSetLocalPatch {
         val missing: List<String>,
         val note: String,
         val patched: Boolean,
+        /**
+         * Теги, которым кэша не было и которые ушли в ядро локальной заглушкой
+         * ([RuleSetCache.zaglushka]): докачка заменит файл, ядро перечитает его само.
+         */
+        val placeholders: List<String> = emptyList(),
     )
 
     /**
@@ -63,8 +75,12 @@ object RuleSetLocalPatch {
      * @return конфиг, которому для старта не нужна сеть. Любая неожиданность — конфиг
      *   возвращается нетронутым: сломать старт правкой, которая старт и чинит, нельзя.
      */
-    fun useCached(content: String, cached: Map<String, File>): Result =
-        runCatching { patch(content, cached) }.getOrElse {
+    fun useCached(
+        content: String,
+        cached: Map<String, File>,
+        zaglushka: ((Remote) -> File?)? = null,
+    ): Result =
+        runCatching { patch(content, cached, zaglushka) }.getOrElse {
             Result(
                 content,
                 emptyList(),
@@ -75,7 +91,7 @@ object RuleSetLocalPatch {
             )
         }
 
-    private fun patch(content: String, cached: Map<String, File>): Result {
+    private fun patch(content: String, cached: Map<String, File>, zaglushka: ((Remote) -> File?)?): Result {
         val root = JSONObject(content)
         val route = root.optJSONObject("route")
             ?: return untouched(content, "в конфиге нет route")
@@ -85,6 +101,7 @@ object RuleSetLocalPatch {
         val remotes = mutableListOf<Remote>()
         val ready = mutableListOf<String>()
         val missing = mutableListOf<String>()
+        val placeholders = mutableListOf<String>()
         val kept = JSONArray()
 
         for (i in 0 until sets.length()) {
@@ -100,10 +117,25 @@ object RuleSetLocalPatch {
                 continue
             }
             val format = set.optString("format").ifBlank { "binary" }
-            remotes += Remote(tag, set.optString("url"), format)
+            val remote = Remote(tag, set.optString("url"), format, durationMillis(set.optString("update_interval")))
+            remotes += remote
 
-            val file = cached[tag]
-            if (file == null) {
+            var file = cached[tag]
+            // Текстового набора в кэше ещё нет (свои правила `svoi-*` впервые пришли в профиле).
+            // Удалённым его оставлять нельзя: ядро 1.14 без своего хранилища качает такой набор
+            // на старте и при неудаче НЕ СТАРТУЕТ ВОВСЕ («initial rule-set: …», проверено на
+            // эмуляторе 25.10.2026), а под белым списком дверь как раз недоступна. Вместо
+            // него — локальная заглушка в том же файле кэша: ядро встаёт сразу, докачка кладёт
+            // настоящий набор на её место, ядро перечитывает файл само.
+            if (file == null && zaglushka != null && format == "source") {
+                file = zaglushka(remote)?.also { placeholders += tag }
+            }
+            // Заглушка с прошлого запуска, которую ещё не сменил настоящий набор.
+            if (file != null && tag !in placeholders && RuleSetCache.isZaglushka(file)) placeholders += tag
+            // Файл в кэше другого вида, чем набор в профиле (сервер сменил `binary` на `source`
+            // под тем же тегом, или наоборот): локальный набор с чужим форматом ядро не
+            // разберёт и не стартует. Такой оставляем удалённым — докачка заберёт свежий.
+            if (file == null || !formatMatches(file, format)) {
                 // Не наш — не трогаем. Ядро возьмёт его из своего хранилища или дотянет
                 // фоном; отняв запись, мы бы только лишили его этой возможности.
                 missing += tag
@@ -125,7 +157,9 @@ object RuleSetLocalPatch {
         if (remotes.isEmpty()) return untouched(content, "удалённых наборов в конфиге нет")
         // Кэш пуст — менять нечего, и трогать конфиг незачем: пусть уходит в ядро тем же
         // текстом, каким пришёл с сервера.
-        if (ready.isEmpty()) {
+        // Заглушка в кэше — тоже файл, но человеку «правила загружены» про неё не говорим.
+        ready.removeAll(placeholders.toSet())
+        if (ready.isEmpty() && placeholders.isEmpty()) {
             return Result(content, remotes, ready, missing, "наборы правил: кэша нет, конфиг не трогаем", false)
         }
 
@@ -134,8 +168,44 @@ object RuleSetLocalPatch {
         val note = buildString {
             append("наборы правил: из кэша ${ready.size} из ${remotes.size}")
             if (missing.isNotEmpty()) append("; остались удалёнными: ").append(missing.joinToString(", "))
+            if (placeholders.isNotEmpty()) append("; заглушкой до докачки: ").append(placeholders.joinToString(", "))
         }
-        return Result(root.toString(), remotes, ready, missing, note, true)
+        return Result(root.toString(), remotes, ready, missing, note, true, placeholders)
+    }
+
+    /**
+     * Совпадает ли содержимое файла с форматом набора в профиле. Прочитать не вышло (файла
+     * нет — так бывает только в тестах с выдуманными путями) — не судим: `true`, как раньше.
+     */
+    internal fun formatMatches(file: File, format: String): Boolean {
+        val kind = RuleSetCache.kindOf(file) ?: return true
+        return kind == format
+    }
+
+    /**
+     * Длительность sing-box (`2m`, `1h`, `1h30m`, `90s`, `1d`) в миллисекундах.
+     * Пусто или не разобралось — `0`: интервал не задан, докачка живёт по своему суточному.
+     */
+    internal fun durationMillis(text: String?): Long {
+        val s = text?.trim()?.lowercase().orEmpty()
+        if (s.isEmpty()) return 0L
+        val part = Regex("""(\d+(?:\.\d+)?)(ms|s|m|h|d)""")
+        var total = 0.0
+        var pos = 0
+        for (m in part.findAll(s)) {
+            if (m.range.first != pos) return 0L
+            pos = m.range.last + 1
+            val n = m.groupValues[1].toDouble()
+            total += n * when (m.groupValues[2]) {
+                "ms" -> 1.0
+                "s" -> 1_000.0
+                "m" -> 60_000.0
+                "h" -> 3_600_000.0
+                else -> 86_400_000.0
+            }
+        }
+        if (pos != s.length) return 0L
+        return total.toLong()
     }
 
     private fun untouched(content: String, why: String) =

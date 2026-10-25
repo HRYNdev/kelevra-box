@@ -77,11 +77,7 @@ object LifelinePatch {
         // Куда гнать: берём выход того правила, которое уже уводит наружу наборы.
         // Так страховка идёт туда же, куда и всё остальное, — сегодня в комнату,
         // завтра в основной канал, и знать об этом ей не нужно.
-        val target = (0 until rules.length())
-            .mapNotNull { rules.optJSONObject(it) }
-            .firstOrNull { it.has("rule_set") && it.optString("action").isEmpty() }
-            ?.optString("outbound")
-            ?.takeIf { it.isNotEmpty() }
+        val target = tunnelTarget(root, rules)
             ?: return Result(content, "не нашли, куда конфиг гонит наборы — страховку не ставим", false)
 
         // Узнаём своё правило по содержимому, а не по своей пометке: лишнее поле в
@@ -126,6 +122,57 @@ object LifelinePatch {
                 "IPv6 телеграма (${TELEGRAM_CIDRS_V6.size}) отклоняем — выход только IPv4",
             true,
         )
+    }
+
+    /**
+     * Наборы, по которым правило туннеля узнаётся наверняка: свои правила «в туннель»
+     * (`svoi-tunnel`, `svoi-tunnel-2` — по двери на набор) и прежний общий список доменов.
+     */
+    private val TUNNEL_SETS = listOf("svoi-tunnel", "main-domains")
+
+    /**
+     * Выход правила туннеля.
+     *
+     * Раньше это было «первое правило с `rule_set` без `action`». С одной истиной правил
+     * (решение 25.10.2026) выше туннеля встаёт правило «напрямую» (`svoi-mimo` →
+     * `direct`), и если сервер запишет его без `action`, страховка — наш домен и подсети
+     * Телеграма — ушла бы напрямую, а под белым списком это смерть: ни правил, ни профиля,
+     * ни обновлений. Поэтому по порядку:
+     *  1. правило, в наборах которого есть [TUNNEL_SETS] (по имени набора, а не по месту);
+     *  2. иначе первое правило с наборами, которое ведёт не в прямой выход и не в отказ;
+     *  3. иначе — не ставим страховку вовсе: вести её напрямую хуже, чем не ставить.
+     *
+     * `action: route` — то же, что правило без `action`: так sing-box понимает оба вида.
+     */
+    internal fun tunnelTarget(root: JSONObject, rules: JSONArray): String? {
+        val routing = (0 until rules.length())
+            .mapNotNull { rules.optJSONObject(it) }
+            .filter { it.has("rule_set") && it.optString("action").let { a -> a.isEmpty() || a == "route" } }
+            .filter { it.optString("outbound").isNotEmpty() }
+        routing.firstOrNull { rule ->
+            ruleSets(rule).any { set -> TUNNEL_SETS.any { set == it || set.startsWith("$it-") } }
+        }?.let { return it.optString("outbound") }
+        val notOutside = notOutsideTags(root)
+        return routing.firstOrNull { it.optString("outbound") !in notOutside }?.optString("outbound")
+    }
+
+    private fun ruleSets(rule: JSONObject): List<String> = when (val v = rule.opt("rule_set")) {
+        is String -> listOf(v)
+        is JSONArray -> (0 until v.length()).map { v.optString(it) }
+        else -> emptyList()
+    }
+
+    /** Выходы, которые не туннель: прямой и отказ (по типу), плюс их привычные имена. */
+    private fun notOutsideTags(root: JSONObject): Set<String> {
+        val tags = mutableSetOf("direct", "block")
+        val outbounds = root.optJSONArray("outbounds") ?: return tags
+        for (i in 0 until outbounds.length()) {
+            val ob = outbounds.optJSONObject(i) ?: continue
+            if (ob.optString("type") in setOf("direct", "block", "dns")) {
+                ob.optString("tag").takeIf { it.isNotEmpty() }?.let { tags += it }
+            }
+        }
+        return tags
     }
 
     fun log(result: Result) {
