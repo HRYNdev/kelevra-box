@@ -41,7 +41,8 @@ type Client struct {
 	baseRequestURL  url.URL
 	baseRequestURL2 url.URL
 	getHTTPClient   func() (DialerClient, *XmuxClient)
-	getHTTPClient2  func() (DialerClient, *XmuxClient)
+	acquireHTTP     func() (DialerClient, *XmuxClient)
+	acquireHTTP2    func() (DialerClient, *XmuxClient)
 	xmuxManager     *XmuxManager
 	xmuxManager2    *XmuxManager
 }
@@ -75,8 +76,12 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		xmuxClient := xmuxManager.GetXmuxClient(ctx)
 		return xmuxClient.XmuxConn.(DialerClient), xmuxClient
 	}
+	acquireHTTP := func() (DialerClient, *XmuxClient) {
+		xmuxClient := xmuxManager.AcquireXmuxClient(ctx)
+		return xmuxClient.XmuxConn.(DialerClient), xmuxClient
+	}
 	baseRequestURL2 := baseRequestURL
-	getHTTPClient2 := getHTTPClient
+	var acquireHTTP2 func() (DialerClient, *XmuxClient)
 	var xmuxManager2 *XmuxManager
 	if options.Download != nil {
 		options2 := options.Download
@@ -110,8 +115,8 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		xmuxManager2 = NewXmuxManager(xmuxOptions2, func() XmuxConn {
 			return createHTTPClient(ctx, dest2, dialer2, &options2.V2RayXHTTPBaseOptions, tlsConfig2)
 		})
-		getHTTPClient2 = func() (DialerClient, *XmuxClient) {
-			xmuxClient2 := xmuxManager2.GetXmuxClient(ctx)
+		acquireHTTP2 = func() (DialerClient, *XmuxClient) {
+			xmuxClient2 := xmuxManager2.AcquireXmuxClient(ctx)
 			return xmuxClient2.XmuxConn.(DialerClient), xmuxClient2
 		}
 	}
@@ -119,7 +124,8 @@ func NewClient(ctx context.Context, dialer N.Dialer, serverAddr M.Socksaddr, opt
 		ctx:             ctx,
 		options:         &options,
 		getHTTPClient:   getHTTPClient,
-		getHTTPClient2:  getHTTPClient2,
+		acquireHTTP:     acquireHTTP,
+		acquireHTTP2:    acquireHTTP2,
 		baseRequestURL:  baseRequestURL,
 		baseRequestURL2: baseRequestURL2,
 		xmuxManager:     xmuxManager,
@@ -136,13 +142,16 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 	}
 	requestURL := c.baseRequestURL
 	requestURL2 := c.baseRequestURL2
-	httpClient, xmuxClient := c.getHTTPClient()
-	httpClient2, xmuxClient2 := c.getHTTPClient2()
-	if xmuxClient != nil {
-		xmuxClient.AddOpenUsage(1)
-	}
-	if xmuxClient2 != nil && xmuxClient2 != xmuxClient {
-		xmuxClient2.AddOpenUsage(1)
+	// Одна сессия = одно соединение xmux на обе половины (GET и POST), как у
+	// Xray (dialer.go: httpClient2 := httpClient). Раньше соединение выбиралось
+	// дважды: половины одной сессии расходились по разным TCP, а
+	// c_max_reuse_times тратился вдвое быстрее. Отдельное соединение для
+	// загрузки — только при явном download. Сессия засчитывается в нагрузку
+	// соединения в момент выбора (AcquireXmuxClient), снимается в onClose.
+	httpClient, xmuxClient := c.acquireHTTP()
+	httpClient2, xmuxClient2 := httpClient, xmuxClient
+	if c.acquireHTTP2 != nil {
+		httpClient2, xmuxClient2 = c.acquireHTTP2()
 	}
 	var closed atomic.Int32
 	reader, writer := io.Pipe()
@@ -168,6 +177,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		}
 		conn.reader, conn.remoteAddr, conn.localAddr, err = httpClient.OpenStream(ctx, requestURL.String(), sessionId, reader, false)
 		if err != nil { // browser dialer only
+			conn.onClose() // вернуть засчитанную сессию
 			return nil, err
 		}
 		return &conn, nil
@@ -177,6 +187,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		}
 		conn.reader, conn.remoteAddr, conn.localAddr, err = httpClient2.OpenStream(ctx, requestURL2.String(), sessionId, nil, false)
 		if err != nil { // browser dialer only
+			conn.onClose() // вернуть засчитанную сессию
 			return nil, err
 		}
 	}
@@ -186,6 +197,7 @@ func (c *Client) DialContext(ctx context.Context) (net.Conn, error) {
 		}
 		_, _, _, err = httpClient.OpenStream(ctx, requestURL.String(), sessionId, reader, true)
 		if err != nil { // browser dialer only
+			conn.onClose() // вернуть засчитанную сессию
 			return nil, err
 		}
 		return &conn, nil

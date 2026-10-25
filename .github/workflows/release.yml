@@ -256,7 +256,8 @@ jobs:
           # только под `//go:build !(go1.27 && !http2legacy)`. Наш //go:linkname на
           # http2.(*Transport).connPool в core-xhttp/v2rayxhttp/dialer.go держит
           # DefaultDialerClient.Close() — принудительное закрытие ВСЕХ, а не только
-          # простаивающих, HTTP/2-соединений xhttp при обрыве стрима; публичного API
+          # простаивающих, HTTP/2-соединений xhttp, когда соединение xmux выбыло и на нём не
+          # осталось сессий (ошибка одного запроса его больше не рвёт); публичного API
           # для этого нет. Без тега на toolchain 1.27 линковка падает:
           # relocation target golang.org/x/net/http2.(*Transport).connPool not defined
           # (замерено 16.09.2026 на go1.27.0: без тега RC=1, с тегом RC=0). На Go 1.26,
