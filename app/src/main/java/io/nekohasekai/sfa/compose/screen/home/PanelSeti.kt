@@ -98,17 +98,21 @@ fun PanelSetiScreen(onBack: () -> Unit) {
     var sost by remember { mutableStateOf<PanelSostoyanie>(PanelSostoyanie.Zhdem) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     LaunchedEffect(Unit) { sost = propuskPaneli() }
-    BackHandler {
+    // Стрелка шапки и системный «назад» — одно и то же действие: шаг назад по страницам
+    // панели, а с первой страницы — выход. Раньше стрелка шапки закрывала панель сразу с
+    // любой подстраницы, и из панели выходили нечаянно.
+    val nazad = {
         val w = webView
-        if (w != null && w.canGoBack()) w.goBack() else onBack()
+        nazadPaneli(w != null && w.canGoBack(), { w?.goBack() }, onBack)
     }
+    BackHandler { nazad() }
     // Тема приложения уходит панели в User-Agent: по «KelevraApp» она прячет свою шапку
     // (шапка здесь своя, со стрелкой выхода), по «tema/…» берёт светлую или тёмную.
     val tyomnaya = K.isDark
     val fon = K.Bg.toArgb()
     // Отступы под системные панели даёт Scaffold главного окна, как всем внутренним экранам.
     Column(Modifier.fillMaxSize().background(K.Bg)) {
-        KScreenHeader(title = "Панель сети", onBack = onBack)
+        KScreenHeader(title = "Панель сети", onBack = nazad)
         // imePadding: клавиатура ужимает окно панели, а не ложится поверх шторки
         // (иначе в «Новом человеке» кнопка «Создать» под клавишами).
         Box(Modifier.fillMaxWidth().weight(1f).imePadding(), contentAlignment = Alignment.Center) {
@@ -151,6 +155,11 @@ fun PanelSetiScreen(onBack: () -> Unit) {
             }
         }
     }
+}
+
+/** «Назад» в панели: есть куда вернуться в её истории — туда, иначе закрыть панель. */
+internal fun nazadPaneli(estIstoriya: Boolean, vIstoriyu: () -> Unit, zakryt: () -> Unit) {
+    if (estIstoriya) vIstoriyu() else zakryt()
 }
 
 @Composable
