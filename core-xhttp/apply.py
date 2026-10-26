@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Правит ядро sing-box под нас: транспорт xhttp + наши починки.
+Правит ядро sing-box под нас: транспорт xhttp, домашняя сторона VLESS reverse
+(правка 8) + наши починки.
 
 Зачем транспорт: наш боевой транспорт дома — xhttp, но в апстриме sing-box его нет
 (`unknown transport type: xhttp`), а форк с поддержкой сделан на старой базе
@@ -10,7 +11,9 @@
 (ядро пересобирается на каждое движение комнаты), ждать исправленными неоткуда.
 Каждая правка ниже подписана: что ловили в бою и почему лечится именно так.
 
-Запуск: python3 apply.py <путь к дереву sing-box>
+Запуск: python3 apply.py [--reverse] <путь к дереву sing-box>
+Правка 8 (VLESS reverse) — только для узла дома: накладывается лишь по флагу
+--reverse или KELEVRA_REVERSE=1. Сборки Desktop и Box идут без флага и её не получают.
 """
 
 import os
@@ -78,9 +81,11 @@ def patch_v_funkcii(path, replacements):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = [a for a in sys.argv[1:] if a != "--reverse"]
+    reverse = "--reverse" in sys.argv[1:] or os.environ.get("KELEVRA_REVERSE") == "1"
+    if len(args) < 1:
         fail("укажите путь к дереву sing-box")
-    core = os.path.abspath(sys.argv[1])
+    core = os.path.abspath(args[0])
     if not os.path.isdir(os.path.join(core, "transport", "v2ray")):
         fail(f"{core} не похож на дерево sing-box")
 
@@ -351,6 +356,97 @@ def main():
     )
 
     print("reality: ChaCha20 первым при X25519MLKEM768 у chrome: правка наложена")
+
+    # --------------------------------------------------------------------------------
+    # 8. VLESS reverse: домашняя сторона (bridge) к порталу Xray.
+    #
+    # Зачем: дом звонит на VPS сам и держит обратный канал, дома ничего не открыто.
+    # Портал на VPS — штатный Xray (VLESS reverse, XTLS/Xray-core#5101, с 09.2025),
+    # а в sing-box reverse нет ни в одной ветке (SagerNet/sing-box#43 открыт с 2022).
+    # Поэтому домашнюю сторону пишем сами, совместимо с Xray: команда Rvs (0x04) в
+    # заголовке VLESS, поверх неё mux.cool, где портал — клиент, а мы — сервер.
+    #
+    # Конфиг: у VLESS-аутбаунда `"reverse": {"tag": "<вход>"}`. Сессии портала (TCP и
+    # UDP) уходят в роутер как со входа <вход>, правила `inbound` на них работают.
+    # Перезвон и пул — как в Xray: раз в 2 с; DRAIN портала (после 256 сессий на
+    # соединение) — звоним ещё раз, старое доживает. Несколько аутбаундов с одним
+    # тегом — пул (VPS1, VPS2). Молчание портала 30 с (пульс у него раз в 10 с) —
+    # соединение мёртвое, звоним заново.
+    #
+    # Состояние для службы узла дома: необязательное `"state_path"` — мост атомарно
+    # (tmp + rename) пишет туда JSON {tag, server, connected, since, last_pulse,
+    # sessions, conns} при каждом изменении и не реже раза в 10 с.
+    #
+    # Новое поле в конфиге: старое ядро на нём не стартует (DisallowUnknownFields) —
+    # но поле ставится только в конфиг узла дома, который едет вместе с этим ядром.
+    # Аутбаунды без reverse не меняются (Start ничего не делает, Close/InterfaceUpdated
+    # трогают мост только если он есть). Код: core-xhttp/reverse/, тест:
+    # core-xhttp/tests/vless_reverse_test.go.
+    #
+    # Только по флагу (--reverse / KELEVRA_REVERSE=1): мост нужен одному узлу дома.
+    # У клиентов (Desktop, Box) поля reverse нет вовсе — профиль с ним ядро
+    # отвергает (unknown field), обратный канал на клиенте поднять нельзя.
+    # --------------------------------------------------------------------------------
+    if not reverse:
+        print("vless reverse: пропущено (нет --reverse / KELEVRA_REVERSE=1)")
+        return
+    shutil.copy2(
+        os.path.join(HERE, "reverse", "kelevra_reverse_option.go"),
+        os.path.join(core, "option", "kelevra_reverse.go"),
+    )
+    for name in ("kelevra_reverse.go", "kelevra_reverse_mux.go", "kelevra_reverse_state.go"):
+        shutil.copy2(
+            os.path.join(HERE, "reverse", name),
+            os.path.join(core, "protocol", "vless", name),
+        )
+    patch(
+        os.path.join(core, "option", "vless.go"),
+        [(
+            "\tPacketEncoding *string                   `json:\"packet_encoding,omitempty\"`\n}",
+            "\tPacketEncoding *string                   `json:\"packet_encoding,omitempty\"`\n"
+            "\tReverse        *VLESSReverseOptions      `json:\"reverse,omitempty\"`\n}",
+        )],
+    )
+    patch(
+        os.path.join(core, "protocol", "vless", "outbound.go"),
+        [
+            (
+                "\tpacketAddr      bool\n\txudp            bool\n}",
+                "\tpacketAddr      bool\n\txudp            bool\n"
+                "\treverse         *reverseBridge // Kelevra, правка 8\n}",
+            ),
+            (
+                "\toutbound.multiplexDialer, err = mux.NewClientWithOptions((*vlessDialer)(outbound), logger, common.PtrValueOrDefault(options.Multiplex))\n"
+                "\tif err != nil {\n"
+                "\t\treturn nil, err\n"
+                "\t}\n"
+                "\treturn outbound, nil\n",
+                "\toutbound.multiplexDialer, err = mux.NewClientWithOptions((*vlessDialer)(outbound), logger, common.PtrValueOrDefault(options.Multiplex))\n"
+                "\tif err != nil {\n"
+                "\t\treturn nil, err\n"
+                "\t}\n"
+                "\t// Kelevra (правка 8): домашняя сторона VLESS reverse, kelevra_reverse.go\n"
+                "\tif options.Reverse != nil {\n"
+                "\t\toutbound.reverse, err = newReverseBridge(ctx, router, logger, outbound, options)\n"
+                "\t\tif err != nil {\n"
+                "\t\t\treturn nil, err\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\treturn outbound, nil\n",
+            ),
+            (
+                "\tif h.multiplexDialer != nil {\n\t\th.multiplexDialer.Reset()\n\t}\n}",
+                "\tif h.multiplexDialer != nil {\n\t\th.multiplexDialer.Reset()\n\t}\n"
+                "\tif h.reverse != nil {\n\t\th.reverse.reset()\n\t}\n}",
+            ),
+            (
+                "\treturn common.Close(common.PtrOrNil(h.multiplexDialer), h.transport)",
+                "\treturn common.Close(common.PtrOrNil(h.reverse), common.PtrOrNil(h.multiplexDialer), h.transport)",
+            ),
+        ],
+    )
+
+    print("vless reverse (домашняя сторона к порталу Xray): правка наложена")
 
 
 if __name__ == "__main__":
