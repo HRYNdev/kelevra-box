@@ -167,6 +167,8 @@ object AutoMode {
         val auto: Boolean = true,
         val situation: Situation = Situation.Unknown,
         val link: Link = Link.Unknown,
+        /** Проба комнаты WB висит ([WbTrial.Pending]) прямо в этом заходе — только для текста. */
+        val wbTrialPending: Boolean = false,
     )
 
     private val _state = MutableStateFlow(State(auto = true, situation = Situation.Unknown))
@@ -218,7 +220,17 @@ object AutoMode {
 
     private fun publish(auto: Boolean, situation: Situation) {
         if (situation != _state.value.situation) perehodAt = System.currentTimeMillis()
-        _state.value = State(auto = auto, situation = situation, link = link)
+        _state.value = State(auto = auto, situation = situation, link = link, wbTrialPending = _state.value.wbTrialPending)
+    }
+
+    /**
+     * Проба комнаты WB висит ([WbTrial.Pending]) прямо в этом заходе — не обстановка, а
+     * подробность текущего захода для текста (экран, лог). Задвижку и её подтверждения
+     * не трогает: обстановка остаётся [Situation.Searching] независимо от этого флага.
+     */
+    private fun setWbTrialPending(value: Boolean) {
+        if (_state.value.wbTrialPending == value) return
+        _state.value = _state.value.copy(wbTrialPending = value)
     }
 
     /** Когда обстановка менялась в последний раз (часы стены); 0 — ещё не менялась. */
@@ -1942,6 +1954,9 @@ object AutoMode {
         // молчание одного захода тянулось бы в следующие.
         observationSilent = false
         observationBlind = false
+        // По умолчанию снято: если этот заход дойдёт до пробы WB и она зависнет
+        // ([WbTrial.Pending]), ниже выставим обратно — заново, каждым заходом.
+        setWbTrialPending(false)
         val network = physicalNetwork() ?: run {
             observedNetworkKey = null
             observationNote = "сети нет вовсе"
@@ -2192,7 +2207,9 @@ object AutoMode {
                     WbTrial.Live -> wb = true
                     WbTrial.Down -> trialRaiseRoom(host)
                     // Ожидание прервали (сеть сменилась, автомат гасят) — этот заход ничего не будит.
-                    WbTrial.Pending -> Unit
+                    // Текст экрана/лога про это знать должен: иначе висящая проба WB читалась бы
+                    // как «ничего не поднимается» наравне с настоящим поиском пути.
+                    WbTrial.Pending -> setWbTrialPending(true)
                 }
             } else {
                 wb = wbAlive()
@@ -2380,9 +2397,6 @@ object AutoMode {
      */
     internal const val WB_OVERLAP_MAX_MILLIS = 60_000L
 
-    /** Шаг ожидания первой пробы комнаты WB. */
-    private const val WB_WAIT_STEP_MILLIS = 500L
-
     /**
      * Пока проба комнаты WB висит ([WbTrial.Pending]), следующий заход зовём не обычным
      * ритмом ([delayFor]), а близко к дедлайну пробы — но не чаще этого шага, чтобы не
@@ -2489,7 +2503,7 @@ object AutoMode {
 
     /**
      * Чем кончается один заход внутри окна ожидания первой пробы WB — без сна в этом же
-     * заходе (06.11.2026: `Thread.sleep` в цикле держал поток автомата слепым к обстановке
+     * заходе (26.10.2026: `Thread.sleep` в цикле держал поток автомата слепым к обстановке
      * до [WB_TRIAL_WAIT_MILLIS]). Дедлайн не вышел и WB пока не ожила — ждём дальше, но уже
      * следующим заходом (его зовёт [loop] раньше обычного, см. выбор паузы и
      * [WB_TRIAL_POLL_MILLIS]).
@@ -2505,10 +2519,13 @@ object AutoMode {
      *
      * Повод тот же, что у комнаты ([roomTrialAfter] провалов основного подряд). Ядро поднимает
      * не автомат, а присмотр [WbChatWatchdog] — по [wbWanted]; он же меряет её сокс раз в пять
-     * секунд и пишет итог в реестр ([PathId.WB]). Здесь только просьба и ожидание: до
-     * [WB_TRIAL_WAIT_MILLIS] первой удачной пробы. WB встаёт за 3-10 с, поэтому ждём в самом
-     * заходе, а не отдельным потоком, как Телемост: вердикт нужен этому же заходу, иначе
-     * Телемост будили бы зря.
+     * секунд и пишет итог в реестр ([PathId.WB]). Здесь только просьба и окно ожидания до
+     * [WB_TRIAL_WAIT_MILLIS] ([wbTrialDeadline]) — без сна в этом потоке ([wbTrialPendingIn]):
+     * `Thread.sleep` в цикле держал поток автомата слепым к обстановке до всего срока окна
+     * (поймано 26.10.2026). Пока дедлайн не вышел и WB не ожила, этот заход отдаёт
+     * [WbTrial.Pending] и выходит; следующий заход [loop] зовёт раньше обычного ритма, ближе
+     * к дедлайну ([wbTrialWaitIn], шаг [WB_TRIAL_POLL_MILLIS]). Если проба WB ответит раньше —
+     * присмотр сам будит заход ([onWbProbe] → [wakeLoop]), не дожидаясь этого шага.
      *
      * Ядро sing-box собирается под WB ([Host.prepareCoreForWb]) до подъёма её ядра: пересборка
      * закрывает tun. Поэтому при уже стоящем Телемосте пробуем, только если пересобирать не
@@ -3004,7 +3021,7 @@ object AutoMode {
      * следующего захода — не обычный ритм [wait], а короче: не дальше дедлайна пробы и не чаще
      * [WB_TRIAL_POLL_MILLIS], иначе автомат узнал бы об оживлении WB или о её смерти с
      * опозданием до [WB_TRIAL_WAIT_MILLIS] — тем самым окном слепоты, ради которого затевалась
-     * вся правка (ревью №2, 06.11.2026).
+     * вся правка (ревью №2, 26.10.2026).
      *
      * @param deadline [wbTrialDeadline]; 0 — проба не идёт, пауза не трогается.
      */
@@ -3202,7 +3219,7 @@ object AutoMode {
         // трафик идёт, а нужные домены в него не заворачиваются.
         val rules = RuleSetCache.state.value
         val note = "заход: $observationNote; наборы правил ${rules.ready} из ${rules.total} → " +
-            "вижу «${name(observed)}», стою на «${name(gate.current)}»$confirmations"
+            "вижу «${name(observed, _state.value.wbTrialPending)}», стою на «${name(gate.current)}»$confirmations"
         val now = SystemClock.elapsedRealtime()
         if (note == lastRoundNote && now - lastRoundNoteAt < ROUND_NOTE_REPEAT_MILLIS) return
         lastRoundNote = note
@@ -4631,13 +4648,20 @@ object AutoMode {
     private fun roomSettling(): Boolean = OlcRtcCore.state is OlcRtcCore.State.Starting ||
         (OlcRtcCore.state is OlcRtcCore.State.Ready && OlcRtcCore.health is OlcRtcCore.Health.Unknown)
 
-    private fun name(situation: Situation): String = when (situation) {
-        Situation.Home -> "дома"
-        Situation.Main -> "основной канал"
-        Situation.Wb -> "комната WB"
-        Situation.Room -> "комната"
-        Situation.Searching -> "ничего не поднимается"
-        Situation.NoNetwork -> "сети нет"
-        Situation.Unknown -> "неизвестно"
+    /**
+     * [wbTrialPending] меняет только текст поиска: обстановка остаётся [Situation.Searching]
+     * (задвижка её не знает), а висящая проба WB — не то же самое, что «ничего не поднимается».
+     */
+    internal fun name(situation: Situation, wbTrialPending: Boolean = false): String = when {
+        situation == Situation.Searching && wbTrialPending -> "проверяю комнату WB"
+        else -> when (situation) {
+            Situation.Home -> "дома"
+            Situation.Main -> "основной канал"
+            Situation.Wb -> "комната WB"
+            Situation.Room -> "комната"
+            Situation.Searching -> "ничего не поднимается"
+            Situation.NoNetwork -> "сети нет"
+            Situation.Unknown -> "неизвестно"
+        }
     }
 }
