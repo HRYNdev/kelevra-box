@@ -251,6 +251,9 @@ fun HomeScreen(
     // отказали, но менять обстановку он вправе только после своих подтверждений.
     // Реестр про такое не знает и знать не должен — он помнит выходы, а не решения.
     val searching = running && auto.situation == AutoMode.Situation.Searching
+    // Проба комнаты WB висит — та же обстановка «ищу путь», но причина другая: не всё
+    // подряд отказало, а одна проба ждёт своего дедлайна. Текст про это, обстановка — нет.
+    val wbTrialPending = running && auto.wbTrialPending
 
     val activeDelay = channels.firstOrNull { it.selected }?.delayMs ?: 0
     val place = when {
@@ -298,6 +301,7 @@ fun HomeScreen(
                 busy -> "Отключаюсь"
                 home -> "Дома"
                 noNetwork -> "Нет сети"
+                searching && wbTrialPending -> "Проверяю WB"
                 searching -> "Поиск пути"
                 roomRising -> "Подъём комнаты"
                 wbTitle != null -> wbTitle
@@ -327,6 +331,7 @@ fun HomeScreen(
                 busy -> ""
                 home -> "дома интернет и так открыт, туннель выключен"
                 noNetwork -> "включится, когда появится сеть"
+                searching && wbTrialPending -> "проверяю комнату WB"
                 searching -> "подбираю рабочий выход"
                 roomRising -> "поднимаю канал через комнату"
                 wbHint != null -> wbHint
