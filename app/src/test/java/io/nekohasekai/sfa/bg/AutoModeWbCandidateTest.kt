@@ -122,6 +122,41 @@ class AutoModeWbCandidateTest {
         assertFalse(AutoMode.wbReleaseDue(failedAt = failed, now = failed + 120_000L, roomLive = true, wbLive = true))
     }
 
+    // ------------------------------------------------------------ окно пробы без Thread.sleep
+
+    @Test
+    fun `проба ожила — дедлайн не важен`() {
+        assertEquals(AutoMode.WbTrial.Live, AutoMode.wbTrialPendingIn(now = 999_999L, deadline = 10L, alive = true))
+    }
+
+    @Test
+    fun `дедлайн не вышел и не ожила — ждём дальше без сна`() {
+        assertEquals(AutoMode.WbTrial.Pending, AutoMode.wbTrialPendingIn(now = 10_000L, deadline = 10_001L, alive = false))
+        // Граница: ровно на дедлайне уже не «ждём», а «решаем».
+        assertEquals(AutoMode.WbTrial.Down, AutoMode.wbTrialPendingIn(now = 10_001L, deadline = 10_001L, alive = false))
+    }
+
+    @Test
+    fun `дедлайн вышел и не ожила — дальше решает вызывающий`() {
+        assertEquals(AutoMode.WbTrial.Down, AutoMode.wbTrialPendingIn(now = 40_000L, deadline = 30_000L, alive = false))
+    }
+
+    @Test
+    fun `пауза до следующего захода короче обычной, пока проба WB висит`() {
+        val now = 100_000L
+        val deadline = now + 12_000L
+        // Обычная пауза (минуты) усекается и остатком до дедлайна, и коротким шагом.
+        assertEquals(3_000L, AutoMode.wbTrialWaitIn(wait = 300_000L, now = now, deadline = deadline, pollMillis = 3_000L))
+        // Остаток до дедлайна короче шага — берём его, а не шаг.
+        assertEquals(2_000L, AutoMode.wbTrialWaitIn(wait = 300_000L, now = now, deadline = now + 2_000L, pollMillis = 3_000L))
+        // Обычная пауза и так короче — её не удлиняем.
+        assertEquals(1_000L, AutoMode.wbTrialWaitIn(wait = 1_000L, now = now, deadline = deadline, pollMillis = 3_000L))
+        // Дедлайн уже прошёл (деадлайн ≤ now) — не блокируем заход, 0.
+        assertEquals(0L, AutoMode.wbTrialWaitIn(wait = 300_000L, now = now, deadline = now - 1_000L, pollMillis = 3_000L))
+        // Проба не идёт — пауза не трогается.
+        assertEquals(300_000L, AutoMode.wbTrialWaitIn(wait = 300_000L, now = now, deadline = 0L, pollMillis = 3_000L))
+    }
+
     @Test
     fun `сроки — как в решении`() {
         assertEquals(30_000L, AutoMode.WB_TRIAL_WAIT_MILLIS)

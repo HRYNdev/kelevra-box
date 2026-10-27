@@ -1735,18 +1735,22 @@ object AutoMode {
                 recheck != null -> recheck
                 else -> delayFor(situation)
             }
+            // Проба комнаты WB висит ([wbTrialDeadline] не нулевой) — заход короче обычного
+            // ритма, близко к её дедлайну, а не задним числом следующим полным кругом.
+            val wbWait = wbTrialWaitIn(wait, SystemClock.elapsedRealtime(), wbTrialDeadline)
             // Полный ритм комнаты и дома досиживаем не вслепую: между заходами идёт одна
             // дешёвая проба. Спешка (серия, набор подтверждений) в этом не нуждается —
-            // там заход и так близко.
+            // там заход и так близко. Выбор формы ждёт по исходному [wait] (проба WB его не
+            // трогает, только итоговый срок — [wbWait]).
             when {
                 wait == Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS) &&
                     (situation == Situation.Room || situation == Situation.Wb) &&
-                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(wait)
+                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(wbWait)
                 // Дома проба ловит то, о чём иначе некому сказать: ограничение, наступившее
                 // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
                 wait == Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS) && situation == Situation.Home &&
-                    !Pult.vykl("prismotr_doma") -> waitAtHome(wait)
-                else -> waitNext(wait)
+                    !Pult.vykl("prismotr_doma") -> waitAtHome(wbWait)
+                else -> waitNext(wbWait)
             }
         }
     }
@@ -2379,6 +2383,13 @@ object AutoMode {
     /** Шаг ожидания первой пробы комнаты WB. */
     private const val WB_WAIT_STEP_MILLIS = 500L
 
+    /**
+     * Пока проба комнаты WB висит ([WbTrial.Pending]), следующий заход зовём не обычным
+     * ритмом ([delayFor]), а близко к дедлайну пробы — но не чаще этого шага, чтобы не
+     * крутить заход вхолостую, если дедлайн далеко.
+     */
+    private const val WB_TRIAL_POLL_MILLIS = 3_000L
+
     /** Чем кончилась проба комнаты WB в этом заходе. */
     internal enum class WbTrial {
         /** Через её сокс прошёл запрос — Телемост не нужен. */
@@ -2398,6 +2409,10 @@ object AutoMode {
     /** Когда началось нынешнее окно ожидания первой пробы (elapsedRealtime); 0 — не ждём. */
     @Volatile
     private var wbTrialSince = 0L
+
+    /** Дедлайн нынешнего окна ожидания пробы (elapsedRealtime, [wbTrialSince] + срок); 0 — не ждём. */
+    @Volatile
+    private var wbTrialDeadline = 0L
 
     /** Когда окно ожидания вышло без удачной пробы; 0 — не выходило. От него — [WB_OVERLAP_MAX_MILLIS]. */
     @Volatile
@@ -2473,6 +2488,19 @@ object AutoMode {
     }
 
     /**
+     * Чем кончается один заход внутри окна ожидания первой пробы WB — без сна в этом же
+     * заходе (06.11.2026: `Thread.sleep` в цикле держал поток автомата слепым к обстановке
+     * до [WB_TRIAL_WAIT_MILLIS]). Дедлайн не вышел и WB пока не ожила — ждём дальше, но уже
+     * следующим заходом (его зовёт [loop] раньше обычного, см. выбор паузы и
+     * [WB_TRIAL_POLL_MILLIS]).
+     */
+    internal fun wbTrialPendingIn(now: Long, deadline: Long, alive: Boolean): WbTrial = when {
+        alive -> WbTrial.Live
+        now < deadline -> WbTrial.Pending
+        else -> WbTrial.Down
+    }
+
+    /**
      * Пробный подъём комнаты WB — раньше Телемоста.
      *
      * Повод тот же, что у комнаты ([roomTrialAfter] провалов основного подряд). Ядро поднимает
@@ -2510,6 +2538,7 @@ object AutoMode {
             }
             wbWantedMem = true
             wbTrialSince = now
+            wbTrialDeadline = now + WB_TRIAL_WAIT_MILLIS
             wbFailedAt = 0L
             wbTriedAt = now
             wbLastProbeLive = null
@@ -2526,18 +2555,19 @@ object AutoMode {
             // Везла и перестала. Присмотр поднимает ядро через пять секунд после выхода — даём
             // ей то же окно, что и при подъёме, и Телемост пока не будим.
             wbTrialSince = now
+            wbTrialDeadline = now + WB_TRIAL_WAIT_MILLIS
             KLog.i(TAG, "комната WB перестала везти — жду её до ${WB_TRIAL_WAIT_MILLIS / 1000} с, Телемост пока не бужу")
         }
-        val deadline = wbTrialSince + WB_TRIAL_WAIT_MILLIS
-        while (SystemClock.elapsedRealtime() < deadline) {
-            // Сеть сменилась или автомат гасят — ждать дальше незачем, окно продолжит следующий заход.
-            if (!active || networkChanged) return WbTrial.Pending
-            if (wbAlive()) return wbLive()
-            Thread.sleep(WB_WAIT_STEP_MILLIS)
+        when (wbTrialPendingIn(SystemClock.elapsedRealtime(), wbTrialDeadline, wbAlive())) {
+            WbTrial.Live -> return wbLive()
+            // Дедлайн не вышел — не сидим в этом заходе, ждём дальше следующим (короткий
+            // шаг зовёт [loop] сам, см. выбор паузы в [loop] и [WB_TRIAL_POLL_MILLIS]).
+            WbTrial.Pending -> return WbTrial.Pending
+            WbTrial.Down -> Unit
         }
-        if (wbAlive()) return wbLive()
         wbFailedAt = SystemClock.elapsedRealtime()
         wbTrialSince = 0L
+        wbTrialDeadline = 0L
         // Как у Телемоста: при мёртвом основном WB — одна из двух дорог наружу, и пауза до
         // следующей попытки не растёт до десяти минут ([nextTrialPause]).
         wbTrialPause = nextTrialPause(wbTrialPause, mainKnownDead())
@@ -2553,6 +2583,7 @@ object AutoMode {
     private fun wbLive(): WbTrial {
         if (wbTrialSince != 0L || wbFailedAt != 0L) KLog.i(TAG, "комната WB везёт — Телемост не бужу")
         wbTrialSince = 0L
+        wbTrialDeadline = 0L
         wbFailedAt = 0L
         wbTrialPause = Pult.long("avtomat.room_trial_pause_millis", ROOM_TRIAL_PAUSE_MILLIS)
         return WbTrial.Live
@@ -2581,6 +2612,7 @@ object AutoMode {
         if (!wbWantedMem) return
         wbWantedMem = false
         wbTrialSince = 0L
+        wbTrialDeadline = 0L
         wbFailedAt = 0L
         wbLastProbeLive = null
         val h = host
@@ -2594,6 +2626,7 @@ object AutoMode {
     private fun forgetWb() {
         wbWantedMem = false
         wbTrialSince = 0L
+        wbTrialDeadline = 0L
         wbFailedAt = 0L
         wbTriedAt = 0L
         wbTrialPause = ROOM_TRIAL_PAUSE_MILLIS
@@ -2965,6 +2998,18 @@ object AutoMode {
             grown.coerceAtMost(Pult.long("avtomat.round_searching_cap_millis", ROUND_SEARCHING_CAP_MILLIS))
         }
     }.also { if (situation != Situation.Searching && situation != Situation.Unknown) searchingRounds = 0 }
+
+    /**
+     * Пока проба комнаты WB висит ([WbTrial.Pending], [wbTrialDeadline] не нулевой), пауза до
+     * следующего захода — не обычный ритм [wait], а короче: не дальше дедлайна пробы и не чаще
+     * [WB_TRIAL_POLL_MILLIS], иначе автомат узнал бы об оживлении WB или о её смерти с
+     * опозданием до [WB_TRIAL_WAIT_MILLIS] — тем самым окном слепоты, ради которого затевалась
+     * вся правка (ревью №2, 06.11.2026).
+     *
+     * @param deadline [wbTrialDeadline]; 0 — проба не идёт, пауза не трогается.
+     */
+    internal fun wbTrialWaitIn(wait: Long, now: Long, deadline: Long, pollMillis: Long = WB_TRIAL_POLL_MILLIS): Long =
+        if (deadline == 0L) wait else minOf(wait, (deadline - now).coerceAtLeast(0L), pollMillis)
 
     /**
      * Сон до следующего захода. Событие, пришедшее пока шёл заход, не теряется: сон
