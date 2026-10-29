@@ -1763,9 +1763,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         binder.close()
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     internal fun onRevoke() {
         // Разрешение на VPN отобрали снаружи (другое VPN-приложение, политика, человек в
-        // системных настройках). Со стороны это «оно само выключилось».
+        // системных настройках). Со стороны это «оно само выключилось» — раньше здесь
+        // просто гасло, и человеку не было видно ни строки. 28.10.2026: отзывы шли в
+        // первую минуту после включения экрана — похоже на другое VPN-приложение, а не
+        // на человека в настройках, поэтому пробуем вернуться сами, но только один раз:
+        // спорить с чужим захватом разрешения циклом перезапуска — не наше дело.
         KLog.w(TAG, "система отозвала разрешение на VPN — останавливаюсь")
         // Отметку кладём в настройки, чтобы она уехала на сервер в паспорте устройства
         // (см. Kelevra.deviceHeaders). Разбор 10.09.2026: туннель гасила сама
@@ -1773,6 +1778,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         runCatching { Settings.vpnRazreshenieOtozvanoV = System.currentTimeMillis() }
         runCatching { Zapisi.perehod("vpn_otozvan", "система отозвала разрешение на VPN", kto = "система") }
         stopService("система: разрешение на VPN отозвано")
+        GlobalScope.launch(Dispatchers.IO) {
+            // Один тихий перезапуск, если право на VPN на месте (VpnService.prepare()
+            // уже вернул null — значит права не отнимали, просто кто-то временно
+            // перехватил туннель). Прав нет — AvtoVozvrat сразу зовёт человека
+            // уведомлением «нажмите, чтобы включить», без попытки подняться.
+            AvtoVozvrat.vernut(AvtoVozvrat.Povod.OTOZVANO, maxPopytok = 1)
+        }
     }
 
     internal fun sendNotification(notification: Notification) {

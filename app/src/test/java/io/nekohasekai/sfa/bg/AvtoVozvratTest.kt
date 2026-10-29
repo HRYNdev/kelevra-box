@@ -103,6 +103,16 @@ class AvtoVozvratTest {
     }
 
     @Test
+    fun `отзыв VPN с правом на месте поднимает службу один раз, без права — сразу уведомление`() {
+        val f1 = Fakty(Povod.OTOZVANO, hotel = true, zhiva = false, vpnRazreshenie = true, popytok = 0, maxPopytok = 1)
+        assertEquals(Shag.PODNYAT, AvtoVozvrat.reshit(f1))
+        val f2 = Fakty(Povod.OTOZVANO, hotel = true, zhiva = false, vpnRazreshenie = true, popytok = 1, maxPopytok = 1)
+        assertEquals("вторая попытка не идёт — защёлка на одну попытку за отзыв", Shag.UVEDOMIT, AvtoVozvrat.reshit(f2))
+        val f3 = Fakty(Povod.OTOZVANO, hotel = true, zhiva = false, vpnRazreshenie = false, popytok = 0, maxPopytok = 1)
+        assertEquals("права отняты — без попытки подняться", Shag.UVEDOMIT, AvtoVozvrat.reshit(f3))
+    }
+
+    @Test
     fun `тексты уведомления официальные и без слова защита`() {
         for (p in Povod.values()) {
             val (z, t) = AvtoVozvrat.tekst(p)
