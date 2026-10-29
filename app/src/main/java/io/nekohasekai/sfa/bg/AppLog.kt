@@ -68,8 +68,25 @@ object AppLog {
     /** Головной плюс шесть хвостов: 7 × 2 МБ = 14 МБ. */
     private const val MAX_FILES = 7
 
-    /** Сорвавшийся logcat поднимаем заново, но не чаще раза в полминуты. */
+    /**
+     * Потолок паузы перезапуска. Повод правки 28.10.2026: на Huawei чтение logcat
+     * обрывалось каждые ~44 с (1147 раз за 8 дней), и фиксированная 30-секундная пауза
+     * между КАЖДЫМ обрывом держала журнал слепым полминуты при каждом из них — за
+     * сутки это сотни слепых промежутков. Первый обрыв поднимаем почти сразу
+     * ([MIN_RESTART_PAUSE_MILLIS]), а если обрывы идут подряд быстро один за другим —
+     * пауза растёт вдвое при каждом следующем, пока не достигнет этого потолка.
+     */
     private const val RESTART_PAUSE_MILLIS = 30_000L
+
+    /** С этой паузы начинается перезапуск после первого в серии обрыва. */
+    private const val MIN_RESTART_PAUSE_MILLIS = 2_000L
+
+    /**
+     * Если чтение прожило дольше этого — оно было здоровым, и серию подряд идущих
+     * быстрых обрывов считаем закончившейся: следующий обрыв получит паузу заново
+     * с [MIN_RESTART_PAUSE_MILLIS], а не унаследует разогнанную.
+     */
+    private const val SBROS_PODRYAD_MILLIS = 60_000L
 
     private val stampFormat = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
 
@@ -374,14 +391,47 @@ object AppLog {
         // Одна отметка на всю жизнь записи: перезапуск logcat продолжает с неё, а не с
         // начала буфера.
         val metka = LogcatMetka()
+        // Сколько подряд быстрых (короче SBROS_PODRYAD_MILLIS) обрывов уже было —
+        // пауза растёт с каждым, пока серию не прерывает здоровое долгое чтение.
+        var podryad = 0
         while (true) {
-            val failure = runCatching { drain(target, metka) }.exceptionOrNull()
-            note("=== чтение logcat прервалось${failure?.let { ": ${it.javaClass.simpleName}" }.orEmpty()}, поднимаю заново ===")
-            runCatching { Thread.sleep(RESTART_PAUSE_MILLIS) }.onFailure { return }
+            val itog = drain(target, metka)
+            if (sbrositPodryad(itog.zhilMs)) podryad = 0
+            val pauza = pauzaPosle(podryad)
+            note(
+                "=== чтение logcat прервалось" +
+                    (itog.oshibka?.let { ": ${it.javaClass.simpleName}" } ?: "") +
+                    ", код ${itog.kodVyhoda ?: "?"}, прожил ${itog.zhilMs / 1000} с, следующий через ${pauza / 1000} с ===",
+            )
+            runCatching { Thread.sleep(pauza) }.onFailure { return }
+            podryad++
             // Logcat сорвался — проверить заново, что он доносит: паспорт не должен врать.
             // Маркеры, записанные чуть раньше запуска чтения, оно подберёт по отметке -T.
             pereproverit.offer(Unit)
         }
+    }
+
+    /** Итог одного прохода [drain]: чем кончился процесс logcat и сколько прожил. */
+    internal data class DrainItog(val oshibka: Throwable?, val kodVyhoda: Int?, val zhilMs: Long)
+
+    /**
+     * Чтение прожило дольше [SBROS_PODRYAD_MILLIS] — значит было здоровым, и серию
+     * подряд идущих БЫСТРЫХ обрывов пора считать закончившейся.
+     */
+    internal fun sbrositPodryad(zhilMs: Long): Boolean = zhilMs >= SBROS_PODRYAD_MILLIS
+
+    /**
+     * Пауза перед следующим перезапуском после [podryad] уже случившихся подряд
+     * быстрых обрывов: [MIN_RESTART_PAUSE_MILLIS], дальше рост вдвое на каждый
+     * следующий, не выше [RESTART_PAUSE_MILLIS].
+     */
+    internal fun pauzaPosle(podryad: Int): Long {
+        var pauza = MIN_RESTART_PAUSE_MILLIS
+        repeat(podryad.coerceAtLeast(0)) {
+            if (pauza >= RESTART_PAUSE_MILLIS) return RESTART_PAUSE_MILLIS
+            pauza *= 2
+        }
+        return pauza.coerceAtMost(RESTART_PAUSE_MILLIS)
     }
 
     /**
@@ -452,11 +502,22 @@ object AppLog {
         return teg in ШУМНЫЕ_ТЕГИ
     }
 
-    private fun drain(target: LogRotator, metka: LogcatMetka) {
+    /**
+     * Качает одну жизнь процесса logcat в файл. Возвращает итог ([DrainItog]) вместо
+     * того, чтобы бросать исключение наружу молча: [pumpLoop] по нему решает, сколько
+     * ждать до перезапуска, и пишет код выхода процесса в строку обрыва.
+     *
+     * Код выхода снимается ПОСЛЕ конца чтения, но ДО [Process.destroy] ниже — иначе
+     * вместо настоящей причины обрыва увидели бы код нашего же принудительного убийства
+     * (SIGKILL, 137). Если за короткий срок после конца потока процесс сам не
+     * завершился (т.е. оборвался именно поток, а не процесс), код — null.
+     */
+    private fun drain(target: LogRotator, metka: LogcatMetka): DrainItog {
         val myPid = Process.myPid()
         val pid = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) myPid else null
+        val nachalos = SystemClock.elapsedRealtime()
         val process = Runtime.getRuntime().exec(metka.komanda(pid).toTypedArray())
-        try {
+        val oshibka = runCatching {
             BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                 while (true) {
                     val line = reader.readLine() ?: break
@@ -466,9 +527,12 @@ object AppLog {
                     target.append(line + "\n")
                 }
             }
-        } finally {
-            runCatching { process.destroy() }
-        }
+        }.exceptionOrNull()
+        val kodVyhoda = runCatching {
+            if (process.waitFor(2, TimeUnit.SECONDS)) process.exitValue() else null
+        }.getOrNull()
+        runCatching { process.destroy() }
+        return DrainItog(oshibka, kodVyhoda, SystemClock.elapsedRealtime() - nachalos)
     }
 }
 
