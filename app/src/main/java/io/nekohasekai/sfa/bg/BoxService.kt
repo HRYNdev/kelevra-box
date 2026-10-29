@@ -46,6 +46,7 @@ import io.nekohasekai.sfa.ktx.hasPermission
 import io.nekohasekai.sfa.vendor.Vendor
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -1777,13 +1778,20 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // система, и узнать это можно было только вручную внутри архива журнала.
         runCatching { Settings.vpnRazreshenieOtozvanoV = System.currentTimeMillis() }
         runCatching { Zapisi.perehod("vpn_otozvan", "система отозвала разрешение на VPN", kto = "система") }
+        // stopService ниже сам стирает startedByUser — запоминаем, включал ли человек, до него.
+        val vklyuchal = Settings.startedByUser
         stopService("система: разрешение на VPN отозвано")
         GlobalScope.launch(Dispatchers.IO) {
+            // Ждём, пока остановка дойдёт до конца: иначе возврат увидит ещё живую службу
+            // и решит, что поднимать нечего, а запуск поверх останова его же и погасит.
+            var zhdali = 0L
+            while (zhiva && zhdali < 10_000L) { delay(200); zhdali += 200 }
+            delay(1_000)
             // Один тихий перезапуск, если право на VPN на месте (VpnService.prepare()
             // уже вернул null — значит права не отнимали, просто кто-то временно
             // перехватил туннель). Прав нет — AvtoVozvrat сразу зовёт человека
             // уведомлением «нажмите, чтобы включить», без попытки подняться.
-            AvtoVozvrat.vernut(AvtoVozvrat.Povod.OTOZVANO, maxPopytok = 1)
+            AvtoVozvrat.vernut(AvtoVozvrat.Povod.OTOZVANO, maxPopytok = 1, hotelBylo = vklyuchal)
         }
     }
 
