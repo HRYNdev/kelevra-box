@@ -529,7 +529,14 @@ object AppLog {
             }
         }.exceptionOrNull()
         val kodVyhoda = runCatching {
-            if (process.waitFor(2, TimeUnit.SECONDS)) process.exitValue() else null
+            // waitFor с таймаутом есть только с Android 8 (API 26); ниже код не узнаём.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+                null
+            } else if (process.waitFor(2, TimeUnit.SECONDS)) {
+                process.exitValue()
+            } else {
+                null
+            }
         }.getOrNull()
         runCatching { process.destroy() }
         return DrainItog(oshibka, kodVyhoda, SystemClock.elapsedRealtime() - nachalos)
