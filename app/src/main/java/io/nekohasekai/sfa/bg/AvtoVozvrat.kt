@@ -86,6 +86,7 @@ object AvtoVozvrat {
         OBNOVLENIE("после обновления"),
         ZAGRUZKA("после перезагрузки"),
         UBITA("после остановки системой"),
+        OTOZVANO("после отзыва разрешения на VPN"),
     }
 
     enum class Shag { NICHEGO, PODNYAT, UVEDOMIT }
@@ -147,6 +148,7 @@ object AvtoVozvrat {
         Povod.OBNOVLENIE -> "Kelevra не включилась после обновления" to "Нажмите, чтобы включить"
         Povod.ZAGRUZKA -> "Kelevra не включилась после перезагрузки" to "Нажмите, чтобы включить"
         Povod.UBITA -> "Kelevra выключилась" to "Система остановила Kelevra. Нажмите, чтобы включить"
+        Povod.OTOZVANO -> "Kelevra выключилась" to "Разрешение на VPN отозвано. Нажмите, чтобы включить"
     }
 
     /** Строка причины для журнала: что именно не дало подняться. */
@@ -167,8 +169,15 @@ object AvtoVozvrat {
      * Поднять службу, если человек её включал, а её нет. Ждёт подтверждения до
      * [ZHDAT_MS] на попытку; не дождался — уведомление. Возвращает, жива ли служба.
      * Второй одновременный заход не начинается.
+     *
+     * @param maxPopytok сколько попыток разрешено в этом заходе. [Povod.OTOZVANO] зовёт
+     *   с единицей: разрешение могло забрать другое VPN-приложение, и крутиться в ответ
+     *   на каждый его захват — спорить с ним, а не включаться самим.
+     * @param hotelBylo «человек включал» на момент события, если флаг к этому времени уже
+     *   стёрт: stopService сам сбрасывает [Settings.startedByUser], и после отзыва без
+     *   этого параметра возврат видел «не включали» и молчал.
      */
-    suspend fun vernut(povod: Povod, zhdatMs: Long = ZHDAT_MS): Boolean {
+    suspend fun vernut(povod: Povod, zhdatMs: Long = ZHDAT_MS, maxPopytok: Int = POPYTOK, hotelBylo: Boolean? = null): Boolean {
         if (!idet.compareAndSet(false, true)) {
             KLog.i(TAG, "${povod.slovo}: возврат службы уже идёт — второй не начинаю")
             return BoxService.zhiva
@@ -182,10 +191,11 @@ object AvtoVozvrat {
             while (true) {
                 val f = Fakty(
                     povod = povod,
-                    hotel = Settings.startedByUser,
+                    hotel = hotelBylo ?: Settings.startedByUser,
                     zhiva = BoxService.zhiva,
                     vpnRazreshenie = vpnRazreshenie(ctx),
                     popytok = popytok,
+                    maxPopytok = maxPopytok,
                     nedavnoPodnimali = nedavnoPodnimali,
                 )
                 when (reshit(f)) {
