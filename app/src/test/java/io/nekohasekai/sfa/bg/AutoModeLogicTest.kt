@@ -452,6 +452,25 @@ class AutoModeLogicTest {
     }
 
     @Test
+    fun `в начале серии после смены сети определитель не зовём`() {
+        // Сеть только сменилась: канал ещё не поднялся (broken), вердикта про неё ещё
+        // не было (cachedAgeMillis = null) — старый код звал определитель немедленно и
+        // получал DpiBlacklist, который ничего не переключает (handoff 28.10, 41 из 70).
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = null, settling = true))
+    }
+
+    @Test
+    fun `серия идёт, но вердикт уже был — решает его возраст, как и раньше`() {
+        assertFalse(AutoMode.askDetector(broken = true, cachedAgeMillis = 60_000L, settling = true))
+        assertTrue(AutoMode.askDetector(broken = true, cachedAgeMillis = 6 * 60_000L, settling = true))
+    }
+
+    @Test
+    fun `массовые отказы перевешивают начало серии`() {
+        assertTrue(AutoMode.askDetector(broken = true, cachedAgeMillis = null, suspect = true, settling = true))
+    }
+
+    @Test
     fun `проверки проходят, узел отвечает, а соединения массово падают — зовём`() {
         assertTrue(AutoMode.askDetector(broken = false, cachedAgeMillis = null, nodeAnswers = true, suspect = true))
         assertTrue(
