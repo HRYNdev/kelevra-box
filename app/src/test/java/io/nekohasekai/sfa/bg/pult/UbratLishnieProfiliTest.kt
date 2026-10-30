@@ -1,5 +1,7 @@
 package io.nekohasekai.sfa.bg.pult
 
+import io.nekohasekai.sfa.SubscriptionLink
+
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -47,6 +49,19 @@ class UbratLishnieProfiliTest {
         )
         assertEquals("oshibka-vybran_ne_klyuch", UbratLishnieProfili.vypolnit(1, p))
         assertEquals(emptyList<Long>(), p.udaleny)
+    }
+
+    @Test
+    fun `чужая подписка с путём k на другом хосте не трогается, наш основной хост — да`() = runBlocking {
+        val p = Podmena(
+            listOf(
+                UbratLishnieProfili.Profil(1, remote = true, url = profilU),
+                UbratLishnieProfili.Profil(2, remote = true, url = "https://drugoy-vpn.example.net/k/ABCDEF123456"), // чужой хост
+                UbratLishnieProfili.Profil(3, remote = true, url = "https://${SubscriptionLink.DEFAULT_HOST}/k/OSNOVNOY1234"), // наш основной
+            ),
+        )
+        assertEquals("ok-1", UbratLishnieProfili.vypolnit(1, p))
+        assertEquals(listOf(3L), p.udaleny)
     }
 
     @Test

@@ -43,6 +43,9 @@ object UbratLishnieProfili {
             if (p.id == vybranId || !p.remote) continue
             val parsed = p.url?.let { SubscriptionLink.parse(it) } ?: continue
             if (parsed.kind != 'k') continue
+            // `/k/` бывает и у чужой подписки (parse не смотрит на хост) — трогаем только наши:
+            // хост выбранного профиля или наш основной.
+            if (parsed.host != vybranParsed.host && parsed.host != SubscriptionLink.DEFAULT_HOST) continue
             set.udalit(p.id)
             udaleno++
         }
