@@ -2064,7 +2064,7 @@ object AutoMode {
         val atHome = dnsHome && carried != false
         val massovyeBylo = massovyeOtkazySvezhie()
         if (hint != NetworkMode.Whitelist && !atHome &&
-            askDetector(broken, hintAge(network), nodeAnswers(), suspect = massovyeBylo)
+            askDetector(broken, hintAge(network), nodeAnswers(), suspect = massovyeBylo, settling = burst.active)
         ) {
             // Повод от массовых отказов — на один замер, а не на всё время его свежести.
             massovyeOtkazyAt = 0L
@@ -3630,9 +3630,23 @@ object AutoMode {
          * не перемеряется — один повод стоит не больше одного замера за срок подсказки.
          */
         suspect: Boolean = false,
+        /**
+         * Идёт серия перепроверок после смены сети ([AutoModeBurst.active]). В её начале
+         * основной канал почти всегда ещё не поднялся (`broken` = true), а вердикта про
+         * эту сеть ещё не было (`cachedAgeMillis` = null) — то есть ровно условие, что
+         * ниже зовёт определитель немедленно. А TLS в эти секунды не успевает, и замер
+         * честно отвечает про недоделанную сеть вердиктом DpiBlacklist, который не
+         * переключает ничего (потребитель только [NetworkMode.Whitelist]) и стоит
+         * автомату ~5 с в потоке захода: замер 28.10.2026 (handoff, сессия 8cf9c165) —
+         * 41 из 70 таких вердиктов в 90 с после смены сети. Серия сама коротка (1+3+8+20 с)
+         * и обрывается, как только обстановка устоится — определитель подождёт её конца,
+         * а не 90 с константой.
+         */
+        settling: Boolean = false,
     ): Boolean = when {
         !broken && !suspect -> false
         nodeAnswers && !suspect -> false
+        settling && !suspect && cachedAgeMillis == null -> false
         cachedAgeMillis == null -> true
         else -> cachedAgeMillis >= Pult.long("avtomat.hint_ttl_millis", HINT_TTL_MILLIS)
     }
