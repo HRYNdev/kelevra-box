@@ -49,7 +49,7 @@ object PultYadro {
     /** Команды v1 Box (PULT.md + «Главная цель», п. 4). */
     val KOMANDY = setOf(
         "prishli_zhurnal", "obnovi_profil", "pereydi_na_klyuch", "sbros_avtomata", "proverit_obnovlenie",
-        "diagnostika", "proba",
+        "diagnostika", "proba", "ubrat_lishnie_profili",
     )
 
     /** Команды, которые ждут ответа сервера на журнал и потому идут мимо общей очереди. */

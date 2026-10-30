@@ -40,6 +40,7 @@ object PultIspolnitel : Pult.Ispolnitel {
             "ok"
         }
         "pereydi_na_klyuch" -> pereydiNaKlyuch()
+        "ubrat_lishnie_profili" -> ubratLishnieProfili()
         "sbros_avtomata" -> {
             AutoMode.sbrosPamyati("команда пульта")
             "ok"
@@ -109,6 +110,32 @@ object PultIspolnitel : Pult.Ispolnitel {
         )
         return itog
     }
+
+    // ---- ubrat_lishnie_profili ----
+
+    /**
+     * Выбранный профиль не трогаем, служба на нём и так не перечитывается — удаляются только
+     * чужие неактивные Remote-дубли на `/k/` ([UbratLishnieProfili]).
+     */
+    private suspend fun ubratLishnieProfili(): String = UbratLishnieProfili.vypolnit(
+        Settings.selectedProfile,
+        object : UbratLishnieProfili.Okruzhenie {
+            override suspend fun profili(): List<UbratLishnieProfili.Profil> = ProfileManager.list().map {
+                UbratLishnieProfili.Profil(
+                    id = it.id,
+                    remote = it.typed.type == TypedProfile.Type.Remote,
+                    url = it.typed.remoteURL,
+                )
+            }
+
+            override suspend fun udalit(id: Long) {
+                val p = ProfileManager.get(id) ?: return
+                ProfileManager.delete(p)
+                File(p.typed.path).delete()
+                KLog.i(TAG, "лишний профиль «${p.name}» удалён (${Kelevra.maskCode(p.typed.remoteURL)})")
+            }
+        },
+    )
 
     // ---- diagnostika ----
 
