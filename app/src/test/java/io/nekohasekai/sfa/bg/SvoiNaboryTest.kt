@@ -118,6 +118,16 @@ class SvoiNaboryTest {
         assertEquals(listOf(tunnel, tunnel), lifelineOutbounds(result.content))
     }
 
+    @Test
+    fun `страховка не отклоняет IPv6 Телеграма`() {
+        val result = LifelinePatch.addLifeline(profil(mimoBezAction))
+        assertTrue(result.patched)
+        val rules = JSONObject(result.content).getJSONObject("route").getJSONArray("rules")
+        val v6 = (0 until rules.length()).map { rules.getJSONObject(it) }
+            .filter { it.optJSONArray("ip_cidr")?.toString()?.contains("2001:67c:4e8::/48") == true }
+        assertEquals("v6-сети Телеграма страховка не трогает", emptyList<JSONObject>(), v6)
+    }
+
     // ---- подмена наборов кэшем (RuleSetLocalPatch) ----
 
     @Test
