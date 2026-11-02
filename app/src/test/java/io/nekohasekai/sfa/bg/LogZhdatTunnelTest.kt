@@ -14,7 +14,7 @@ class LogZhdatTunnelTest {
         nuzhen: Boolean,
         podnyatPosle: Int?,
         srokMs: Long = 20_000L,
-        domaPosle: Int? = null,
+        pogashenPosle: Int? = null,
     ): Pair<Long, Int> {
         var oprosov = 0
         var spali = 0L
@@ -22,7 +22,7 @@ class LogZhdatTunnelTest {
             LogUploadWork.dozhdatsyaTunnelya(
                 nuzhen = { nuzhen },
                 podnyat = { oprosov++; podnyatPosle != null && oprosov > podnyatPosle },
-                doma = { domaPosle != null && oprosov > domaPosle },
+                pogashen = { pogashenPosle != null && oprosov > pogashenPosle },
                 srokMs = srokMs,
                 shagMs = 500L,
                 spat = { spali += it },
@@ -61,14 +61,14 @@ class LogZhdatTunnelTest {
     }
 
     @Test
-    fun `дома на входе — не ждём вовсе`() {
-        // domaPosle = -1: doma() истинна уже на первом опросе (oprosov = 0)
-        assertEquals(0L, zhdat(nuzhen = true, podnyatPosle = null, domaPosle = -1).first)
+    fun `служба погасила туннель (дома) — не ждём вовсе`() {
+        // pogashenPosle = -1: pogashen() истинна уже на первом опросе (oprosov = 0)
+        assertEquals(0L, zhdat(nuzhen = true, podnyatPosle = null, pogashenPosle = -1).first)
     }
 
     @Test
-    fun `дома выяснилось на третьем шаге — выходим, не достаивая до срока`() {
-        val (zhdali, _) = zhdat(nuzhen = true, podnyatPosle = null, domaPosle = 3)
+    fun `служба погасила туннель на третьем шаге — выходим, не достаивая до срока`() {
+        val (zhdali, _) = zhdat(nuzhen = true, podnyatPosle = null, pogashenPosle = 3)
         assertEquals(3 * 500L, zhdali)
     }
 }
