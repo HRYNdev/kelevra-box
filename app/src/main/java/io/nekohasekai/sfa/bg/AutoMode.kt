@@ -1062,6 +1062,15 @@ object AutoMode {
             baseLayout = host.profileConfig()?.let { AutoModeExits.parse(it, OlcRtcParams.socksPort, wbPort()) }
                 ?: AutoModeExits.Layout.EMPTY
             layout = baseLayout
+            // Выбор руками пережил остановку, а конфиг за это время мог смениться (сервер
+            // переименовал пункты): выбора, которого в селекторе нет, больше нет и у нас.
+            manualExit?.takeIf { AutoModeExits.isStaleChoice(baseLayout, it) }?.let { tag ->
+                KLog.i(TAG, "выбор руками «$tag» забыт: такого пункта в конфиге больше нет — автомат снова сам")
+                manualExit = null
+                Settings.manualExitName = ""
+                setManualRoom(false)
+                Settings.autoModeEnabled = true
+            }
             nodeIndex = 0
             // Новый подъём — очередь с первого узла, окно смены сети с нуля: что было до
             // остановки, про эту сеть не говорит ничего.
@@ -1438,7 +1447,10 @@ object AutoMode {
         val stoim = layout.main
         val idx = parsed.nodes.indexOf(stoim).takeIf { it >= 0 } ?: 0
         val fresh = parsed.nodes.getOrNull(idx)?.let { parsed.forNode(it) } ?: parsed
-        if (parsed == baseLayout && fresh.localProxy == layout.localProxy && fresh.mainEndpoints == layout.mainEndpoints) return
+        if (parsed == baseLayout && fresh.localProxy == layout.localProxy && fresh.mainEndpoints == layout.mainEndpoints) {
+            releaseStaleManual(parsed, reason)
+            return
+        }
         baseLayout = parsed
         nodeIndex = idx
         layout = fresh
@@ -1449,6 +1461,17 @@ object AutoMode {
                 "адресов узла ${fresh.mainEndpoints.size}" +
                 if (parsed.nodes.size > 1) ", очередь узлов ${parsed.nodes}, стоим на «${fresh.main}»" else "",
         )
+        releaseStaleManual(parsed, reason)
+    }
+
+    /**
+     * Выбора руками, которого нет среди пунктов нового конфига ([AutoModeExits.isStaleChoice]),
+     * больше нет: отпускаем его сразу, как при смене сети, а не через час.
+     */
+    private fun releaseStaleManual(parsed: AutoModeExits.Layout, reason: String) {
+        val tag = manualExit ?: return
+        if (!AutoModeExits.isStaleChoice(parsed, tag)) return
+        releaseManualHold(physicalNetwork(), "выбора «$tag» в конфиге больше нет ($reason)")
     }
 
     /** Ручной выбор больше ничего не значит, автомат снова сам. */
