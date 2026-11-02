@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
+import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.update.IshodUstanovki
 import java.io.File
 import java.io.FileInputStream
@@ -43,13 +44,16 @@ object SystemPackageInstaller {
         val packageInstaller = context.packageManager.packageInstaller
         val params = AndroidPackageInstaller.SessionParams(AndroidPackageInstaller.SessionParams.MODE_FULL_INSTALL)
         params.setAppPackageName(context.packageName)
-        val tihaya = !sOknom && canSystemSilentInstall()
+        // Версию, тихую установку которой уже отклонила проверка системы, сразу ставим с окном.
+        val sOknomItog = sOknom ||
+            !IshodUstanovki.tihoDlyaVersii(IshodUstanovki.versiyaIzImeni(apkFile.name), Settings.updatePovtorSOknom)
+        val tihaya = !sOknomItog && canSystemSilentInstall()
         if (tihaya) {
             // На Xiaomi/Redmi/POCO эту строку не ставим вовсе: без неё требование
             // подтверждения остаётся системным умолчанием, и ответ придёт как
             // STATUS_PENDING_USER_ACTION — его InstallResultReceiver уже открывает.
             params.setRequireUserAction(AndroidPackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
-        } else if (sOknom && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        } else if (sOknomItog && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // Повтор с окном: требуем подтверждение явно, а не полагаемся на умолчание,
             // которое у приложения с UPDATE_PACKAGES_WITHOUT_USER_ACTION может снова пойти тихо.
             params.setRequireUserAction(AndroidPackageInstaller.SessionParams.USER_ACTION_REQUIRED)

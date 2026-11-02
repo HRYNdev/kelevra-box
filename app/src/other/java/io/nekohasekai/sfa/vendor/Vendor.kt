@@ -14,7 +14,6 @@ import io.nekohasekai.sfa.database.Settings
 import io.nekohasekai.sfa.update.UpdateCheckException
 import io.nekohasekai.sfa.update.UpdateInfo
 import io.nekohasekai.sfa.update.UpdateSource
-import io.nekohasekai.sfa.update.IshodUstanovki
 import io.nekohasekai.sfa.update.OtkazUstanovki
 import io.nekohasekai.sfa.update.UpdateState
 import io.nekohasekai.sfa.update.UpdateTrack
@@ -152,18 +151,9 @@ object Vendor : VendorInterface {
     override suspend fun downloadAndInstall(context: android.content.Context, downloadUrl: String) {
         val info = UpdateState.updateInfo.value?.takeIf { it.downloadUrl == downloadUrl }
         UpdateState.setInstallStatus(UpdateState.InstallStatus.Idle)
-        val cachedApk = UpdateState.cachedApkFile.value
-        // Скачанный заранее файл берётся, только если он той же версии и снова проходит
-        // проверку. Прежний признак «файл есть и не пустой» пропускал и недокачанный файл,
-        // и файл прошлой версии.
-        val apkFile = if (cachedApk != null && info != null && cachedApk.exists() &&
-            cachedApk.name == IshodUstanovki.imyaFayla(info.versionCode) &&
-            ApkDownloader.proverit(cachedApk, info) == null
-        ) {
-            cachedApk
-        } else {
-            ApkDownloader().use { it.download(downloadUrl, info) }
-        }
+        // Уже скачанный и сверенный файл той же версии ApkDownloader отдаёт без сети; если
+        // его прямо сейчас качает фоновая работа — дожидается её и берёт готовый.
+        val apkFile = ApkDownloader.download(downloadUrl, info)
         UpdateState.setInstallStatus(UpdateState.InstallStatus.Installing)
         ApkInstaller.install(context, apkFile)
     }
