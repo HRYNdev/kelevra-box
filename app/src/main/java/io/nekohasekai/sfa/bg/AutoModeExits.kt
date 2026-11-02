@@ -76,6 +76,11 @@ object AutoModeExits {
          * его не выдал или порт WB не передали.
          */
         val wb: String? = null,
+        /**
+         * Все пункты селектора [chooser] в порядке сервера: узлы, ручные выходы, комнаты.
+         * По нему судим, есть ли ещё в конфиге выход, выбранный руками ([isStaleChoice]).
+         */
+        val choices: List<String> = emptyList(),
     ) {
         /** Узел очереди, к которому относится выход [tag] (сам узел или его конечный выход). */
         fun nodeOf(tag: String): String? =
@@ -133,6 +138,22 @@ object AutoModeExits {
         }
         return tags.map { it to (it == chosen) }
     }
+
+    /**
+     * Выбор руками [manualExit] указывает на пункт, которого в конфиге больше нет.
+     *
+     * Выбор хранится именем пункта, а имена задаёт сервер: узел «Финляндия» распался на
+     * «Финляндия · XHTTP» и «Финляндия · Vision» — и на телефоне осталось имя, которого в
+     * селекторе нет. Такой выбор ничего не выбирает, но держал автомат в стороне (очередь
+     * узлов не вмешивается, пока выбор руками есть) до смены сети или часа. Его считаем
+     * отсутствующим. Переносить «по смыслу» на новый пункт не стали: имя — подпись сервера,
+     * угадывать по ней нельзя, а перенос держал бы автомат дальше.
+     *
+     * Раскладки нет (конфиг не прочитан) — не устарел: по пустому месту выбор не забываем.
+     */
+    fun isStaleChoice(layout: Layout, manualExit: String?): Boolean =
+        !manualExit.isNullOrBlank() && layout.chooser != null && layout.choices.isNotEmpty() &&
+            manualExit !in layout.choices
 
     /**
      * @param socksPort порт, на котором ядро olcRTC поднимает свой SOCKS5.
@@ -236,6 +257,7 @@ object AutoModeExits {
             sharedProxy = localProxy(root, socksPort),
             nodeOutbounds = nodeOutbounds,
             wb = wb,
+            choices = chooser?.let { members(byTag.getValue(it)) }.orEmpty(),
         )
     }
 
