@@ -20,8 +20,6 @@ import io.nekohasekai.sfa.ZapasnoyPut
 import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -782,16 +780,25 @@ object LogUploadWork {
      */
     internal suspend fun runOnce(): Boolean = razobrano(popytka())
 
-    internal suspend fun popytka(): ИтогПопытки = withContext(Dispatchers.IO) {
-        // Замок: часовая работа, otpravitSeychas, povtorPozzhe и команда пульта не должны слать
-        // одну посылку разом. Вторая дожидается первой и, прочитав уже сдвинутые отметки,
-        // находит только новое.
-        zamokOtpravki.withLock { runOnceLocked() }
-    }
+    /**
+     * Единственная дверь к посылке: часовая работа, повтор, просьба сервера, частая цепочка и
+     * команда пульта приходят сюда, и одновременно идёт только одна попытка — пришедший во
+     * время неё получает её итог, а не шлёт свою.
+     *
+     * Раньше здесь стоял замок: вторая попытка ждала первую и шла следом. Одну посылку дважды
+     * это уже не слало (отметки сдвигались), но всё равно выходило по POST на каждого
+     * пришедшего: после удачи вторая везла строки журнала о первой, после отказа или обрыва —
+     * тот же хвост ещё раз, тут же, без паузы повтора. Сошедшиеся работы — обычное дело:
+     * запуск приложения ставит и часовую, и «давно не отправляли».
+     */
+    internal suspend fun popytka(): ИтогПопытки = odnaPopytka.vypolnit(
+        delo = { popytkaTselikom() },
+        novoe = { svoya -> if (!svoya) KLog.i(TAG, "посылка уже идёт — жду её итог, свою не шлю") },
+    )
 
-    private val zamokOtpravki = kotlinx.coroutines.sync.Mutex()
+    private val odnaPopytka = OdnaZaRaz<ИтогПопытки>(fon)
 
-    private suspend fun runOnceLocked(): ИтогПопытки {
+    private suspend fun popytkaTselikom(): ИтогПопытки {
         val marks = loadMarks()
         // Отчёты о падениях идут первыми: если посылка упрётся в потолок, обрежется
         // обычный журнал, а не разбор падения.
