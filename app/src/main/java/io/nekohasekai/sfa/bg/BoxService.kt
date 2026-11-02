@@ -103,6 +103,17 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         var komandaPrishlaAt = 0L
             private set
 
+        /**
+         * Служба сама погасила туннель (дома) и не поднимает его прямо сейчас — для всего
+         * процесса. Повторяет `tunnelSuspended`, но снимается уже в начале подъёма
+         * (`resumeTunnel`), а не после него. Пока true, туннеля не будет, пока автомат не
+         * решит иначе: так фоновые работы ([LogUploadWork.dozhdatsyaTunnelya]) понимают, что
+         * ждать нечего. Читать вместе с [zhiva]: у остановленной службы значение не обнуляется.
+         */
+        @Volatile
+        var tunnelPogashen = false
+            private set
+
         fun start() {
             val intent =
                 runBlocking {
@@ -181,6 +192,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      */
     @Volatile
     private var tunnelSuspended = false
+        set(value) {
+            field = value
+            tunnelPogashen = value
+        }
 
     private val tunnelLock = Any()
 
@@ -1038,6 +1053,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             KLog.i(TAG, "туннель поднимаем: $reason" + if (roomNext) " (следом комната — приложение сразу вне tun)" else "")
             runCatching { Zapisi.perehod("tunnel_podnyat", reason, kto = "автомат") }
             roomAhead = roomNext
+            // Для фоновых работ туннель уже поднимается: флаг снимется только после подъёма
+            // ядра, а посылку под смену сети начинать нельзя именно сейчас.
+            tunnelPogashen = false
         }
         return try {
             // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно.
@@ -1061,6 +1079,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Сервис не роняем: сеть могла ещё не устояться, следующий заход попробует снова.
             KLog.w(TAG, "туннель не поднялся ($reason): ${e.message}")
             runCatching { Zapisi.perehod("tunnel_ne_podnyat", "$reason: ${e.message}", kto = "автомат") }
+            tunnelPogashen = tunnelSuspended
             false
         }
     }
@@ -1712,6 +1731,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         if (status.value != Status.Stopped) return Service.START_NOT_STICKY
         KLog.i(TAG, "команда на запуск сервиса")
         zhiva = true
+        // Для фоновых работ новый запуск начинается с непогашенного туннеля (дома его погасит
+        // startService()): прежнее «погашено» прошлой службы к этому подъёму не относится.
+        tunnelPogashen = false
         runCatching { AvtoVozvrat.ubratUvedomlenie(Application.application) }
         serviceStopping = false
         status.value = Status.Starting

@@ -868,31 +868,28 @@ object LogUploadWork {
      * журнал уезжал повтором через 7 минут. Так рвались 11 из 15 обрывов на VPS1 и 3 из 4
      * телефонных на VPS2 за 10–24.10.
      *
-     * Ждём, только если служба должна работать ([nuzhen]) и её вход ещё не слушает ([podnyat]);
-     * не дождались за [srokMs] — шлём как есть (служба могла не подняться вовсе). Возвращает,
-     * сколько ждали.
+     * Ждём, только пока туннель действительно поднимается: служба должна работать ([nuzhen]),
+     * её вход ещё не слушает ([podnyat]) и она не погасила туннель сама ([pogashen]).
+     * Срок [srokMs] — только потолок на случай, когда служба так и не пришла (холодный процесс,
+     * отозванное разрешение VPN): тогда шлём как есть. Возвращает, сколько ждали.
      *
-     * Дома ([doma]) туннель не поднимается вообще ([BoxService] держит `tunnelSuspended=true`
-     * и зовёт `AutoMode.start(host, Situation.Home)`) — ждать его там нечем, кроме как
-     * впустую стоять весь [srokMs]. Поэтому: [doma] уже true на входе — не ждём вовсе;
-     * [doma] стала true по ходу ожидания (холодный процесс: обстановка ещё [AutoMode.Situation.Unknown],
-     * пока служба не решит «дома») — выходим сразу, не достаивая до [srokMs].
+     * «Погашен» спрашиваем у самой службы ([BoxService.tunnelPogashen]), а не у обстановки
+     * автомата: дома служба держит туннель погашенным, и ждать его там — впустую стоять весь
+     * срок; но «дома» по обстановке ещё не значит «туннеля не будет» — с выключенным автоматом
+     * ядро поднимается и дома, и посылку под его подъём начинать как раз нельзя. Погасила
+     * служба туннель по ходу ожидания (холодный процесс: решение «дома» приходит через
+     * секунды) — выходим сразу.
      */
     internal suspend fun dozhdatsyaTunnelya(
         nuzhen: () -> Boolean = { runCatching { Settings.startedByUser }.getOrDefault(false) },
         podnyat: () -> Boolean = { ZapasnoyPut.tunnelPodnyat() },
-        doma: () -> Boolean = {
-            runCatching { AutoMode.state.value.situation == AutoMode.Situation.Home }.getOrDefault(false)
-        },
+        pogashen: () -> Boolean = { BoxService.zhiva && BoxService.tunnelPogashen },
         srokMs: Long = Pult.long("zhurnal.zhdat_tunnel_ms", ZHDAT_TUNNEL_MS),
         shagMs: Long = 500L,
         spat: suspend (Long) -> Unit = { kotlinx.coroutines.delay(it) },
     ): Long {
         if (srokMs <= 0 || !nuzhen()) return 0L
-        if (doma()) {
-            KLog.i(TAG, "дома — туннеля не будет, шлю сразу")
-            return 0L
-        }
+        if (pogashen()) return 0L
         if (podnyat()) return 0L
         var zhdali = 0L
         while (zhdali < srokMs) {
@@ -904,8 +901,8 @@ object LogUploadWork {
                 KLog.i(TAG, "посылка ждала подъёма туннеля ${zhdali / 1000} с")
                 return zhdali
             }
-            if (doma()) {
-                KLog.i(TAG, "дома — туннеля не будет, шлю сразу")
+            if (pogashen()) {
+                KLog.i(TAG, "служба погасила туннель — ждать нечего, шлю (ждали ${zhdali / 1000} с)")
                 return zhdali
             }
         }
