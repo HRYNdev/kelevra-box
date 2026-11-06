@@ -352,6 +352,128 @@ def main():
 
     print("reality: ChaCha20 первым при X25519MLKEM768 у chrome: правка наложена")
 
+    # --------------------------------------------------------------------------------
+    # 8. Живость канала: «Дом» (WireGuard через detour XHTTP) не оживает после
+    #    молчаливой смерти соединения.
+    #
+    # Поймано в бою 31.10–06.11.2026 (ноутбук, Windows): после смены Wi-Fi / сна вход
+    # «Дом» мёртв до перезапуска ядра. Механизм по коду v1.14.1 (разбор —
+    # data/work/kanal-perehody-20261107/otchety/yadro.md):
+    #
+    #  - transport/wireguard/client_bind.go: connect() передиаливает detour только когда
+    #    ReadFrom или Write вернули ошибку (receive:126-136, Send:187-191); дедлайнов
+    #    нет. Линия, по которой Write проходит, а ответов нет, держит «Дом» мёртвым.
+    #  - transport/v2rayxhttp (наш): TCP+TLS до портала шли без срока (контекст запроса
+    #    — WithoutCancel), заголовки ответа на stream-down GET ждались без срока; h2
+    #    PING-проверка (ReadIdleTimeout 45 с) была, PingTimeout — по умолчанию 15 с.
+    #
+    # Лечение в три слоя, каждый сам по себе ограничивает зависание:
+    #  a) сторож ClientBind (новый файл transport/wireguard/kelevra_client_bind_storozh.go
+    #     + точечные вставки в client_bind.go): N handshake initiation подряд без
+    #     единого входящего пакета ≥ окна → рвём wireConn → connect() передиаливает
+    #     detour. Сквозная проверка клиент↔мост, не зависит от того, где умерла линия
+    #     (TCP, сервер, портал→мост). Срок обнаружения ≈ 20 с.
+    #  b) wireConn.Close: done закрывается до самого Close detour и вне замка —
+    #     медленный Close (h2 ждёт RST_STREAM на мёртвом TCP) не держит передиал.
+    #  c) XHTTP (файлы транспорта правятся прямо в v2rayxhttp/): таймаут на TCP+TLS,
+    #     таймаут заголовков GET, явные PingTimeout/WriteByteTimeout у h2.
+    #
+    # Тесты: tests/v_derevo/** копируются в дерево как *_test.go (в бинарь не входят):
+    #   go test -count=1 -run Kelevra ./transport/wireguard/ ./transport/v2rayxhttp/
+    # --------------------------------------------------------------------------------
+    shutil.copy2(
+        os.path.join(HERE, "wireguard", "kelevra_client_bind_storozh.go"),
+        os.path.join(core, "transport", "wireguard", "kelevra_client_bind_storozh.go"),
+    )
+    patch(
+        os.path.join(core, "transport", "wireguard", "client_bind.go"),
+        [
+            # 8a. поле сторожа в wireConn (поля выровнены как gofmt)
+            (
+                "\tconn   net.Conn\n"
+                "\taccess sync.Mutex\n"
+                "\tdone   chan struct{}\n"
+                "}",
+                "\tconn    net.Conn\n"
+                "\taccess  sync.Mutex\n"
+                "\tdone    chan struct{}\n"
+                "\tstorozh kelevraStorozh // Kelevra (правка 8): безответные рукопожатия рвут линию\n"
+                "}",
+            ),
+            # 8a. receive: любой входящий пакет — линия жива
+            (
+                "\tsizes[0] = n\n"
+                "\tif n > 3 {\n",
+                "\tudpConn.storozh.poluchen() // Kelevra (правка 8): входящий пакет — линия жива\n"
+                "\tsizes[0] = n\n"
+                "\tif n > 3 {\n",
+            ),
+            # 8a. Send: N initiation без ответа — рвём линию, следующий вызов передиалит
+            (
+                "\t\t_, err = udpConn.WriteToUDPAddrPort(buf, destination)\n"
+                "\t\tif err != nil {\n"
+                "\t\t\tudpConn.Close()\n"
+                "\t\t\treturn err\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\treturn nil\n"
+                "}",
+                "\t\t_, err = udpConn.WriteToUDPAddrPort(buf, destination)\n"
+                "\t\tif err != nil {\n"
+                "\t\t\tudpConn.Close()\n"
+                "\t\t\treturn err\n"
+                "\t\t}\n"
+                "\t\t// Kelevra (правка 8): N рукопожатий подряд без единого входящего пакета —\n"
+                "\t\t// линия мертва; рвём, connect() передиалит detour (kelevra_client_bind_storozh.go)\n"
+                "\t\tif udpConn.storozh.otpravlen(buf) {\n"
+                "\t\t\tc.logger.Warn(\"kelevra link watchdog: \", kelevraStorozhInitiations,\n"
+                "\t\t\t\t\" handshake initiations unanswered in \", kelevraStorozhWindow, \", reconnecting\")\n"
+                "\t\t\tudpConn.Close()\n"
+                "\t\t\treturn E.New(\"kelevra link watchdog: peer silent, reconnecting\")\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\treturn nil\n"
+                "}",
+            ),
+            # 8b. wireConn.Close: done — сразу и под замком, сам Close detour — вне замка
+            (
+                "func (w *wireConn) Close() error {\n"
+                "\tw.access.Lock()\n"
+                "\tdefer w.access.Unlock()\n"
+                "\tselect {\n"
+                "\tcase <-w.done:\n"
+                "\t\treturn net.ErrClosed\n"
+                "\tdefault:\n"
+                "\t}\n"
+                "\tw.PacketConn.Close()\n"
+                "\tclose(w.done)\n"
+                "\treturn nil\n"
+                "}",
+                "func (w *wireConn) Close() error {\n"
+                "\tw.access.Lock()\n"
+                "\tselect {\n"
+                "\tcase <-w.done:\n"
+                "\t\tw.access.Unlock()\n"
+                "\t\treturn net.ErrClosed\n"
+                "\tdefault:\n"
+                "\t}\n"
+                "\tclose(w.done)\n"
+                "\tw.access.Unlock()\n"
+                "\t// Kelevra (правка 8): Close detour — вне замка и после done: пока он ждёт\n"
+                "\t// (h2 RST_STREAM на мёртвом TCP), connect() уже видит done и передиаливает.\n"
+                "\treturn w.PacketConn.Close()\n"
+                "}",
+            ),
+        ],
+    )
+    shutil.copytree(
+        os.path.join(HERE, "tests", "v_derevo"),
+        core,
+        dirs_exist_ok=True,
+    )
+
+    print("живость канала (сторож ClientBind, таймауты XHTTP): правка наложена")
+
 
 if __name__ == "__main__":
     main()

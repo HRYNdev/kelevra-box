@@ -110,12 +110,17 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	if body != nil {
 		method = c.options.GetNormalizedUplinkHTTPMethod() // stream-up/one
 	}
-	req, _ := http.NewRequestWithContext(context.WithoutCancel(ctx), method, url, body)
+	// Kelevra (правка 8): заголовки ответа на stream-down ждём не дольше
+	// kelevraResponseHeaderTimeout, иначе Read висит без срока (kelevra_zhivost.go).
+	reqCtx, headersGot, cancelReq := kelevraHeaderDeadline(context.WithoutCancel(ctx), !uploadOnly)
+	req, _ := http.NewRequestWithContext(reqCtx, method, url, body)
 	FillStreamRequest(req, sessionId, "", c.options)
 	wrc = &WaitReadCloser{Wait: make(chan struct{})}
 	go func() {
 		resp, err := c.client.Do(req)
+		headersGot()
 		if err != nil {
+			cancelReq()
 			if !uploadOnly { // stream-down is enough
 				c.Close()
 			}
@@ -127,11 +132,13 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 		if resp.StatusCode != 200 || uploadOnly { // stream-up
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close() // if it is called immediately, the upload will be interrupted also
+			cancelReq()
 			common.Close(body)
 			wrc.Close()
 			return
 		}
-		wrc.(*WaitReadCloser).Set(resp.Body)
+		// контекст запроса живёт до закрытия тела: отменить раньше — http2 оборвёт чтение
+		wrc.(*WaitReadCloser).Set(&kelevraBodyWithCancel{ReadCloser: resp.Body, cancel: cancelReq})
 	}()
 	<-gotConn.Wait()
 	return

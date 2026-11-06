@@ -308,12 +308,22 @@ func getBaseRequestURL(options *option.V2RayXHTTPBaseOptions, dest M.Socksaddr, 
 func createHTTPClient(ctx context.Context, dest M.Socksaddr, dialer N.Dialer, options *option.V2RayXHTTPBaseOptions, tlsConfig tls.Config) DialerClient {
 	httpVersion := decideHTTPVersion(tlsConfig)
 	dialContext := func(ctxInner context.Context) (net.Conn, error) {
+		// Kelevra (правка 8): контекст запроса без отмены (WithoutCancel) —
+		// без своего срока зависший TLS держит OpenStream и весь ClientBind навсегда.
+		// Контекст нужен только на время диала и рукопожатия (kelevra_zhivost.go).
+		ctxInner, cancel := context.WithTimeout(ctxInner, kelevraDialTimeout)
+		defer cancel()
 		conn, err := dialer.DialContext(ctxInner, "tcp", dest)
 		if err != nil {
 			return nil, err
 		}
 		if tlsConfig != nil && httpVersion != "3" {
-			return tls.ClientHandshake(ctxInner, conn, tlsConfig)
+			tlsConn, err := tls.ClientHandshake(ctxInner, conn, tlsConfig)
+			if err != nil {
+				conn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
 		}
 		return conn, nil
 	}
@@ -374,6 +384,9 @@ func createHTTPClient(ctx context.Context, dest M.Socksaddr, dialer N.Dialer, op
 			},
 			IdleConnTimeout: net.ConnIdleTimeout,
 			ReadIdleTimeout: keepAlivePeriod,
+			// Kelevra (правка 8): PING без ответа и запись без прогресса — соединение мёртво
+			PingTimeout:      kelevraH2PingTimeout,
+			WriteByteTimeout: kelevraH2WriteByteTimeout,
 		}
 	default:
 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
