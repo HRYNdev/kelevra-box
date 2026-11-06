@@ -141,7 +141,37 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
     }
 
+    /**
+     * Наш дескриптор tun. Пишет [VPNService.openTun] (поток libbox внутри
+     * `startOrReloadService`, то есть под [tunnelLock] вызывающего) и закрытие под тем же
+     * замком; читают гашение, остановка и факты туннеля. Volatile — чтобы чтение вне замка
+     * ([TunnelFacts.suspendNeeded] через `fileDescriptor != null`) видело свежее значение.
+     */
+    @Volatile
     var fileDescriptor: ParcelFileDescriptor? = null
+
+    /** Из чего собран живой tun ([TunSnimok]); `null` — tun нет или снимка не помним. */
+    @Volatile
+    internal var tunSnimok: TunSnimok? = null
+
+    /**
+     * Закрыть наш дескриптор tun и забыть снимок. Звать под [tunnelLock].
+     *
+     * @return true, если было что закрывать.
+     */
+    private fun zakrytTun(): Boolean {
+        val pfd = fileDescriptor ?: return false
+        fileDescriptor = null
+        tunSnimok = null
+        runCatching { pfd.close() }
+        return true
+    }
+
+    /** tun остался без читателя (ядро не поднялось) — отпускаем, чтобы пакеты не уходили в никуда. */
+    private fun otpustitTun(pochemu: String) {
+        val fd = fileDescriptor?.let { runCatching { it.fd }.getOrNull() }
+        if (zakrytTun()) KLog.w(TAG, "tun ($fd) отпущен: $pochemu — трафик пойдёт напрямую до следующего подъёма")
+    }
 
     private val status = MutableLiveData(Status.Stopped)
     private val binder = ServiceBinder(status)
@@ -371,7 +401,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
 
             try {
-                startCore(content, "старт сервиса")
+                // Под тем же замком, что гашение и подъём туннеля: все пересборки ядра идут
+                // через один замок, и первый подъём — не исключение (присмотр WB и комнаты
+                // живут дольше одного старта службы и могут прийти с пересборкой параллельно).
+                synchronized(tunnelLock) { startCore(content, "старт сервиса") }
             } catch (e: Exception) {
                 stopAndAlert(Alert.CreateService, e.message)
                 return
@@ -473,7 +506,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 return
             } catch (e: Exception) {
                 val tag = RuleSetCache.brokenCachedTag(config, e.message)
-                if (tag == null || dropped >= RuleSetLocalPatch.MAX_SETS || !RuleSetCache.drop(tag)) throw e
+                if (tag == null || dropped >= RuleSetLocalPatch.MAX_SETS || !RuleSetCache.drop(tag)) {
+                    // libbox уже закрыл прежний экземпляр (он гасит старый до подъёма нового), а
+                    // новый не встал: читателя у tun нет, пакеты приложений уходили бы в него и
+                    // терялись. Отпускаем — трафик идёт напрямую, как и раньше при неудачной
+                    // пересборке; следующий подъём заведёт tun заново.
+                    otpustitTun("ядро не поднялось: ${e.message}")
+                    throw e
+                }
                 dropped++
                 KLog.w(TAG, "ядро споткнулось о набор «$tag» из кэша — выкинул его, стартую заново")
             }
@@ -1027,11 +1067,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             roomWanted = false
             roomAhead = false
             stopOlcRtc()
-            val pfd = fileDescriptor
-            if (pfd != null) {
-                runCatching { pfd.close() }
-                fileDescriptor = null
-            }
+            zakrytTun()
             closeService()
             tunnelSuspended = true
         }
@@ -1048,6 +1084,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
      * @return false, если туннель и так был поднят.
      */
     private fun resumeTunnel(reason: String, roomNext: Boolean): Boolean {
+        // Весь подъём — под одним замком с гашением. Раньше замок брался только на флаги, а
+        // пересборка шла снаружи: параллельное гашение (дом) видело «числится погашенным, а
+        // живо», гасило по факту, после чего подъём ставил «поднято» на погашенном tun — и
+        // дома туннель больше не гасился до следующего решения автомата (разбор 07.11.2026,
+        // гонка «б»). Теперь гашение и подъём идут строго по очереди, в порядке вызовов.
         synchronized(tunnelLock) {
             if (!tunnelSuspended) return false
             KLog.i(TAG, "туннель поднимаем: $reason" + if (roomNext) " (следом комната — приложение сразу вне tun)" else "")
@@ -1056,32 +1097,34 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Для фоновых работ туннель уже поднимается: флаг снимется только после подъёма
             // ядра, а посылку под смену сети начинать нельзя именно сейчас.
             tunnelPogashen = false
+            // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно. Выбранную
+            // руками поднимаем параллельно, своим потоком, как на старте сервиса: вход в чужой
+            // звонок стоит до полутора минут, и держать на нём замок нельзя.
+            if (roomWanted) thread(name = "olcrtc-warmup", isDaemon = true) { startOlcRtcIfEnabled() }
+            try {
+                restartCore("подъём из погашенного: $reason")
+                tunnelSuspended = false
+            } catch (e: Exception) {
+                // Сервис не роняем: сеть могла ещё не устояться, следующий заход попробует снова.
+                KLog.w(TAG, "туннель не поднялся ($reason): ${e.message}")
+                runCatching { Zapisi.perehod("tunnel_ne_podnyat", "$reason: ${e.message}", kto = "автомат") }
+                tunnelPogashen = tunnelSuspended
+                return false
+            }
         }
-        return try {
-            // Комнату вместе с туннелем не поднимаем: понадобится — попросят отдельно.
-            if (roomWanted) startOlcRtcIfEnabled()
-            restartCore("подъём из погашенного: $reason")
-            // Ядро только что поднялось начисто — реестр путей пуст или помнит прошлую
-            // сессию. Тот же честный опрос, что и на холодном старте: без него реестр
-            // оставался бы пустым до первого обычного захода автомата, а тот при ручном
-            // выборе выхода основной канал вообще не мерит (round() при выключенном
-            // автомате трогает только комнату). Раньше эта проверка шла лишь при полном
-            // старте сервиса — при подъёме из погашенного состояния не запускалась ни разу
-            // (лог «туннель поднимаем: автомат выключен человеком», реестр пуст).
-            checkPathsHonestly("подъём из погашенного: $reason")
-            synchronized(tunnelLock) { tunnelSuspended = false }
-            // Ядро снова живо — цепляемся к его тикам. Без этого сессия, начатая дома,
-            // так и осталась бы без скоростей, а текст замер бы на «Работает».
-            notification.attachCore()
-            runBlocking(Dispatchers.Main) { notification.refresh(R.string.status_started) }
-            true
-        } catch (e: Exception) {
-            // Сервис не роняем: сеть могла ещё не устояться, следующий заход попробует снова.
-            KLog.w(TAG, "туннель не поднялся ($reason): ${e.message}")
-            runCatching { Zapisi.perehod("tunnel_ne_podnyat", "$reason: ${e.message}", kto = "автомат") }
-            tunnelPogashen = tunnelSuspended
-            false
-        }
+        // Ядро только что поднялось начисто — реестр путей пуст или помнит прошлую
+        // сессию. Тот же честный опрос, что и на холодном старте: без него реестр
+        // оставался бы пустым до первого обычного захода автомата, а тот при ручном
+        // выборе выхода основной канал вообще не мерит (round() при выключенном
+        // автомате трогает только комнату). Раньше эта проверка шла лишь при полном
+        // старте сервиса — при подъёме из погашенного состояния не запускалась ни разу
+        // (лог «туннель поднимаем: автомат выключен человеком», реестр пуст).
+        checkPathsHonestly("подъём из погашенного: $reason")
+        // Ядро снова живо — цепляемся к его тикам. Без этого сессия, начатая дома,
+        // так и осталась бы без скоростей, а текст замер бы на «Работает».
+        notification.attachCore()
+        runBlocking(Dispatchers.Main) { notification.refresh(R.string.status_started) }
+        return true
     }
 
     /**
@@ -1112,12 +1155,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val content = File(profile.typed.path).readText()
         if (content.isBlank()) error("конфиг пуст")
         lastProfileName = profile.name
-        // Свою копию дескриптора снимаем ДО того, как ядро откроет новый интерфейс.
-        fileDescriptor?.let { old ->
-            val closed = runCatching { old.close() }.isSuccess
-            KLog.i(TAG, "пересборка ядра: прежний tun отпущен (закрыт: $closed)")
-        }
-        fileDescriptor = null
+        // Свою копию дескриптора НЕ закрываем: новый экземпляр ядра получит либо тот же tun
+        // (снимок не изменился), либо новый, поднятый при открытом прежнем — и только потом
+        // прежний закроется ([VPNService.openTun]). Закрывать здесь, как раньше, значило
+        // сносить VPN-сеть Android на каждой пересборке и держать окно без туннеля.
+        fileDescriptor?.let { KLog.i(TAG, "пересборка ядра: прежний tun (${runCatching { it.fd }.getOrNull()}) держим до подъёма нового") }
         startCore(content, reason)
         // Файл прочитан заново — отложенному перечитыванию применять больше нечего.
         if (profileReloadPending) {
@@ -1477,16 +1519,26 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Это ядро само попросило остановиться — то есть внутри у него что-то кончилось.
         // Отличать это от выключения человеком обязательно, иначе «сеть отвалилась» и
         // «человек нажал» в журнале одно и то же.
-        KLog.w(TAG, "ядро попросило остановить сервис")
+        //
+        // Раньше здесь закрывался tun и гасилось ядро, а служба и автомат оставались жить:
+        // «зомби» без туннеля, из которого обратной дороги не было (подъём требует флага
+        // «погашено», а он не ставился). Просьба приходит командой клиента к ядру
+        // (`daemon` → `platformHandler.ServiceStop`), и честный ответ на неё — остановить
+        // службу целиком: человек видит «выключено», а самоподъём ([Samopodem]) её не вернёт,
+        // потому что остановка стирает «включено человеком».
+        KLog.w(TAG, "ядро попросило остановить сервис — останавливаю службу целиком")
         runCatching { Zapisi.perehod("yadro_ostanovilos", "ядро попросило остановить сервис", kto = "ядро") }
+        val stopped = runBlocking(Dispatchers.Main) { stopService("ядро: попросило остановить сервис") }
+        if (stopped) return
+        // Служба ещё не дошла до «запущена» (стоп посреди старта): штатной остановке не за что
+        // взяться, остаётся прежний путь — снять tun и ядро, старт сам упрётся и доедет аварией.
+        KLog.w(TAG, "служба ещё не запущена (${status.value}) — снимаю tun и ядро")
         notification.close()
         status.postValue(Status.Starting)
-        val pfd = fileDescriptor
-        if (pfd != null) {
-            pfd.close()
-            fileDescriptor = null
+        synchronized(tunnelLock) {
+            zakrytTun()
+            closeService()
         }
-        closeService()
     }
 
     override fun serviceReload() {
@@ -1529,39 +1581,53 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // отвечало «уже погашено» и ничего не делало — tun висел до ручного выключения,
         // и выглядело это как «сам включился и не выключается».
         // Новый конфиг не теряется: при следующем подъёме restartCore читает файл заново.
-        if (synchronized(tunnelLock) { tunnelSuspended }) {
-            KLog.i(TAG, "конфиг перечитан, но мы дома — ядро не поднимаем")
-            fillRuleSetsAtHome(content)
-            return
-        }
-        // Комната живая или входит: перечитывание — это пересборка, закрывающая прежний tun,
-        // и посреди звонка она рвёт собранную сессию (см. [TunnelFacts.coreConfigStale]).
-        // Расписание и обновление подписки ждут: при выходе из комнаты ядро пересобирается
-        // и так, а подъём комнаты заново кладёт новый конфиг ещё до входа.
-        val deferred = synchronized(tunnelLock) {
+        // Решение и сама пересборка — под одним замком с гашением и подъёмом туннеля. Раньше
+        // `startCore` шёл снаружи замка, и автомат мог гасить tun посреди пересборки или
+        // поднимать поверх неё (разбор 07.11.2026, гонка «а»). Внутри замка нет ничего
+        // приостанавливаемого: аварийный останов — снаружи, по итогу.
+        var oshibka: Exception? = null
+        val sdelano = synchronized(tunnelLock) {
+            if (tunnelSuspended) {
+                KLog.i(TAG, "конфиг перечитан, но мы дома — ядро не поднимаем")
+                fillRuleSetsAtHome(content)
+                return@synchronized true
+            }
+            if (serviceStopping) {
+                KLog.i(TAG, "конфиг перечитан, но сервис останавливается — ядро не пересобираю")
+                return@synchronized true
+            }
+            // Комната живая или входит: перечитывание — это пересборка, и посреди звонка она
+            // может сменить tun (см. [TunnelFacts.coreConfigStale]). Расписание и обновление
+            // подписки ждут: при выходе из комнаты ядро пересобирается и так, а подъём комнаты
+            // заново кладёт новый конфиг ещё до входа.
             val roomLive = OlcRtcCore.isRunning()
             val roomBusy = roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting
-            val defer = TunnelFacts.reloadDeferred(roomLive, roomBusy, byHuman)
-            if (defer) {
+            if (TunnelFacts.reloadDeferred(roomLive, roomBusy, byHuman)) {
                 profileReloadPending = true
                 KLog.i(
                     TAG,
                     "конфиг перечитан, но комната ${if (roomLive) "работает" else "поднимается"} — " +
                         "ядро не пересобираю, применю при выходе из комнаты",
                 )
-            } else if (byHuman && (roomLive || roomBusy)) {
+                return@synchronized true
+            }
+            if (byHuman && (roomLive || roomBusy)) {
                 KLog.i(TAG, "конфиг перечитать попросил человек — пересобираю ядро при живой комнате")
             }
-            defer
+            try {
+                startCore(content, if (byHuman) "конфиг перечитан по просьбе человека" else "конфиг перечитан")
+                profileReloadPending = false
+            } catch (e: Exception) {
+                oshibka = e
+            }
+            false
         }
-        if (deferred) return
-        try {
-            startCore(content, if (byHuman) "конфиг перечитан по просьбе человека" else "конфиг перечитан")
-        } catch (e: Exception) {
+        if (sdelano) return
+        val e = oshibka
+        if (e != null) {
             stopAndAlert(Alert.CreateService, e.message)
             return
         }
-        profileReloadPending = false
 
         if (commandServer.needWIFIState()) {
             val wifiPermission =
@@ -1602,9 +1668,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
     }
 
+    /** @return false, если останавливать нечего: служба не в состоянии «запущена». */
     @OptIn(DelicateCoroutinesApi::class)
-    private fun stopService(kto: String) {
-        if (status.value != Status.Started) return
+    private fun stopService(kto: String): Boolean {
+        if (status.value != Status.Started) return false
         KLog.i(TAG, "сервис останавливается (кто: $kto)")
         runCatching { Zapisi.perehod("servis_ostanovlen", "сервис останавливается", kto = kto) }
         serviceStopping = true
@@ -1623,16 +1690,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // значит обещать пробам защиту, которой уже нет.
         ProbeSocket.useProtector(null)
         GlobalScope.launch(Dispatchers.IO) {
-            val pfd = fileDescriptor
-            if (pfd != null) {
-                pfd.close()
-                fileDescriptor = null
-            }
             DefaultNetworkListener.stop(AutoMode)
             DefaultNetworkMonitor.stop()
             // Под тем же замком, что и пересборка ядра: если комната пересобирает ядро
-            // прямо сейчас, закрываем уже результат, а не до него.
+            // прямо сейчас, закрываем уже результат, а не до него. Дескриптор tun — тоже
+            // под замком: иначе пересборка могла отдать ядру номер, который мы только что закрыли.
             synchronized(tunnelLock) {
+                zakrytTun()
                 closeService()
                 commandServer.apply {
                     close()
@@ -1651,6 +1715,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 service.stopSelf()
             }
         }
+        return true
     }
 
     private fun closeService() {
@@ -1676,11 +1741,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         io.nekohasekai.sfa.bg.pult.PultSvyaz.stop()
         stopSvoiTaymer()
         ProbeSocket.useProtector(null)
-        val pfd = fileDescriptor
-        if (pfd != null) {
-            pfd.close()
-            fileDescriptor = null
-        }
+        synchronized(tunnelLock) { zakrytTun() }
         DefaultNetworkListener.stop(AutoMode)
         DefaultNetworkMonitor.stop()
         if (::commandServer.isInitialized) {
@@ -1708,8 +1769,11 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     }
 
     @OptIn(DelicateCoroutinesApi::class)
-    @Suppress("SameReturnValue")
-    internal fun onStartCommand(): Int {
+    internal fun onStartCommand(intent: Intent?): Int {
+        // Без интента службу подняла сама система: процесс был убит, а служба «липкая»
+        // (START_STICKY). Человек при этом ничего не нажимал — поднимать ли ядро, решает
+        // [Samopodem] ниже, уже с настройками в руках.
+        val perezapusk = intent == null
         // Уведомление поднимаем ПЕРВОЙ строкой, до журнала, до защиты сокетов и до любой
         // корутины. Система даёт от `startForegroundService` до `startForeground` пять
         // секунд и убивает процесс, если не успели. Раньше подъём стоял в самом конце
@@ -1720,7 +1784,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // перестали уезжать, а протухший токен комнаты стало нечем заменить.
         // Имя профиля здесь ещё не известно — его допишет `startService()`, который
         // зовёт `show()` повторно.
-        runCatching { notification.show(lastProfileName, R.string.status_starting) }
+        //
+        // На Android 12+ `startForeground()` из фона может быть отклонён
+        // (ForegroundServiceStartNotAllowedException): при липком перезапуске это значит,
+        // что служба фоновая и система погасит её через минуту — ядро на ней не поднимаем.
+        val vPerednemPlane = runCatching { notification.show(lastProfileName, R.string.status_starting) }
+            .onFailure { KLog.w(TAG, "служба переднего плана не поднялась: ${it.javaClass.simpleName}: ${it.message}") }
+            .isSuccess
         // Журнал мог не открыться на старте процесса (телефон ещё не разблокирован после
         // перезагрузки) — здесь хранилище уже наверняка доступно. Живую запись повторный
         // вызов не трогает.
@@ -1728,13 +1798,16 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Записи переходов нужны и дома, где ядра нет: «кто погасил / поднял туннель».
         runCatching { Zapisi.start() }
         komandaPrishlaAt = SystemClock.elapsedRealtime()
-        if (status.value != Status.Stopped) return Service.START_NOT_STICKY
-        KLog.i(TAG, "команда на запуск сервиса")
+        if (status.value != Status.Stopped) return Service.START_STICKY
+        KLog.i(
+            TAG,
+            if (perezapusk) "служба поднята системой без команды (липкий перезапуск после смерти процесса)" else "команда на запуск сервиса",
+        )
         zhiva = true
         // Для фоновых работ новый запуск начинается с непогашенного туннеля (дома его погасит
         // startService()): прежнее «погашено» прошлой службы к этому подъёму не относится.
         tunnelPogashen = false
-        runCatching { AvtoVozvrat.ubratUvedomlenie(Application.application) }
+        if (!perezapusk) runCatching { AvtoVozvrat.ubratUvedomlenie(Application.application) }
         serviceStopping = false
         status.value = Status.Starting
         // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
@@ -1757,6 +1830,32 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         }
 
         GlobalScope.launch(Dispatchers.IO) {
+            if (perezapusk) {
+                // Настройки — Room, читаем здесь, а не на главном потоке.
+                val hotel = runCatching { Settings.startedByUser }.getOrDefault(false)
+                val vpnRazreshenie = service !is VpnService ||
+                    runCatching { VpnService.prepare(service) == null }.getOrDefault(false)
+                when (Samopodem.reshit(hotel = hotel, vPerednemPlane = vPerednemPlane, vpnRazreshenie = vpnRazreshenie)) {
+                    Samopodem.Shag.PODNYAT -> {
+                        KLog.i(TAG, "человек службу не выключал — поднимаю ядро сам")
+                        runCatching { Zapisi.perehod("samopodem", "служба поднята системой после смерти процесса", kto = "система") }
+                        runCatching { AvtoVozvrat.ubratUvedomlenie(Application.application) }
+                    }
+
+                    Samopodem.Shag.UVEDOMIT -> {
+                        KLog.w(TAG, "самоподъём невозможен (передний план: $vPerednemPlane, VPN разрешён: $vpnRazreshenie) — зову человека")
+                        runCatching { AvtoVozvrat.pokazatUvedomlenie(Application.application, AvtoVozvrat.Povod.UBITA) }
+                        pogasitTikho("самоподъём невозможен")
+                        return@launch
+                    }
+
+                    Samopodem.Shag.NICHEGO -> {
+                        KLog.i(TAG, "человек службу выключал — липкий перезапуск гашу")
+                        pogasitTikho("человек службу выключал")
+                        return@launch
+                    }
+                }
+            }
             Settings.startedByUser = true
             try {
                 startCommandServer()
@@ -1766,7 +1865,27 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             startService()
         }
-        return Service.START_NOT_STICKY
+        // Липкая: убили процесс — система поднимет службу сама и позовёт сюда без интента.
+        // Штатная остановка (stopSelf) липкость снимает, так что выключенная человеком
+        // служба не возвращается.
+        return Service.START_STICKY
+    }
+
+    /** Погасить службу, которой не следовало подниматься: без ядра, без аварии и без возврата. */
+    private suspend fun pogasitTikho(pochemu: String) {
+        serviceStopping = true
+        zhiva = false
+        ProbeSocket.useProtector(null)
+        withContext(Dispatchers.Main) {
+            if (receiverRegistered) {
+                service.unregisterReceiver(receiver)
+                receiverRegistered = false
+            }
+            notification.close()
+            status.value = Status.Stopped
+            KLog.i(TAG, "служба погашена тихо: $pochemu")
+            service.stopSelf()
+        }
     }
 
     internal fun onBind(): IBinder = binder
