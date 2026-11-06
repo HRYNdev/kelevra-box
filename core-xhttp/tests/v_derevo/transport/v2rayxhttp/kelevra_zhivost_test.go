@@ -120,12 +120,14 @@ func TestKelevraOpenStreamSilentServerReadFailsWithinHeaderTimeout(t *testing.T)
 }
 
 // Заголовки пришли вовремя: таймер снят, тело читается и после истечения срока.
+// Срок 2 с: под -race на нагруженном раннере TCP + h2-преамбула + HEADERS на петле
+// должны уложиться с запасом; тело приходит через 3 с — заведомо после срока.
 func TestKelevraOpenStreamHeadersInTimeBodyOutlivesTimeout(t *testing.T) {
-	setHeaderTimeout(t, 200*time.Millisecond)
+	setHeaderTimeout(t, 2*time.Second)
 	srv := newH2CTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.(http.Flusher).Flush()
-		time.Sleep(600 * time.Millisecond) // заведомо дольше срока заголовков
+		time.Sleep(3 * time.Second) // заведомо дольше срока заголовков
 		_, _ = io.WriteString(w, "hello")
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
@@ -136,9 +138,9 @@ func TestKelevraOpenStreamHeadersInTimeBodyOutlivesTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	n, rerr, timedOut := readOnce(rc, 5*time.Second)
+	n, rerr, timedOut := readOnce(rc, 10*time.Second)
 	if timedOut {
-		t.Fatalf("тело не дочиталось за 5 с")
+		t.Fatalf("тело не дочиталось за 10 с")
 	}
 	if rerr != nil || n != len("hello") {
 		t.Fatalf("ожидали «hello» без ошибки, получили n=%d err=%v", n, rerr)

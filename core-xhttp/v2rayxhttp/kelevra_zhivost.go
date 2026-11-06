@@ -31,6 +31,7 @@ package xhttp
 import (
 	"context"
 	"io"
+	"sync"
 	"time"
 
 	C "github.com/sagernet/sing-box/constant"
@@ -49,26 +50,41 @@ var (
 
 // kelevraHeaderDeadline даёт контекст запроса, который отменится, если заголовки
 // ответа не пришли за kelevraResponseHeaderTimeout. headersGot снимает таймер
-// (звать сразу после client.Do), cancel — освобождает контекст (звать при ошибке
-// или при закрытии тела ответа).
-func kelevraHeaderDeadline(ctx context.Context, enabled bool) (reqCtx context.Context, headersGot func(), cancel context.CancelFunc) {
+// (звать один раз, сразу после client.Do) и говорит, успел ли: false — таймер
+// уже выстрелил и контекст отменён, даже если Do вернул ответ (заголовки пришли
+// на самой границе срока); такое тело http2 оборвёт на первом Read
+// (x/net transport.go: ctx.Done), так что это ошибка, а не живой ответ.
+// cancel — освобождает контекст (звать при ошибке или при закрытии тела ответа).
+func kelevraHeaderDeadline(ctx context.Context, enabled bool) (reqCtx context.Context, headersGot func() bool, cancel context.CancelFunc) {
 	if !enabled || kelevraResponseHeaderTimeout <= 0 {
-		return ctx, func() {}, func() {}
+		return ctx, func() bool { return true }, func() {}
 	}
 	reqCtx, cancel = context.WithCancel(ctx)
 	timer := time.AfterFunc(kelevraResponseHeaderTimeout, cancel)
-	headersGot = func() { timer.Stop() }
+	headersGot = func() bool { return timer.Stop() }
 	return reqCtx, headersGot, cancel
 }
 
 // kelevraBodyWithCancel — тело ответа, при закрытии отменяющее контекст запроса.
+//
+// Создаётся в горутине client.Do, закрывается из чужой (splitConn.Close,
+// ClientBind). Поля ReadCloser и cancel после создания не меняются, а наружу
+// структура уходит только через WaitReadCloser.Set под его замком — это и даёт
+// читающей стороне happens-before (без замка go test -race ловил тут гонку).
+// Close — ровно один раз, сколько бы горутин его ни звали; остальные получают
+// тот же результат.
 type kelevraBodyWithCancel struct {
 	io.ReadCloser
 	cancel context.CancelFunc
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (b *kelevraBodyWithCancel) Close() error {
-	err := b.ReadCloser.Close()
-	b.cancel()
-	return err
+	b.closeOnce.Do(func() {
+		b.closeErr = b.ReadCloser.Close()
+		b.cancel()
+	})
+	return b.closeErr
 }

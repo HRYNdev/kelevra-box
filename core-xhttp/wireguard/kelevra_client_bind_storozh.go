@@ -12,16 +12,27 @@ package wireguard
 // в первом байте (1 — handshake initiation, 2 — response, 3 — cookie reply,
 // 4 — transport data; wireguard-go device/noise-protocol.go). Живой пир отвечает
 // на initiation за RTT; wireguard-go повторяет initiation каждые RekeyTimeout
-// (5 с) до RekeyAttemptTime (90 с). Если подряд ушло N initiation и за это время
-// не пришло НИ ОДНОГО пакета, причём с первого безответного прошло не меньше
-// окна — линия мертва: рвём wireConn, следующий Send/receive передиалит detour.
+// (5 с + джиттер до 334 мс) до RekeyAttemptTime (90 с). Если подряд ушло N
+// initiation и за это время не пришло НИ ОДНОГО пакета, причём с первого
+// безответного прошло не меньше окна — линия мертва: рвём wireConn, следующий
+// Send/receive передиалит detour.
+//
+// Порог и окно (замысел — рвать на 4-м безответном initiation): wireguard-go
+// шлёт initiation одного пира не чаще раза в RekeyTimeout (device/send.go,
+// lastSentHandshake), значит между 1-м и 4-м — не меньше 15 с. Окно 12 с
+// оставляет 3 с запаса на задержку первого initiation (например, он ждал
+// передиала detour), так что в обычном случае рвёт именно 4-й, через ≈ 15 с
+// после первого безответного. Окно не даёт порогу сработать на пачке initiation
+// от нескольких пиров на одном Bind. Первый initiation на замолчавшей линии
+// wireguard-go шлёт через KeepaliveTimeout + RekeyTimeout (15 с) тишины
+// (device/timers.go), так что от смерти линии до разрыва ≈ 30 с.
 //
 // Почему именно initiation, а не «отправил, не получил»: при простое клиент шлёт
 // persistent keepalive каждые 25 с, а пир на keepalive ничем не отвечает —
 // считать это смертью нельзя. Initiation же без ответа — всегда беда.
 //
 // Ложные срабатывания: нужно ≥ N initiation (по 5 с каждая) и ни одного входящего
-// пакета ≥ окна. Провал связи на 20 с на мобильной сети даёт один лишний передиал
+// пакета ≥ окна. Провал связи на ≈ 30 с на мобильной сети даёт один лишний передиал
 // detour (новая пара потоков на том же h2-соединении) — безвредно, WireGuard
 // продолжает рукопожатие уже на новой линии.
 //
@@ -41,7 +52,8 @@ var (
 	// линией. 0 — сторож выключен (поведение апстрима).
 	kelevraStorozhInitiations int32 = 4
 	// И не раньше, чем через столько после первого безответного initiation.
-	kelevraStorozhWindow = 20 * time.Second
+	// Меньше 3×RekeyTimeout (15 с) — чтобы рвал именно 4-й (см. шапку).
+	kelevraStorozhWindow = 12 * time.Second
 )
 
 type kelevraStorozh struct {
@@ -58,11 +70,12 @@ func (s *kelevraStorozh) poluchen() {
 	s.access.Unlock()
 }
 
-// otpravlen учитывает исходящий пакет. true — initiation без ответа слишком
-// много и слишком долго: линию пора рвать.
-func (s *kelevraStorozh) otpravlen(packet []byte) bool {
+// otpravlen учитывает исходящий пакет. rvat — initiation без ответа слишком
+// много и слишком долго: линию пора рвать. skolko и za — сколько initiation
+// подряд без ответа и сколько прошло с первого из них (для строки журнала).
+func (s *kelevraStorozh) otpravlen(packet []byte) (rvat bool, skolko int32, za time.Duration) {
 	if kelevraStorozhInitiations <= 0 || len(packet) < 4 || packet[0] != kelevraWGMessageInitiation {
-		return false
+		return false, 0, 0
 	}
 	now := time.Now()
 	s.access.Lock()
@@ -70,7 +83,8 @@ func (s *kelevraStorozh) otpravlen(packet []byte) bool {
 	s.unanswered++
 	if s.unanswered == 1 {
 		s.firstUnanswered = now
-		return false
 	}
-	return s.unanswered >= kelevraStorozhInitiations && now.Sub(s.firstUnanswered) >= kelevraStorozhWindow
+	za = now.Sub(s.firstUnanswered)
+	rvat = s.unanswered >= kelevraStorozhInitiations && za >= kelevraStorozhWindow
+	return rvat, s.unanswered, za
 }

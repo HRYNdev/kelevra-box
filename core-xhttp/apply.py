@@ -372,7 +372,13 @@ def main():
     #     + точечные вставки в client_bind.go): N handshake initiation подряд без
     #     единого входящего пакета ≥ окна → рвём wireConn → connect() передиаливает
     #     detour. Сквозная проверка клиент↔мост, не зависит от того, где умерла линия
-    #     (TCP, сервер, портал→мост). Срок обнаружения ≈ 20 с.
+    #     (TCP, сервер, портал→мост). Рвёт 4-й безответный initiation: ≈ 15 с после
+    #     первого безответного, ≈ 30 с после смерти линии (wireguard-go замечает
+    #     тишину через KeepaliveTimeout + RekeyTimeout = 15 с, timers.go).
+    #     Заодно connect(): быстрый путь читал c.conn без замка, а передиал пишет его
+    #     под connAccess — гонка апстрима, которую видит go test -race; со сторожем
+    #     передиалы чаще. Теперь c.conn читается под connAccess (поведение то же:
+    #     пока линия жива, замок никто не держит).
     #  b) wireConn.Close: done закрывается до самого Close detour и вне замка —
     #     медленный Close (h2 ждёт RST_STREAM на мёртвом TCP) не держит передиал.
     #  c) XHTTP (файлы транспорта правятся прямо в v2rayxhttp/): таймаут на TCP+TLS,
@@ -388,6 +394,19 @@ def main():
     patch(
         os.path.join(core, "transport", "wireguard", "client_bind.go"),
         [
+            # 8a. connect(): быстрый путь читает c.conn под connAccess (гонка апстрима:
+            # запись c.conn при передиале — под замком, чтение здесь было без него)
+            (
+                "func (c *ClientBind) connect() (*wireConn, error) {\n"
+                "\tserverConn := c.conn\n"
+                "\tif serverConn != nil {\n",
+                "func (c *ClientBind) connect() (*wireConn, error) {\n"
+                "\t// Kelevra (правка 8): c.conn пишется под connAccess — и читаем под ним\n"
+                "\tc.connAccess.Lock()\n"
+                "\tserverConn := c.conn\n"
+                "\tc.connAccess.Unlock()\n"
+                "\tif serverConn != nil {\n",
+            ),
             # 8a. поле сторожа в wireConn (поля выровнены как gofmt)
             (
                 "\tconn   net.Conn\n"
@@ -425,9 +444,9 @@ def main():
                 "\t\t}\n"
                 "\t\t// Kelevra (правка 8): N рукопожатий подряд без единого входящего пакета —\n"
                 "\t\t// линия мертва; рвём, connect() передиалит detour (kelevra_client_bind_storozh.go)\n"
-                "\t\tif udpConn.storozh.otpravlen(buf) {\n"
-                "\t\t\tc.logger.Warn(\"kelevra link watchdog: \", kelevraStorozhInitiations,\n"
-                "\t\t\t\t\" handshake initiations unanswered in \", kelevraStorozhWindow, \", reconnecting\")\n"
+                "\t\tif rvat, skolko, za := udpConn.storozh.otpravlen(buf); rvat {\n"
+                "\t\t\tc.logger.Warn(\"kelevra link watchdog: \", skolko,\n"
+                "\t\t\t\t\" handshake initiations unanswered for \", za.Round(time.Millisecond), \", reconnecting\")\n"
                 "\t\t\tudpConn.Close()\n"
                 "\t\t\treturn E.New(\"kelevra link watchdog: peer silent, reconnecting\")\n"
                 "\t\t}\n"

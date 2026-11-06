@@ -118,7 +118,12 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	wrc = &WaitReadCloser{Wait: make(chan struct{})}
 	go func() {
 		resp, err := c.client.Do(req)
-		headersGot()
+		if !headersGot() && err == nil {
+			// таймер заголовков выстрелил раньше, чем мы его сняли: контекст уже
+			// отменён, тело оборвётся на первом Read — это провал, не живой ответ
+			resp.Body.Close()
+			err = E.New("xhttp: response headers timeout")
+		}
 		if err != nil {
 			cancelReq()
 			if !uploadOnly { // stream-down is enough
@@ -216,39 +221,59 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, sessio
 	return nil
 }
 
+// WaitReadCloser — тело ответа, которое появится позже (Set из горутины client.Do).
+//
+// Kelevra (правка 8): Set, Read и Close — из разных горутин, а ReadCloser был без
+// синхронизации (и Wait закрывался через recover от двойного close) — go test
+// -race это ловит. Теперь всё состояние под access:
+//   - Close после Set закрывает пришедшее тело (как раньше);
+//   - Close до Set будит Read (ошибка io.ErrClosedPipe) и не теряется:
+//     тело, пришедшее Set'ом позже, закрывается сразу и наружу не отдаётся;
+//   - Wait закрывается ровно один раз — тем, кто первый (Set или Close).
 type WaitReadCloser struct {
 	Wait chan struct{}
 	io.ReadCloser
+
+	access sync.Mutex
+	closed bool // Close уже звали
 }
 
 func (w *WaitReadCloser) Set(rc io.ReadCloser) {
+	w.access.Lock()
+	if w.closed {
+		// Close опередил тело: Wait уже закрыт им, тело никому не нужно.
+		w.access.Unlock()
+		rc.Close()
+		return
+	}
 	w.ReadCloser = rc
-	defer func() {
-		if recover() != nil {
-			rc.Close()
-		}
-	}()
 	close(w.Wait)
+	w.access.Unlock()
 }
 
 func (w *WaitReadCloser) Read(b []byte) (int, error) {
 	<-w.Wait
-	if w.ReadCloser == nil {
+	w.access.Lock()
+	rc := w.ReadCloser
+	w.access.Unlock()
+	if rc == nil {
 		return 0, io.ErrClosedPipe
 	}
-	return w.ReadCloser.Read(b)
+	return rc.Read(b)
 }
 
 func (w *WaitReadCloser) Close() error {
-	if w.ReadCloser != nil {
-		return w.ReadCloser.Close()
+	w.access.Lock()
+	rc := w.ReadCloser
+	if rc == nil && !w.closed {
+		close(w.Wait) // тела ещё нет: будим Read; Set увидит closed
 	}
-	defer func() {
-		if recover() != nil && w.ReadCloser != nil {
-			w.ReadCloser.Close()
-		}
-	}()
-	close(w.Wait)
+	w.closed = true
+	w.access.Unlock()
+	if rc != nil {
+		// вне замка: Close тела h2 может ждать (RST_STREAM), Read его не держит
+		return rc.Close()
+	}
 	return nil
 }
 
