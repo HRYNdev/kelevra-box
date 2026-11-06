@@ -349,6 +349,12 @@ object AvtoVozvrat {
         parts.joinToString(", ")
     }.getOrElse { "обстановка не снялась: ${it.message}" }
 
+    /**
+     * Показать «нажмите, чтобы включить» снаружи: липкая служба, поднятая системой после смерти
+     * процесса, сама подняться не смогла ([Samopodem]) — остаётся позвать человека.
+     */
+    fun pokazatUvedomlenie(ctx: Context, povod: Povod) = pokazat(ctx, povod)
+
     private fun pokazat(ctx: Context, povod: Povod) {
         val nm = NotificationManagerCompat.from(ctx)
         if (!nm.areNotificationsEnabled()) {

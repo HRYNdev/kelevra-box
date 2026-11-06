@@ -12,12 +12,13 @@ import io.nekohasekai.libbox.Notification
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.sfa.R
 import io.nekohasekai.sfa.database.Settings
-import io.nekohasekai.sfa.ktx.toIpPrefix
+import android.net.IpPrefix
 import io.nekohasekai.sfa.ktx.toList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.InetAddress
 import java.net.NetworkInterface
 
 class VPNService :
@@ -72,7 +73,7 @@ class VPNService :
         lastTunName = name
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = service.onStartCommand()
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int) = service.onStartCommand(intent)
 
     override fun onBind(intent: Intent): IBinder {
         val binder = super.onBind(intent)
@@ -145,125 +146,100 @@ class VPNService :
         KLog.i(TAG, "прежний tun $old убран ядром ОС за ${SystemClock.elapsedRealtime() - started} мс")
     }
 
-    override fun openTun(options: TunOptions): Int {
-        if (prepare(this) != null) error("android: missing vpn permission")
-
-        val builder =
-            Builder()
-                .setSession(getString(R.string.app_name))
-                .setMtu(options.mtu)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setMetered(false)
-        }
-
-        if (Settings.allowBypass) {
-            builder.allowBypass()
-        }
-
+    /**
+     * Снимок того, что просит ядро: читается из [TunOptions] один раз (его итераторы
+     * одноразовые) и дальше служит и для сравнения с прежним tun, и для сборки [Builder].
+     * Побочно выставляет [systemProxyAvailable]/[systemProxyEnabled] — как раньше.
+     */
+    private fun snimok(options: TunOptions): TunSnimok {
+        val addresses = mutableListOf<TunSnimok.Prefix>()
         val inet4Address = options.inet4Address
         while (inet4Address.hasNext()) {
             val address = inet4Address.next()
-            builder.addAddress(address.address(), address.prefix())
+            addresses += TunSnimok.Prefix(address.address(), address.prefix())
         }
-
         val inet6Address = options.inet6Address
         while (inet6Address.hasNext()) {
             val address = inet6Address.next()
-            builder.addAddress(address.address(), address.prefix())
+            addresses += TunSnimok.Prefix(address.address(), address.prefix())
         }
+        val hasInet4 = addresses.any { !it.address.contains(':') }
+        val hasInet6 = addresses.any { it.address.contains(':') }
+
+        val dns = mutableListOf<String>()
+        val routes = mutableListOf<TunSnimok.Prefix>()
+        val excludeRoutes = mutableListOf<TunSnimok.Prefix>()
+        val includePackages = mutableListOf<String>()
+        val excludePackages = mutableListOf<String>()
 
         if (options.autoRoute) {
             if (options.dnsMode.value != Libbox.DNSModeDisabled) {
                 val dnsServerAddress = options.dnsServerAddress
-                while (dnsServerAddress.hasNext()) {
-                    builder.addDnsServer(dnsServerAddress.next())
-                }
+                while (dnsServerAddress.hasNext()) dns += dnsServerAddress.next()
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val inet4RouteAddress = options.inet4RouteAddress
                 if (inet4RouteAddress.hasNext()) {
                     while (inet4RouteAddress.hasNext()) {
-                        builder.addRoute(inet4RouteAddress.next().toIpPrefix())
+                        val r = inet4RouteAddress.next()
+                        routes += TunSnimok.Prefix(r.address(), r.prefix())
                     }
-                } else if (options.inet4Address.hasNext()) {
-                    builder.addRoute("0.0.0.0", 0)
+                } else if (hasInet4) {
+                    routes += TunSnimok.Prefix("0.0.0.0", 0)
                 }
 
                 val inet6RouteAddress = options.inet6RouteAddress
                 if (inet6RouteAddress.hasNext()) {
                     while (inet6RouteAddress.hasNext()) {
-                        builder.addRoute(inet6RouteAddress.next().toIpPrefix())
+                        val r = inet6RouteAddress.next()
+                        routes += TunSnimok.Prefix(r.address(), r.prefix())
                     }
-                } else if (options.inet6Address.hasNext()) {
-                    builder.addRoute("::", 0)
+                } else if (hasInet6) {
+                    routes += TunSnimok.Prefix("::", 0)
                 }
 
                 val inet4RouteExcludeAddress = options.inet4RouteExcludeAddress
                 while (inet4RouteExcludeAddress.hasNext()) {
-                    builder.excludeRoute(inet4RouteExcludeAddress.next().toIpPrefix())
+                    val r = inet4RouteExcludeAddress.next()
+                    excludeRoutes += TunSnimok.Prefix(r.address(), r.prefix())
                 }
 
                 val inet6RouteExcludeAddress = options.inet6RouteExcludeAddress
                 while (inet6RouteExcludeAddress.hasNext()) {
-                    builder.excludeRoute(inet6RouteExcludeAddress.next().toIpPrefix())
+                    val r = inet6RouteExcludeAddress.next()
+                    excludeRoutes += TunSnimok.Prefix(r.address(), r.prefix())
                 }
             } else {
                 val inet4RouteAddress = options.inet4RouteRange
-                if (inet4RouteAddress.hasNext()) {
-                    while (inet4RouteAddress.hasNext()) {
-                        val address = inet4RouteAddress.next()
-                        builder.addRoute(address.address(), address.prefix())
-                    }
+                while (inet4RouteAddress.hasNext()) {
+                    val r = inet4RouteAddress.next()
+                    routes += TunSnimok.Prefix(r.address(), r.prefix())
                 }
 
                 val inet6RouteAddress = options.inet6RouteRange
-                if (inet6RouteAddress.hasNext()) {
-                    while (inet6RouteAddress.hasNext()) {
-                        val address = inet6RouteAddress.next()
-                        builder.addRoute(address.address(), address.prefix())
-                    }
+                while (inet6RouteAddress.hasNext()) {
+                    val r = inet6RouteAddress.next()
+                    routes += TunSnimok.Prefix(r.address(), r.prefix())
                 }
             }
 
             val includePackage = options.includePackage
-            if (includePackage.hasNext()) {
-                while (includePackage.hasNext()) {
-                    try {
-                        val nextPackage = includePackage.next()
-                        builder.addAllowedApplication(nextPackage)
-                        KLog.d("VPNService", "addAllowedApplication: $nextPackage")
-                    } catch (e: NameNotFoundException) {
-                        KLog.e("VPNService", "addAllowedApplication failed", e)
-                    }
-                }
-            }
+            while (includePackage.hasNext()) includePackages += includePackage.next()
 
             val excludePackage = options.excludePackage
-            if (excludePackage.hasNext()) {
-                while (excludePackage.hasNext()) {
-                    try {
-                        val nextPackage = excludePackage.next()
-                        builder.addDisallowedApplication(nextPackage)
-                        KLog.d("VPNService", "addDisallowedApplication: $nextPackage")
-                    } catch (e: NameNotFoundException) {
-                        KLog.e("VPNService", "addDisallowedApplication failed", e)
-                    }
-                }
-            }
+            while (excludePackage.hasNext()) excludePackages += excludePackage.next()
         }
 
+        var httpProxy: TunSnimok.HttpProxy? = null
         if (options.isHTTPProxyEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             systemProxyAvailable = true
             systemProxyEnabled = Settings.systemProxyEnabled
             if (systemProxyEnabled) {
-                builder.setHttpProxy(
-                    ProxyInfo.buildDirectProxy(
-                        options.httpProxyServer,
-                        options.httpProxyServerPort,
-                        options.httpProxyBypassDomain.toList(),
-                    ),
+                httpProxy = TunSnimok.HttpProxy(
+                    options.httpProxyServer,
+                    options.httpProxyServerPort,
+                    options.httpProxyBypassDomain.toList(),
                 )
             }
         } else {
@@ -271,25 +247,135 @@ class VPNService :
             systemProxyEnabled = false
         }
 
-        // Уборка прежнего интерфейса и подъём нового — по очереди, а не наперегонки.
-        awaitOldTunGone()
+        return TunSnimok.of(
+            mtu = options.mtu,
+            addresses = addresses,
+            dns = dns,
+            routes = routes,
+            excludeRoutes = excludeRoutes,
+            includePackages = includePackages,
+            excludePackages = excludePackages,
+            httpProxy = httpProxy,
+            allowBypass = Settings.allowBypass,
+        )
+    }
+
+    /** [Builder] из снимка — ровно то, что раньше собиралось прямо из [TunOptions]. */
+    private fun builderIz(s: TunSnimok): Builder {
+        val builder =
+            Builder()
+                .setSession(getString(R.string.app_name))
+                .setMtu(s.mtu)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setMetered(false)
+        }
+
+        if (s.allowBypass) {
+            builder.allowBypass()
+        }
+
+        for (a in s.addresses) builder.addAddress(a.address, a.prefix)
+        for (d in s.dns) builder.addDnsServer(d)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            for (r in s.routes) builder.addRoute(IpPrefix(InetAddress.getByName(r.address), r.prefix))
+            for (r in s.excludeRoutes) builder.excludeRoute(IpPrefix(InetAddress.getByName(r.address), r.prefix))
+        } else {
+            for (r in s.routes) builder.addRoute(r.address, r.prefix)
+        }
+
+        for (nextPackage in s.includePackages) {
+            try {
+                builder.addAllowedApplication(nextPackage)
+                KLog.d("VPNService", "addAllowedApplication: $nextPackage")
+            } catch (e: NameNotFoundException) {
+                KLog.e("VPNService", "addAllowedApplication failed", e)
+            }
+        }
+
+        for (nextPackage in s.excludePackages) {
+            try {
+                builder.addDisallowedApplication(nextPackage)
+                KLog.d("VPNService", "addDisallowedApplication: $nextPackage")
+            } catch (e: NameNotFoundException) {
+                KLog.e("VPNService", "addDisallowedApplication failed", e)
+            }
+        }
+
+        s.httpProxy?.let { p ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setHttpProxy(ProxyInfo.buildDirectProxy(p.host, p.port, p.bypass))
+            }
+        }
+        return builder
+    }
+
+    /**
+     * Отдать ядру интерфейс tun.
+     *
+     * ПОРЯДОК «СНАЧАЛА НОВЫЙ, ПОТОМ СТАРЫЙ» (make-before-break). libbox при пересборке
+     * сначала закрывает прежний экземпляр (его `dup()` нашего дескриптора), потом зовёт
+     * `openTun` для нового (`daemon/started_service.go: StartOrReloadService`); сам наш
+     * дескриптор ядро не трогает никогда — оно работает с копией. Поэтому к этому вызову
+     * прежний tun ещё жив, и у нас три исхода ([TunSnimok.reshenie]):
+     *  - просят то же самое (адреса, маршруты, DNS, MTU, списки приложений, прокси) — отдаём
+     *    **прежний** дескриптор, `establish()` не зовём: интерфейс и VPN-сеть Android не
+     *    трогаются вовсе, соединения приложений живут дальше. Так проходят перечитывание
+     *    конфига, правки под комнату и WB — в tun они ничего не меняют;
+     *  - просят другое (чаще всего список приложений мимо tun под комнату) — `establish()`
+     *    нового ПРИ ОТКРЫТОМ прежнем: Android активирует новый и снимает прежний без паузы
+     *    (документация `Builder.establish`: «seamless handover … if the new interface cannot
+     *    be created, the existing interface and its file descriptor remain untouched»), после
+     *    чего прежний закрываем мы;
+     *  - прежнего нет (старт, подъём из погашенного дома) — как раньше, с ожиданием уборки
+     *    прошлого интерфейса ([awaitOldTunGone]).
+     *
+     * Про застрявший читатель прежнего экземпляра (см. [awaitOldTunGone]): при переиспользовании
+     * он делит с новым экземпляром тот же файл tun и, проснувшись на первом же пакете, отдаст
+     * его в никуда и выйдет — цена один пакет, а интерфейс не утекает: файл больше никто не держит.
+     */
+    override fun openTun(options: TunOptions): Int {
+        if (prepare(this) != null) error("android: missing vpn permission")
+
+        val snimok = snimok(options)
+        val prezhniy = service.fileDescriptor?.takeIf { pfd -> runCatching { pfd.fileDescriptor.valid() }.getOrDefault(false) }
+        val prezhniySnimok = service.tunSnimok
+
+        when (TunSnimok.reshenie(prezhniySnimok, snimok, prezhniyZhiv = prezhniy != null)) {
+            TunSnimok.Reshenie.PEREISPOLZOVAT -> {
+                KLog.i("VPNService", "tun тот же (${prezhniy!!.fd}) — отдаю ядру прежний интерфейс, establish не зову")
+                return prezhniy.fd
+            }
+
+            TunSnimok.Reshenie.ZAMENIT -> {
+                val chem = prezhniySnimok?.raznica(snimok)?.takeIf { it.isNotBlank() } ?: "снимка прежнего нет"
+                KLog.i("VPNService", "tun нужен другой ($chem) — поднимаю новый при открытом прежнем (${prezhniy!!.fd})")
+            }
+
+            TunSnimok.Reshenie.NOVYY ->
+                // Прежнего нет — уборка прошлого интерфейса и подъём нового по очереди, как раньше.
+                awaitOldTunGone()
+        }
+
+        val builder = builderIz(snimok)
         val pfd =
             builder.establish() ?: error("android: the application is not prepared or is revoked")
         // Имя нового интерфейса придёт следом, в [registerMyInterface]; прежнее с этой
         // секунды недействительно.
         lastTunName = null
-        // Пересборка ядра зовёт openTun заново, не проходя через гашение туннеля, и прежний
-        // дескриптор оставался незакрытым — интерфейс жил в ядре системы без маршрутов и
-        // копился до перезапуска приложения. Замер 12.08.2026 на телефоне: восемь tun за
-        // вечер, по одному на каждое переключение выхода.
+        // Прежний tun закрываем ПОСЛЕ того, как новый установлен: Android уже перевёл VPN-сеть
+        // на него, и файл прежнего больше никому не нужен. Раньше (12.08.2026) незакрытый
+        // дескриптор копил интерфейсы в ядре системы — по одному на каждое переключение.
         service.fileDescriptor?.let { old ->
             if (old !== pfd) {
                 val oldFd = runCatching { old.fd }.getOrNull()
                 val closed = runCatching { old.close() }.isSuccess
-                KLog.i("VPNService", "прежний tun-дескриптор ($oldFd) закрыт: $closed, новый ${pfd.fd}")
+                KLog.i("VPNService", "прежний tun-дескриптор ($oldFd) закрыт после замены: $closed, новый ${pfd.fd}")
             }
         }
         service.fileDescriptor = pfd
+        service.tunSnimok = snimok
         return pfd.fd
     }
 

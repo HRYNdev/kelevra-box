@@ -614,6 +614,21 @@ object AutoMode {
     private const val ROOM_HONEST_PEEK_MILLIS = 60_000L
 
     /**
+     * Сколько «дома» должно продержаться подряд, прежде чем гасить туннель ([DomZaderzhka]).
+     * Полевые данные 31.10–07.11.2026: домашний вайфай одного телефона менял сеть каждые
+     * 20–30 с, и автомат поднимал/гасил ядро 204 раза за неделю. 45 с — больше периода
+     * дёргания и меньше минуты лишнего туннеля при настоящем возвращении домой.
+     */
+    internal const val DOM_ZADERZHKA_MILLIS = 45_000L
+
+    /**
+     * Ожидание ответа пробы сторожа транспорта ([TransportWatch]). Нижняя граница
+     * [HonestProbe.MIN_TIMEOUT_MILLIS] всё равно действует — служебный отклик под нагрузкой
+     * доходит до 9 с, и короче мерить нельзя.
+     */
+    private const val TRANSPORT_PROBE_TIMEOUT_MILLIS = 6_000
+
+    /**
      * Сколько живёт выбор, сделанный руками, если сеть под нами так и не сменилась.
      *
      * Отпускать выбор по смене сети правильно, но на соте этого события не бывает вовсе:
@@ -821,6 +836,16 @@ object AutoMode {
     private var pendingSwitch = false
 
     private val gate = AutoModeGate { podtverzhdeniy() }
+
+    /**
+     * Выдержка перед гашением туннеля дома ([DomZaderzhka]): «дома» должно продержаться
+     * [DOM_ZADERZHKA_MILLIS] без смен сети, иначе дёргающийся вайфай пересобирает ядро на
+     * каждое переключение. Подъём вне дома она не задерживает.
+     */
+    private val domZaderzhka = DomZaderzhka { Pult.long("avtomat.dom_zaderzhka_millis", DOM_ZADERZHKA_MILLIS) }
+
+    /** Провалы сторожа транспорта подряд ([TransportWatch]); два — заход будится раньше ритма. */
+    private val transportWatch = TransportWatch.Schetchik()
 
     /** [CONFIRMATIONS] с пульта (`avtomat.podtverzhdeniy`); без пульта — константа. */
     internal fun podtverzhdeniy(): Int = io.nekohasekai.sfa.bg.pult.Pult.int("avtomat.podtverzhdeniy", CONFIRMATIONS)
@@ -1077,6 +1102,8 @@ object AutoMode {
             nodeWatch.reset(SystemClock.elapsedRealtime())
             nodeMeasurements.clear()
             gate.reset(initial)
+            domZaderzhka.reset()
+            transportWatch.reset()
             // На чьей сети стоит начальная обстановка, мы ещё не знаем — узнаем первым
             // же заходом. До того держать вердикт на молчании не на чем ([holdsVerdict]).
             situationNetwork = null
@@ -1773,19 +1800,27 @@ object AutoMode {
             // Проба комнаты WB висит ([wbTrialDeadline] не нулевой) — заход короче обычного
             // ритма, близко к её дедлайну, а не задним числом следующим полным кругом.
             val wbWait = wbTrialWaitIn(wait, SystemClock.elapsedRealtime(), wbTrialDeadline)
+            // Дома с живым туннелем идёт выдержка перед гашением ([DomZaderzhka]) — заход нужен
+            // к её концу, а не через пять минут.
+            val domWait = domWaitIn(wbWait, SystemClock.elapsedRealtime())
             // Полный ритм комнаты и дома досиживаем не вслепую: между заходами идёт одна
             // дешёвая проба. Спешка (серия, набор подтверждений) в этом не нуждается —
-            // там заход и так близко. Выбор формы ждёт по исходному [wait] (проба WB его не
-            // трогает, только итоговый срок — [wbWait]).
+            // там заход и так близко. Выбор формы ждёт по исходному [wait] (проба WB и
+            // выдержка дома его не трогают, только итоговый срок — [domWait]).
             when {
                 wait == Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS) &&
                     (situation == Situation.Room || situation == Situation.Wb) &&
-                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(wbWait)
+                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(domWait)
                 // Дома проба ловит то, о чём иначе некому сказать: ограничение, наступившее
                 // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
                 wait == Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS) && situation == Situation.Home &&
-                    !Pult.vykl("prismotr_doma") -> waitAtHome(wbWait)
-                else -> waitNext(wbWait)
+                    !Pult.vykl("prismotr_doma") -> waitAtHome(domWait)
+                // На основном канале между заходами — сторож транспорта ([TransportWatch]):
+                // мёртвый XHTTP иначе замечался через минуты, при одном узле в очереди — только
+                // пятиминутным ритмом.
+                wait == Pult.long("avtomat.round_main_millis", ROUND_MAIN_MILLIS) && situation == Situation.Main &&
+                    !Pult.vykl("storozh_transporta") -> waitOnMain(domWait)
+                else -> waitNext(domWait)
             }
         }
     }
@@ -1895,6 +1930,9 @@ object AutoMode {
 
         val was = gate.current
         val observed = observe(host)
+        // Выдержка дома считает непрерывные наблюдения «дома» без смен сети — каждому заходу
+        // по наблюдению, до любых поблажек задвижки ([DomZaderzhka]).
+        domZaderzhka.observe(home = observed == Situation.Home, networkChanged = trustOnce, now = SystemClock.elapsedRealtime())
 
         // Резолверы промолчали, сеть та же, и стоим мы на рабочем выходе — вердикт «не
         // знаю». Задвижке такое наблюдение даже не показываем: набор подтверждений
@@ -1942,6 +1980,8 @@ object AutoMode {
         when {
             changed -> {
                 KLog.i(TAG, "обстановка сменилась: ${name(was)} → ${name(observed)}")
+                // Провалы сторожа транспорта — про прежнюю обстановку.
+                transportWatch.reset()
                 // Запись с полями: от смены обстановки зависит, погасит ли автомат туннель, —
                 // и «кто выключил» потом читается рядом с остановками сервиса (см. BoxService).
                 runCatching {
@@ -2801,21 +2841,31 @@ object AutoMode {
         if (!repeat) KLog.i(TAG, "действую по обстановке «${name(situation)}»")
         when (situation) {
             Situation.Home -> {
-                // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
-                //
-                // Зовём и на повторе тоже. Вызов идемпотентный (погашенный туннель отвечает
-                // «ничего не делал»), а поднять туннель теперь может не только [apply]:
-                // [trialRaiseRoom] делает это сам, когда комната нужна, а туннеля нет.
-                // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
-                // следующей смены обстановки — то есть ровно то, чего дом и избегает.
-                if (host.suspendTunnel("дома обход делает роутер")) selected = null
-                // Дома не нужна и комната WB: туннель погашен, её присмотр гасит ядро сам.
-                releaseWb("дома обход делает роутер")
-                // Туннеля дома нет, и запасной узел, выбранный до дома, ничего не значит: из дома
-                // выходим с первого узла очереди. Раньше очередь сбрасывал только [start], а
-                // возврат ([maybeReturnToPrimary]) дома не идёт — и «Финляндия», выбранная за
-                // секунды мигания вайфая 17.10.2026 в 22:44, пережила весь вечер дома.
-                if (queueIndexAfter(situation, nodeIndex) == 0) resetQueue("дома туннель не нужен")
+                val now = SystemClock.elapsedRealtime()
+                // Гистерезис ([DomZaderzhka]): туннель живой, а «дома» ещё не продержалось —
+                // не гасим. Дёргающийся вайфай (204 подъёма и гашения за неделю на одном
+                // телефоне, 31.10–07.11.2026) иначе пересобирал ядро на каждое переключение.
+                // Уже погашенный туннель выдержки не ждёт: ниже всё идемпотентно, как и было.
+                // Заход к концу выдержки подтянет [domWaitIn].
+                if (host.tunnelLive() && !domZaderzhka.ready(now)) {
+                    KLog.i(TAG, "дома, но туннель гасить рано: держу ещё ${(domZaderzhka.leftMillis(now) + 999) / 1000} с — вайфай мог дёрнуться")
+                } else {
+                    // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
+                    //
+                    // Зовём и на повторе тоже. Вызов идемпотентный (погашенный туннель отвечает
+                    // «ничего не делал»), а поднять туннель теперь может не только [apply]:
+                    // [trialRaiseRoom] делает это сам, когда комната нужна, а туннеля нет.
+                    // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
+                    // следующей смены обстановки — то есть ровно то, чего дом и избегает.
+                    if (host.suspendTunnel("дома обход делает роутер")) selected = null
+                    // Дома не нужна и комната WB: туннель погашен, её присмотр гасит ядро сам.
+                    releaseWb("дома обход делает роутер")
+                    // Туннеля дома нет, и запасной узел, выбранный до дома, ничего не значит: из дома
+                    // выходим с первого узла очереди. Раньше очередь сбрасывал только [start], а
+                    // возврат ([maybeReturnToPrimary]) дома не идёт — и «Финляндия», выбранная за
+                    // секунды мигания вайфая 17.10.2026 в 22:44, пережила весь вечер дома.
+                    if (queueIndexAfter(situation, nodeIndex) == 0) resetQueue("дома туннель не нужен")
+                }
             }
 
             Situation.Main -> {
@@ -4661,6 +4711,92 @@ object AutoMode {
             if (woken) return
             if (left <= 0) return
             if (peekHome()) return
+        }
+    }
+
+    /**
+     * Пауза до следующего захода с учётом выдержки дома: пока туннель живой, а «дома» ещё
+     * не продержалось ([DomZaderzhka.pending]), заход нужен к концу выдержки, не позже.
+     */
+    private fun domWaitIn(wait: Long, now: Long): Long {
+        if (!domZaderzhka.pending(now)) return wait
+        val live = host?.let { runCatching { it.tunnelLive() }.getOrDefault(false) } ?: false
+        if (!live) return wait
+        return minOf(wait, domZaderzhka.leftMillis(now) + 1_000L)
+    }
+
+    /**
+     * Ожидание на основном канале: тот же пятиминутный ритм полных заходов, но между ними —
+     * сторож транспорта ([TransportWatch]): короткая проба через закреплённый вход основного
+     * узла. Устроено как ожидание дома и в комнате: пауза режется на куски, на границе
+     * каждого идёт проба; разбудило событие — выходим сразу, заход и так вот-вот будет.
+     * Шаг по экрану: выключен — вдвое длиннее. В дозе проба не ходит ([peekTransport]).
+     */
+    private fun waitOnMain(total: Long) {
+        var left = total
+        while (active && left > 0) {
+            val screenOn = runCatching { Application.powerManager.isInteractive }.getOrDefault(true)
+            val min = Pult.long("avtomat.transport_min_millis", TransportWatch.MIN_MILLIS)
+            val max = Pult.long("avtomat.transport_max_millis", TransportWatch.MAX_MILLIS).coerceAtLeast(min)
+            val slice = TransportWatch.slice(left, Random.nextLong(min, max + 1), screenOn)
+            val before = SystemClock.elapsedRealtime()
+            val woken = waitNext(slice)
+            val spent = SystemClock.elapsedRealtime() - before
+            left -= spent
+            if (!active) return
+            // Разбудило событие, а не наш таймер.
+            if (woken) return
+            if (left <= 0) return
+            if (peekTransport()) return
+        }
+    }
+
+    /**
+     * Сторож транспорта: один запрос через закреплённый вход основного узла, мимо селектора —
+     * живые соединения не трогаются.
+     *
+     * Ничего не решает и не переключает: два провала подряд ([TransportWatch.Schetchik]) —
+     * повод для полного захода сейчас, а не через пять минут; там своя проба, задвижка с
+     * подтверждениями и очередь узлов. Это закрывает дыру одного узла в очереди: живые
+     * отказы ([otkazyUzla]) будят заход только при двух и более узлах.
+     *
+     * Не ходим: в дозе (радио спит — не будим), без туннеля (входа нет), без сети (заход
+     * разбудит система), без закреплённого входа (мерить нечем — выдумывать «мёртв» нельзя).
+     *
+     * @return true — провалов набралось, полный заход нужен немедленно.
+     */
+    private fun peekTransport(): Boolean {
+        if (!avtoSam()) return false
+        val host = this.host ?: return false
+        if (runCatching { Application.powerManager.isDeviceIdleMode }.getOrDefault(false)) return false
+        if (!runCatching { host.tunnelLive() }.getOrDefault(false)) return false
+        val main = layout.main ?: return false
+        val entry = layout.entryFor(main) ?: return false
+        if (physicalNetwork() == null) return false
+        val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, Pult.int("avtomat.transport_probe_timeout_millis", TRANSPORT_PROBE_TIMEOUT_MILLIS))
+        return when (result) {
+            is ProxyProbe.Result.Live -> {
+                transportWatch.ok()
+                // Замер настоящий и ровно про основной путь — в реестр он ложится так же, как
+                // из полного захода; иначе экран пять минут показывал бы возраст прошлого захода.
+                PathRegistry.alive(PathId.MAIN, result.latencyMs)
+                refreshLink()
+                false
+            }
+
+            // Вход из прошлой жизни ядра (пересобрано посреди паузы): про канал это не говорит ничего.
+            is ProxyProbe.Result.Unmeasured -> false
+
+            is ProxyProbe.Result.Dead -> {
+                KLog.i(TAG, "сторож транспорта: основной канал не ответил (${result.reason}), провал ${transportWatch.fails + 1}")
+                if (!transportWatch.fail()) return false
+                KLog.w(TAG, "сторож транспорта: провалы подряд — проверяю обстановку целиком, не дожидаясь ритма")
+                // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
+                // изменилась так же доказанно, а подтверждений задвижка всё равно требует —
+                // переключение остаётся защищённым от одиночного невезения.
+                burst.restart()
+                true
+            }
         }
     }
 
