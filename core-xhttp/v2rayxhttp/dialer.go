@@ -128,7 +128,8 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	wrc = &WaitReadCloser{Wait: make(chan struct{})}
 	go func() {
 		resp, err := c.client.Do(req)
-		watch.stop() // ответ (или ошибка) есть — проверять соединение по этому потоку больше незачем
+		w := watch
+		w.stop() // ответ (или ошибка) есть — проверять соединение по этому потоку больше незачем
 		if !headersGot() && err == nil {
 			// таймер заголовков выстрелил раньше, чем мы его сняли: контекст уже
 			// отменён, тело оборвётся на первом Read — это провал, не живой ответ
@@ -137,7 +138,10 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 		}
 		if err != nil {
 			cancelReq()
-			if !uploadOnly { // stream-down is enough
+			// Kelevra (правка 9): соединение потока признала мёртвым наша проверка —
+			// пул его уже закрыл и выкинул; закрыть весь клиент значило бы оборвать
+			// и потоки на свежем соединении, поднятом, пока шла проверка.
+			if !uploadOnly && !w.connDead() { // stream-down is enough
 				c.Close()
 			}
 			gotConn.Close()

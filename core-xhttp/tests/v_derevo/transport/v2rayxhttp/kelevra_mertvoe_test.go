@@ -15,23 +15,32 @@
 //   - живое медленное соединение под нагрузкой (ack PING опаздывает, но байты идут) и
 //     живой медленный сервер не закрываются;
 //   - на простое лишних PING нет: проверка потоков их не шлёт, health check — не чаще
-//     ReadIdleTimeout.
+//     ReadIdleTimeout;
+//   - (ревью ef77fa4) поток на свежем соединении переживает закрытие мёртвого через
+//     OpenStream; после сна телефона — за срок PING; поток при чужой проверке решает
+//     сразу по её итогу; дозвон не удался — пул отдаёт прежнее соединение, если
+//     подозрение снято; потолок потоков от узла — новое соединение.
 
 package xhttp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/logger"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // ---------- прокси ----------
@@ -225,6 +234,14 @@ func (l *kelevraCapLogger) add(level string, args ...any) {
 func (l *kelevraCapLogger) Info(args ...any)  { l.add("INFO", args...) }
 func (l *kelevraCapLogger) Debug(args ...any) { l.add("DEBUG", args...) }
 
+// all — копия строк под замком (читать lg.lines напрямую из теста — гонка с
+// горутинами проверки).
+func (l *kelevraCapLogger) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.lines...)
+}
+
 func (l *kelevraCapLogger) find(sub string) string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -373,7 +390,7 @@ func TestKelevraDeadConnStreamsFailFast(t *testing.T) {
 	}
 	line := lg.find("dead")
 	if line == "" || !strings.Contains(line, "stream without response") || !strings.Contains(line, "streams") {
-		t.Fatalf("нет строки журнала о мёртвом соединении; журнал: %q", lg.lines)
+		t.Fatalf("нет строки журнала о мёртвом соединении; журнал: %q", lg.all())
 	}
 	t.Logf("журнал: %s", line)
 }
@@ -456,7 +473,7 @@ func TestKelevraIdleReusedConnProbedAtOnce(t *testing.T) {
 		t.Fatalf("поток висит")
 	}
 	if line := lg.find("dead"); !strings.Contains(line, "idle") {
-		t.Fatalf("в журнале нет строки preface-проверки; журнал: %q", lg.lines)
+		t.Fatalf("в журнале нет строки preface-проверки; журнал: %q", lg.all())
 	}
 }
 
@@ -593,4 +610,228 @@ func TestKelevraIdleConnPingsAreRare(t *testing.T) {
 		}
 		t.Logf("PING за %v простоя: %d", idleFor, p)
 	})
+}
+
+// ---------- ревью ef77fa4 ----------
+
+func kelevraTestPool(c *DefaultDialerClient) *kelevraH2Pool {
+	return c.client.Transport.(*http2.Transport).ConnPool.(*kelevraH2Pool)
+}
+
+func kelevraTestFirstConn(t *testing.T, c *DefaultDialerClient) *kelevraH2Conn {
+	t.Helper()
+	p := kelevraTestPool(c)
+	p.access.Lock()
+	defer p.access.Unlock()
+	if len(p.conns) == 0 {
+		t.Fatal("в пуле нет соединений")
+	}
+	return p.conns[0]
+}
+
+// Поток, ушедший на свежее соединение, пока старое было под проверкой, переживает
+// закрытие мёртвого. Всё через OpenStream: ошибка потока на мёртвом соединении не
+// должна закрывать весь клиент (а с ним и свежее соединение).
+func TestKelevraFreshConnSurvivesDeadClose(t *testing.T) {
+	setKelevraProbeTimings(t, 400*time.Millisecond, time.Hour, time.Second, 500*time.Millisecond)
+	srv := newH2CTestServer(t, kelevraTestHandler)
+	px := newKelevraTestProxy(t, srv.Listener.Addr().String(), 0)
+	lg := newKelevraCapLogger()
+	c := newH2CDialerClientTo(t, px.addr(), kelevraH2ReadIdleTimeout, lg)
+	base := "http://" + px.addr()
+
+	rc1 := openGet(t, c, base+"/quiet")
+	if !headersIn(t, rc1, 3*time.Second) {
+		t.Fatal("первый поток без заголовков")
+	}
+	px.freeze()
+	start := time.Now()
+	rc2 := openGet(t, c, base+"/quiet")
+	r2 := readAsync(rc2, start)
+	time.Sleep(kelevraProbeNoResponse + 200*time.Millisecond) // старое под проверкой
+	rc3 := openGet(t, c, base+"/load")
+	if !headersIn(t, rc3, 2*time.Second) {
+		t.Fatal("поток на свежем соединении без заголовков")
+	}
+	if n := px.accepted.Load(); n != 2 {
+		t.Fatalf("соединений %d, ждали 2 (свежее под третий поток)", n)
+	}
+	select {
+	case r := <-r2:
+		if r.err == nil {
+			t.Fatal("поток на мёртвом соединении: ожидали ошибку")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("поток на мёртвом соединении висит")
+	}
+	if lg.find("dead") == "" {
+		t.Fatalf("мёртвое соединение закрыто не проверкой; журнал %q", lg.all())
+	}
+	select {
+	case r := <-readAsync(rc3, time.Now()):
+		t.Fatalf("поток на свежем соединении оборван после закрытия мёртвого: %v; клиент закрыт=%v", r.err, c.IsClosed())
+	case <-time.After(1500 * time.Millisecond):
+	}
+	if c.IsClosed() {
+		t.Fatal("клиент закрыт целиком из-за одного мёртвого соединения")
+	}
+}
+
+// После сна телефона: стенные часы последнего байта на минуту назад, монотонные —
+// свежие. Новый поток на мёртвом соединении получает ошибку за ≈ срок PING (4 с),
+// а не через круг проверки по зависшему потоку. Боевые сроки.
+func TestKelevraAfterSleepProbedAtOnce(t *testing.T) {
+	srv := newH2CTestServer(t, kelevraTestHandler)
+	px := newKelevraTestProxy(t, srv.Listener.Addr().String(), 0)
+	lg := newKelevraCapLogger()
+	c := newH2CDialerClientTo(t, px.addr(), kelevraH2ReadIdleTimeout, lg)
+	base := "http://" + px.addr()
+	rc1 := openGet(t, c, base+"/quiet")
+	if !headersIn(t, rc1, 3*time.Second) {
+		t.Fatal("первый поток без заголовков")
+	}
+	conn := kelevraTestFirstConn(t, c)
+	px.freeze()
+	time.Sleep(200 * time.Millisecond)
+	conn.readWall.Store(time.Now().Add(-60 * time.Second).UnixNano()) // «сон 60 с»
+	start := time.Now()
+	rc2 := openGet(t, c, base+"/quiet")
+	select {
+	case r := <-readAsync(rc2, start):
+		if r.err == nil {
+			t.Fatal("ожидали ошибку")
+		}
+		if lim := kelevraProbePingTimeout + time.Second; r.took > lim {
+			t.Fatalf("после сна ошибка через %v, ждали ≤ %v", r.took.Round(100*time.Millisecond), lim)
+		}
+		t.Logf("после «сна» ошибка через %v", r.took.Round(100*time.Millisecond))
+	case <-time.After(20 * time.Second):
+		t.Fatal("поток висит")
+	}
+	if line := lg.find("dead"); !strings.Contains(line, "idle") {
+		t.Fatalf("ждали строку preface-проверки; журнал %q", lg.all())
+	}
+}
+
+// Поток ждёт ответа дольше срока, а проверку соединения уже ведёт preface другого
+// потока, и та мёртвым его не признаёт (тишина ещё короче порога). Ждавший поток
+// решает сам сразу по её итогу, а не взводит полный срок ответа заново.
+func TestKelevraBusyProbeDecidedRightAfter(t *testing.T) {
+	// срок ответа 600 мс, preface 300 мс, PING 1 с, порог тишины 1,5 с
+	setKelevraProbeTimings(t, 600*time.Millisecond, 300*time.Millisecond, time.Second, 1500*time.Millisecond)
+	srv := newH2CTestServer(t, kelevraTestHandler)
+	px := newKelevraTestProxy(t, srv.Listener.Addr().String(), 0)
+	lg := newKelevraCapLogger()
+	c := newH2CDialerClientTo(t, px.addr(), kelevraH2ReadIdleTimeout, lg)
+	base := "http://" + px.addr()
+	rc1 := openGet(t, c, base+"/quiet")
+	if !headersIn(t, rc1, 3*time.Second) {
+		t.Fatal("первый поток без заголовков")
+	}
+	px.freeze()
+	time.Sleep(350 * time.Millisecond) // простой ≥ preface, тишина 0,35 с
+	start := time.Now()
+	// t=0: preface-PING; t=0,6: проверка по потоку видит «идёт чужая»;
+	// t=1,0: preface — PING без ответа, тишина 1,35 с < 1,5 → живо;
+	// дальше поток сразу шлёт свой PING: t=2,0, тишина 2,35 → мёртво.
+	// Если бы поток взвёл срок заново: 1,0 + 0,6 + 1,0 = t=2,6.
+	rc2 := openGet(t, c, base+"/quiet")
+	select {
+	case r := <-readAsync(rc2, start):
+		if r.err == nil {
+			t.Fatal("ожидали ошибку")
+		}
+		if lim := 2*kelevraProbePingTimeout + 400*time.Millisecond; r.took > lim {
+			t.Fatalf("ошибка через %v, ждали ≤ %v (поток не дождался итога чужой проверки)", r.took.Round(100*time.Millisecond), lim)
+		}
+		t.Logf("ошибка через %v", r.took.Round(100*time.Millisecond))
+	case <-time.After(10 * time.Second):
+		t.Fatal("поток висит")
+	}
+	if line := lg.find("dead"); !strings.Contains(line, "stream without response") {
+		t.Fatalf("ждали решение проверки по потоку; журнал %q", lg.all())
+	}
+}
+
+// Дозвон нового соединения (из-за подозрения на старое) не удался, а старое тем
+// временем оказалось живым: запрос получает старое, а не ошибку.
+func TestKelevraFailedDialFallsBackToClearedConn(t *testing.T) {
+	setKelevraProbeTimings(t, 300*time.Millisecond, time.Hour, 3*time.Second, 5*time.Second)
+	srv := newH2CTestServer(t, kelevraTestHandler)
+	px := newKelevraTestProxy(t, srv.Listener.Addr().String(), time.Second) // ответы узла через 1 с
+	var dials atomic.Int32
+	dial := func(ctx context.Context) (net.Conn, error) {
+		if dials.Add(1) > 1 {
+			time.Sleep(1200 * time.Millisecond)
+			return nil, errors.New("test: dial refused")
+		}
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", px.addr())
+	}
+	tr := kelevraNewH2Transport(dial, kelevraH2ReadIdleTimeout, 300*time.Second, newKelevraCapLogger())
+	tr.AllowHTTP = true
+	c := &DefaultDialerClient{
+		options:       &option.V2RayXHTTPBaseOptions{},
+		client:        &http.Client{Transport: tr},
+		httpVersion:   "2",
+		uploadRawPool: &sync.Pool{},
+	}
+	t.Cleanup(c.Close)
+	base := "http://" + px.addr()
+
+	rc1 := openGet(t, c, base+"/quiet") // заголовки через 1 с > срока ответа: подозрение
+	time.Sleep(500 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/fast", nil)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		t.Fatalf("запрос получил ошибку дозвона, хотя прежнее соединение живо: %v", err)
+	}
+	resp.Body.Close()
+	if dials.Load() < 2 {
+		t.Fatalf("дозвона под подозрением не было (дозвонов %d) — сценарий не воспроизведён", dials.Load())
+	}
+	if !headersIn(t, rc1, 3*time.Second) {
+		t.Fatal("первый поток без заголовков")
+	}
+}
+
+// Потолок потоков от узла (MaxConcurrentStreams 2): лишние потоки идут на новые
+// соединения, не висят; CloseIdleConnections на нашем пуле — без паники.
+func TestKelevraMaxConcurrentStreamsNewConn(t *testing.T) {
+	srv := httptest.NewServer(h2c.NewHandler(http.HandlerFunc(kelevraTestHandler), &http2.Server{MaxConcurrentStreams: 2}))
+	t.Cleanup(func() {
+		srv.CloseClientConnections()
+		srv.Close()
+	})
+	c := newH2CDialerClientTo(t, srv.Listener.Addr().String(), kelevraH2ReadIdleTimeout, newKelevraCapLogger())
+	base := "http://" + srv.Listener.Addr().String()
+	var rcs []io.ReadCloser
+	for i := 0; i < 5; i++ {
+		rc := openGet(t, c, base+"/quiet")
+		if !headersIn(t, rc, 3*time.Second) {
+			t.Fatalf("поток %d без заголовков", i)
+		}
+		rcs = append(rcs, rc)
+	}
+	p := kelevraTestPool(c)
+	p.access.Lock()
+	n := len(p.conns)
+	p.access.Unlock()
+	if n < 3 {
+		t.Fatalf("5 потоков при потолке 2 — ждали ≥ 3 соединений, в пуле %d", n)
+	}
+	for _, rc := range rcs {
+		rc.Close()
+	}
+	c.client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", base+"/fast", nil)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
 }
