@@ -172,9 +172,18 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, sessio
 	}
 	FillPacketRequest(req, sessionId, seqStr, payload, c.options)
 	if c.httpVersion != "1.1" {
+		// Kelevra (правка 9): запоминаем соединение запроса — если его признала
+		// мёртвым наша проверка, весь клиент не закрываем (kelevra_mertvoe.go).
+		// GotConn — в этой же горутине (RoundTrip синхронный).
+		var postConn net.Conn
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GotConn: func(connInfo httptrace.GotConnInfo) { postConn = connInfo.Conn },
+		}))
 		resp, err := c.client.Do(req)
 		if err != nil {
-			c.Close()
+			if !kelevraConnDead(postConn) {
+				c.Close()
+			}
 			return err
 		}
 		io.Copy(io.Discard, resp.Body)

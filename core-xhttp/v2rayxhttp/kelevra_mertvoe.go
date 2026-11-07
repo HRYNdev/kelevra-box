@@ -23,8 +23,9 @@ package xhttp
 //     (preface): после простоя соединение под подозрением само по себе.
 //  3. Поток, ждущий ответ (stream-down GET, stream-one), не получил заголовков за
 //     kelevraProbeNoResponse — PING; пока он в полёте, соединение новым потокам не
-//     выдаётся (пул дозвонится новым; не вышло — снова смотрит пул). Идёт чужая
-//     проверка (preface) — поток ждёт её итога и сразу решает сам, без нового срока.
+//     выдаётся (пул дозвонится новым; не вышло — снова смотрит пул). Живость
+//     доказана меньше срока ответа назад — PING не шлём (иначе ждущие потоки
+//     медленного сервера слали бы PING каждый свой).
 //  4. Мёртвым соединение признаётся только если ВСЁ сразу: PING без ответа
 //     kelevraProbePingTimeout, после отправки PING от узла не пришло ни байта, и тишина
 //     на соединении (большее из монотонных и стенных часов — сон телефона монотонные
@@ -259,13 +260,13 @@ type kelevraH2Conn struct {
 	pool *kelevraH2Pool
 	cc   *http2.ClientConn // задан до того, как соединение попало в пул
 
-	readMono    atomic.Int64 // kelevraMono() последнего байта от узла
-	readWall    atomic.Int64 // то же стенными часами: сон телефона монотонные не считают
-	probeAccess sync.Mutex
-	probeDone   chan struct{} // не nil — PING-проверка идёт; закрывается по её итогу
-	suspect     atomic.Bool   // проверка по зависшему потоку: новых потоков не давать
-	dead        atomic.Bool   // признано мёртвым и закрыто нами
-	closed      atomic.Bool   // Close уже звали (кто угодно)
+	readMono  atomic.Int64 // kelevraMono() последнего байта от узла
+	readWall  atomic.Int64 // то же стенными часами: сон телефона монотонные не считают
+	probing   atomic.Bool  // PING-проверка идёт
+	aliveMono atomic.Int64 // kelevraMono() последнего доказательства живости проверкой
+	suspect   atomic.Bool  // проверка по зависшему потоку: новых потоков не давать
+	dead      atomic.Bool  // признано мёртвым и закрыто нами
+	closed    atomic.Bool  // Close уже звали (кто угодно)
 }
 
 func (c *kelevraH2Conn) touch() {
@@ -326,28 +327,26 @@ type kelevraProbeTimings struct {
 	deadSilence time.Duration
 }
 
-// probe — PING-проверка соединения. dead: соединение признано мёртвым и закрыто
-// (или уже закрыто кем-то). busy не nil — проверку уже ведёт другой поток, канал
-// закроется по её итогу (решения тогда нет: alive и dead — false).
-func (c *kelevraH2Conn) probe(kind string, tm kelevraProbeTimings, streamStart time.Duration, idleBefore time.Duration) (alive bool, busy <-chan struct{}) {
+// probe — PING-проверка соединения. false — соединение признано мёртвым и закрыто
+// (или уже закрыто кем-то); true — живо, либо проверку уже ведёт другой поток
+// (её итог касается и нас: «мертво» закроет соединение, и наш client.Do вернётся),
+// либо живость доказана меньше срока ответа назад.
+//
+// Без последнего правила N потоков, ждущих ответа от медленного сервера на живом
+// соединении, слали бы каждый свой PING раз в срок ответа (ревью c65236d: 8 потоков
+// — 40 PING за 2,4 с): проверка на живом загруженном соединении кончается за
+// kelevraProbeReadPoll, и следующий поток тут же начинает свою.
+func (c *kelevraH2Conn) probe(kind string, tm kelevraProbeTimings, streamStart time.Duration, idleBefore time.Duration) bool {
 	if c.dead.Load() || c.closed.Load() {
-		return false, nil
+		return false
 	}
-	c.probeAccess.Lock()
-	if c.probeDone != nil {
-		busy = c.probeDone
-		c.probeAccess.Unlock()
-		return false, busy
+	if la := c.aliveMono.Load(); la != 0 && kelevraMono()-time.Duration(la) < tm.noResponse {
+		return true // соединение только что доказало живость — новый PING не нужен
 	}
-	done := make(chan struct{})
-	c.probeDone = done
-	c.probeAccess.Unlock()
-	defer func() {
-		c.probeAccess.Lock()
-		c.probeDone = nil
-		c.probeAccess.Unlock()
-		close(done)
-	}()
+	if !c.probing.CompareAndSwap(false, true) {
+		return true // уже проверяют — результат их проверки касается и нас
+	}
+	defer c.probing.Store(false)
 	if kind != kelevraKindPreface {
 		c.suspect.Store(true)
 		defer c.suspect.Store(false)
@@ -371,15 +370,17 @@ wait:
 			break wait
 		case <-tick.C:
 			if time.Duration(c.readMono.Load()) >= sent {
-				return true, nil
+				c.aliveMono.Store(int64(kelevraMono()))
+				return true
 			}
 		}
 	}
 	if err == nil {
-		return true, nil
+		c.aliveMono.Store(int64(kelevraMono()))
+		return true
 	}
 	if c.closed.Load() {
-		return false, nil // закрыли без нас (Close клиента, idle, health check x/net)
+		return false // закрыли без нас (Close клиента, idle, health check x/net)
 	}
 	pingWait := kelevraMono() - sent
 	// тишина — по большему из монотонных и стенных часов: после сна телефона
@@ -389,10 +390,10 @@ wait:
 		// ack не успел, но байты от узла идут (или тишина ещё коротка) — загружено, не мертво
 		c.pool.log.Debug("kelevra h2 probe (", kind, "): ping unanswered ", pingWait.Round(100*time.Millisecond),
 			" but peer not silent (", silence.Round(100*time.Millisecond), "), keeping connection to ", c.Conn.RemoteAddr())
-		return true, nil
+		return true
 	}
 	if !c.dead.CompareAndSwap(false, true) {
-		return false, nil
+		return false
 	}
 	streams := c.streamsBestEffort()
 	var why string
@@ -406,7 +407,7 @@ wait:
 		", peer silent ", silence.Round(100*time.Millisecond),
 		", streams ", streams, "; closing")
 	c.cc.Close() // все потоки соединения сразу получают ошибку
-	return false, nil
+	return false
 }
 
 // kelevraStreamWatch — надзор за одним потоком на соединении пула (от GotConn до
@@ -449,39 +450,24 @@ func kelevraWatchStream(conn net.Conn, waitResponse bool) *kelevraStreamWatch {
 func (w *kelevraStreamWatch) loop() {
 	timer := time.NewTimer(w.tm.noResponse)
 	defer timer.Stop()
-	select {
-	case <-w.done:
-		return
-	case <-timer.C:
-	}
 	for {
-		select {
-		case <-w.done:
-			return
-		default:
-		}
-		alive, busy := w.c.probe(kelevraKindNoResponse, w.tm, w.start, 0)
-		if busy != nil {
-			// проверку ведёт другой поток (например, preface): ждём её итога и
-			// сразу решаем своей, не взводя полный срок заново
-			select {
-			case <-w.done:
-				return
-			case <-busy:
-			}
-			continue
-		}
-		if !alive {
-			return
-		}
-		// живо (загружено) — ждём ещё; верхний срок — kelevraResponseHeaderTimeout,
-		// по нему client.Do вернётся и позовёт stop
-		timer.Reset(w.tm.noResponse)
 		select {
 		case <-w.done:
 			return
 		case <-timer.C:
 		}
+		select {
+		case <-w.done:
+			return
+		default:
+		}
+		if !w.c.probe(kelevraKindNoResponse, w.tm, w.start, 0) {
+			return
+		}
+		// живо (загружено), проверяет другой поток или живость только что доказана —
+		// ждём ещё; верхний срок — kelevraResponseHeaderTimeout, по нему client.Do
+		// вернётся и позовёт stop
+		timer.Reset(w.tm.noResponse)
 	}
 }
 
@@ -494,5 +480,13 @@ func (w *kelevraStreamWatch) stop() {
 
 // connDead — соединение потока признано мёртвым нашей проверкой (и уже закрыто).
 func (w *kelevraStreamWatch) connDead() bool {
-	return w != nil && w.c.dead.Load()
+	return w != nil && kelevraConnDead(w.c)
+}
+
+// kelevraConnDead — conn из нашего пула, и наша проверка признала его мёртвым (и
+// закрыла). Тогда ошибка запроса на нём — не повод закрывать весь клиент: пул
+// мёртвое уже выкинул, а свежие соединения пула живы.
+func kelevraConnDead(conn net.Conn) bool {
+	c, ok := conn.(*kelevraH2Conn)
+	return ok && c.dead.Load()
 }
