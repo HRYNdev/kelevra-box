@@ -72,6 +72,11 @@ func (c *DefaultDialerClient) Close() {
 	case *http.Transport:
 		transport.CloseIdleConnections()
 	case *http2.Transport:
+		// Kelevra (правка 9): наш пул закрываем сам, без linkname во внутренности x/net
+		if p, ok := transport.ConnPool.(*kelevraH2Pool); ok {
+			p.closeAll()
+			return
+		}
 		connPool := transportConnPool(transport)
 		p := (*clientConnPool)((*efaceWords)(unsafe.Pointer(&connPool)).data)
 		p.mu.Lock()
@@ -99,10 +104,15 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	// and we can unblock the Dial function and print correct net addresses in
 	// logs
 	gotConn := done.New()
+	// Kelevra (правка 9): надзор за потоком на его h2-соединении (kelevra_mertvoe.go).
+	// GotConn и строка после client.Do — в одной горутине (RoundTrip синхронный).
+	var watch *kelevraStreamWatch
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GotConn: func(connInfo httptrace.GotConnInfo) {
 			remoteAddr = connInfo.Conn.RemoteAddr()
 			localAddr = connInfo.Conn.LocalAddr()
+			watch.stop() // повтор запроса x/net на другом соединении
+			watch = kelevraWatchStream(connInfo.Conn, !uploadOnly)
 			gotConn.Close()
 		},
 	})
@@ -118,6 +128,7 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	wrc = &WaitReadCloser{Wait: make(chan struct{})}
 	go func() {
 		resp, err := c.client.Do(req)
+		watch.stop() // ответ (или ошибка) есть — проверять соединение по этому потоку больше незачем
 		if !headersGot() && err == nil {
 			// таймер заголовков выстрелил раньше, чем мы его сняли: контекст уже
 			// отменён, тело оборвётся на первом Read — это провал, не живой ответ

@@ -32,7 +32,6 @@ import (
 	"github.com/sagernet/sing/common/ntp"
 	sHTTP "github.com/sagernet/sing/protocol/http"
 	"github.com/sagernet/sing/service"
-	"golang.org/x/net/http2"
 )
 
 type Client struct {
@@ -373,21 +372,16 @@ func createHTTPClient(ctx context.Context, dest M.Socksaddr, dialer N.Dialer, op
 		}
 	case "2":
 		if keepAlivePeriod == 0 {
-			keepAlivePeriod = net.ChromeH2KeepAlivePeriod
+			// Kelevra (правка 9): 30 с вместо ChromeH2KeepAlivePeriod 45 с (kelevra_zhivost.go)
+			keepAlivePeriod = kelevraH2ReadIdleTimeout
 		}
 		if keepAlivePeriod < 0 {
 			keepAlivePeriod = 0
 		}
-		transport = &http2.Transport{
-			DialTLSContext: func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
-				return dialContext(ctxInner)
-			},
-			IdleConnTimeout: net.ConnIdleTimeout,
-			ReadIdleTimeout: keepAlivePeriod,
-			// Kelevra (правка 8): PING без ответа и запись без прогресса — соединение мёртво
-			PingTimeout:      kelevraH2PingTimeout,
-			WriteByteTimeout: kelevraH2WriteByteTimeout,
-		}
+		// Kelevra (правка 8): PING без ответа и запись без прогресса — соединение мёртво.
+		// Kelevra (правка 9): свой пул соединений — мёртвое соединение под новым потоком
+		// распознаётся за секунды, его потоки сразу получают ошибку (kelevra_mertvoe.go).
+		transport = kelevraNewH2Transport(dialContext, keepAlivePeriod, net.ConnIdleTimeout, kelevraLogger(ctx))
 	default:
 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
 			return dialContext(ctxInner)

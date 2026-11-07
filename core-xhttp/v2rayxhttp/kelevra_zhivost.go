@@ -27,6 +27,8 @@ package xhttp
 //     PingTimeout (по умолчанию 15 с). Здесь PingTimeout задан явно и короче, а
 //     WriteByteTimeout закрывает соединение, в которое байты не уходят вовсе
 //     (мёртвый TCP с полным буфером отправки).
+//     Правка 9: ReadIdleTimeout 45 → 30 с, PingTimeout 10 → 5 с, и быстрая проверка
+//     соединения под новым потоком — kelevra_mertvoe.go.
 
 import (
 	"context"
@@ -42,8 +44,19 @@ var (
 	kelevraDialTimeout = C.TCPTimeout
 	// Заголовки ответа на stream-down GET / stream-one.
 	kelevraResponseHeaderTimeout = 30 * time.Second
-	// h2 PING без ответа столько — соединение мёртво.
-	kelevraH2PingTimeout = 10 * time.Second
+	// Kelevra (правка 9): тишина на h2-соединении столько — x/net шлёт PING
+	// (http2.Transport.ReadIdleTimeout). Было 45 с (ChromeH2KeepAlivePeriod).
+	// Это проверка для долгих потоков, на которые новые не садятся (push,
+	// «Дом» без трафика); потоки под новыми запросами ловит kelevra_mertvoe.go.
+	// Ниже не берём: на простое это пробуждение радио телефона раз в N с на
+	// каждое соединение (батарея), а сервер и так раз в 20–80 с шлёт padding
+	// в ответ на stream-up POST, сбрасывая этот таймер.
+	kelevraH2ReadIdleTimeout = 30 * time.Second
+	// h2 PING без ответа столько — соединение мёртво. Правка 9: 10 → 5 с. PING
+	// здесь шлётся только после ReadIdleTimeout полной тишины (ни одного кадра,
+	// даже WINDOW_UPDATE на выгрузку), ack на живом соединении — RTT плюс
+	// пробуждение радио (≤ ~2 с). Итог для долгих потоков: 30 + 5 = 35 с вместо 55.
+	kelevraH2PingTimeout = 5 * time.Second
 	// Ни одного байта не записалось столько — соединение мёртво.
 	kelevraH2WriteByteTimeout = 30 * time.Second
 )

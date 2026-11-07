@@ -4,7 +4,8 @@
 // Прогон: go test -count=1 -run Kelevra ./transport/v2rayxhttp/
 //
 // Сервер — настоящий HTTP/2 (h2c, без TLS) на петле; клиент — наш
-// DefaultDialerClient поверх http2.Transport, как в createHTTPClient (httpVersion "2").
+// DefaultDialerClient поверх http2.Transport с нашим пулом (kelevraNewH2Transport),
+// как в createHTTPClient (httpVersion "2").
 // Проверяется:
 //  - сервер принял stream-down GET и молчит (заголовков нет) — старый код висел бы
 //    в Read без срока; теперь Read отдаёт ошибку за kelevraResponseHeaderTimeout;
@@ -16,7 +17,6 @@ package xhttp
 
 import (
 	"context"
-	gotls "crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/logger"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -40,22 +41,26 @@ func newH2CTestServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	return srv
 }
 
-func newH2CDialerClient(t *testing.T) *DefaultDialerClient {
+// newH2CDialerClient — клиент как в createHTTPClient (правка 9: с нашим пулом
+// соединений), только h2c на петле без TLS.
+func newH2CDialerClient(t *testing.T, srv *httptest.Server) *DefaultDialerClient {
 	t.Helper()
+	return newH2CDialerClientTo(t, srv.Listener.Addr().String(), kelevraH2ReadIdleTimeout, nil)
+}
+
+// newH2CDialerClientTo — то же с адресом дозвона (прокси в тестах правки 9),
+// своим ReadIdleTimeout и журналом.
+func newH2CDialerClientTo(t *testing.T, addr string, readIdle time.Duration, lg logger.ContextLogger) *DefaultDialerClient {
+	t.Helper()
+	dial := func(ctx context.Context) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", addr)
+	}
+	tr := kelevraNewH2Transport(dial, readIdle, 300*time.Second, lg)
+	tr.AllowHTTP = true
 	c := &DefaultDialerClient{
-		options: &option.V2RayXHTTPBaseOptions{},
-		client: &http.Client{
-			Transport: &http2.Transport{
-				AllowHTTP: true,
-				DialTLSContext: func(ctx context.Context, network, addr string, _ *gotls.Config) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, network, addr)
-				},
-				ReadIdleTimeout:  45 * time.Second,
-				PingTimeout:      kelevraH2PingTimeout,
-				WriteByteTimeout: kelevraH2WriteByteTimeout,
-			},
-		},
+		options:       &option.V2RayXHTTPBaseOptions{},
+		client:        &http.Client{Transport: tr},
 		httpVersion:   "2",
 		uploadRawPool: &sync.Pool{},
 	}
@@ -97,7 +102,7 @@ func TestKelevraOpenStreamSilentServerReadFailsWithinHeaderTimeout(t *testing.T)
 	srv := newH2CTestServer(t, func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done() // ни заголовков, ни тела
 	})
-	c := newH2CDialerClient(t)
+	c := newH2CDialerClient(t, srv)
 
 	start := time.Now()
 	rc, _, _, err := c.OpenStream(context.Background(), srv.URL+"/x", "sess1", nil, false)
@@ -132,7 +137,7 @@ func TestKelevraOpenStreamHeadersInTimeBodyOutlivesTimeout(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done()
 	})
-	c := newH2CDialerClient(t)
+	c := newH2CDialerClient(t, srv)
 
 	rc, _, _, err := c.OpenStream(context.Background(), srv.URL+"/x", "sess2", nil, false)
 	if err != nil {
@@ -161,7 +166,7 @@ func TestKelevraOpenStreamCloseWakesBlockedRead(t *testing.T) {
 		w.(http.Flusher).Flush()
 		<-r.Context().Done() // заголовки есть, данных нет
 	})
-	c := newH2CDialerClient(t)
+	c := newH2CDialerClient(t, srv)
 
 	rc, _, _, err := c.OpenStream(context.Background(), srv.URL+"/x", "sess3", nil, false)
 	if err != nil {
