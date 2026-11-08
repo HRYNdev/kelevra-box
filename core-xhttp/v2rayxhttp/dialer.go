@@ -91,6 +91,11 @@ func (c *DefaultDialerClient) Close() {
 	case *http.Transport:
 		transport.CloseIdleConnections()
 	case *http2.Transport:
+		// Kelevra (правка 9): наш пул закрываем сам, без linkname во внутренности x/net
+		if p, ok := transport.ConnPool.(*kelevraH2Pool); ok {
+			p.closeAll()
+			return
+		}
 		connPool := transportConnPool(transport)
 		p := (*clientConnPool)((*efaceWords)(unsafe.Pointer(&connPool)).data)
 		p.mu.Lock()
@@ -118,10 +123,15 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	// and we can unblock the Dial function and print correct net addresses in
 	// logs
 	gotConn := done.New()
+	// Kelevra (правка 9): надзор за потоком на его h2-соединении (kelevra_mertvoe.go).
+	// GotConn и строка после client.Do — в одной горутине (RoundTrip синхронный).
+	var watch *kelevraStreamWatch
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GotConn: func(connInfo httptrace.GotConnInfo) {
 			remoteAddr = connInfo.Conn.RemoteAddr()
 			localAddr = connInfo.Conn.LocalAddr()
+			watch.stop() // повтор запроса x/net на другом соединении
+			watch = kelevraWatchStream(connInfo.Conn, !uploadOnly)
 			gotConn.Close()
 		},
 	})
@@ -129,13 +139,29 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 	if body != nil {
 		method = c.options.GetNormalizedUplinkHTTPMethod() // stream-up/one
 	}
-	req, _ := http.NewRequestWithContext(context.WithoutCancel(ctx), method, url, body)
+	// Kelevra (правка 8): заголовки ответа на stream-down ждём не дольше
+	// kelevraResponseHeaderTimeout, иначе Read висит без срока (kelevra_zhivost.go).
+	reqCtx, headersGot, cancelReq := kelevraHeaderDeadline(context.WithoutCancel(ctx), !uploadOnly)
+	req, _ := http.NewRequestWithContext(reqCtx, method, url, body)
 	FillStreamRequest(req, sessionId, "", c.options)
 	wrc = &WaitReadCloser{Wait: make(chan struct{})}
 	go func() {
 		resp, err := c.client.Do(req)
+		w := watch
+		w.stop() // ответ (или ошибка) есть — проверять соединение по этому потоку больше незачем
+		if !headersGot() && err == nil {
+			// таймер заголовков выстрелил раньше, чем мы его сняли: контекст уже
+			// отменён, тело оборвётся на первом Read — это провал, не живой ответ
+			resp.Body.Close()
+			err = E.New("xhttp: response headers timeout")
+		}
 		if err != nil {
-			if !uploadOnly { // stream-down is enough
+			cancelReq()
+			// Kelevra (правка 9): соединение потока признала мёртвым наша проверка —
+			// пул его уже закрыл и выкинул; выводить клиент из выдачи незачем:
+			// свежее соединение, поднятое, пока шла проверка, живёт.
+			// Иначе — как у xmux: клиент выбывает из выдачи новым сессиям.
+			if !uploadOnly && !w.connDead() { // stream-down is enough
 				c.markClosed()
 			}
 			gotConn.Close()
@@ -146,11 +172,13 @@ func (c *DefaultDialerClient) OpenStream(ctx context.Context, url string, sessio
 		if resp.StatusCode != 200 || uploadOnly { // stream-up
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close() // if it is called immediately, the upload will be interrupted also
+			cancelReq()
 			common.Close(body)
 			wrc.Close()
 			return
 		}
-		wrc.(*WaitReadCloser).Set(resp.Body)
+		// контекст запроса живёт до закрытия тела: отменить раньше — http2 оборвёт чтение
+		wrc.(*WaitReadCloser).Set(&kelevraBodyWithCancel{ReadCloser: resp.Body, cancel: cancelReq})
 	}()
 	<-gotConn.Wait()
 	return
@@ -164,9 +192,18 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, sessio
 	}
 	FillPacketRequest(req, sessionId, seqStr, payload, c.options)
 	if c.httpVersion != "1.1" {
+		// Kelevra (правка 9): запоминаем соединение запроса — если его признала
+		// мёртвым наша проверка, весь клиент не закрываем (kelevra_mertvoe.go).
+		// GotConn — в этой же горутине (RoundTrip синхронный).
+		var postConn net.Conn
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GotConn: func(connInfo httptrace.GotConnInfo) { postConn = connInfo.Conn },
+		}))
 		resp, err := c.client.Do(req)
 		if err != nil {
-			c.markClosed()
+			if !kelevraConnDead(postConn) {
+				c.markClosed()
+			}
 			return err
 		}
 		io.Copy(io.Discard, resp.Body)
@@ -228,39 +265,59 @@ func (c *DefaultDialerClient) PostPacket(ctx context.Context, url string, sessio
 	return nil
 }
 
+// WaitReadCloser — тело ответа, которое появится позже (Set из горутины client.Do).
+//
+// Kelevra (правка 8): Set, Read и Close — из разных горутин, а ReadCloser был без
+// синхронизации (и Wait закрывался через recover от двойного close) — go test
+// -race это ловит. Теперь всё состояние под access:
+//   - Close после Set закрывает пришедшее тело (как раньше);
+//   - Close до Set будит Read (ошибка io.ErrClosedPipe) и не теряется:
+//     тело, пришедшее Set'ом позже, закрывается сразу и наружу не отдаётся;
+//   - Wait закрывается ровно один раз — тем, кто первый (Set или Close).
 type WaitReadCloser struct {
 	Wait chan struct{}
 	io.ReadCloser
+
+	access sync.Mutex
+	closed bool // Close уже звали
 }
 
 func (w *WaitReadCloser) Set(rc io.ReadCloser) {
+	w.access.Lock()
+	if w.closed {
+		// Close опередил тело: Wait уже закрыт им, тело никому не нужно.
+		w.access.Unlock()
+		rc.Close()
+		return
+	}
 	w.ReadCloser = rc
-	defer func() {
-		if recover() != nil {
-			rc.Close()
-		}
-	}()
 	close(w.Wait)
+	w.access.Unlock()
 }
 
 func (w *WaitReadCloser) Read(b []byte) (int, error) {
 	<-w.Wait
-	if w.ReadCloser == nil {
+	w.access.Lock()
+	rc := w.ReadCloser
+	w.access.Unlock()
+	if rc == nil {
 		return 0, io.ErrClosedPipe
 	}
-	return w.ReadCloser.Read(b)
+	return rc.Read(b)
 }
 
 func (w *WaitReadCloser) Close() error {
-	if w.ReadCloser != nil {
-		return w.ReadCloser.Close()
+	w.access.Lock()
+	rc := w.ReadCloser
+	if rc == nil && !w.closed {
+		close(w.Wait) // тела ещё нет: будим Read; Set увидит closed
 	}
-	defer func() {
-		if recover() != nil && w.ReadCloser != nil {
-			w.ReadCloser.Close()
-		}
-	}()
-	close(w.Wait)
+	w.closed = true
+	w.access.Unlock()
+	if rc != nil {
+		// вне замка: Close тела h2 может ждать (RST_STREAM), Read его не держит
+		return rc.Close()
+	}
 	return nil
 }
 

@@ -405,6 +405,190 @@ def main():
 
     print("reality: ChaCha20 первым при X25519MLKEM768 у chrome: правка наложена")
 
+    # --------------------------------------------------------------------------------
+    # 8. Живость канала: «Дом» (WireGuard через detour XHTTP) не оживает после
+    #    молчаливой смерти соединения.
+    #
+    # Поймано в бою 31.10–06.11.2026 (ноутбук, Windows): после смены Wi-Fi / сна вход
+    # «Дом» мёртв до перезапуска ядра. Механизм по коду v1.14.1 (разбор —
+    # data/work/kanal-perehody-20261107/otchety/yadro.md):
+    #
+    #  - transport/wireguard/client_bind.go: connect() передиаливает detour только когда
+    #    ReadFrom или Write вернули ошибку (receive:126-136, Send:187-191); дедлайнов
+    #    нет. Линия, по которой Write проходит, а ответов нет, держит «Дом» мёртвым.
+    #  - transport/v2rayxhttp (наш): TCP+TLS до портала шли без срока (контекст запроса
+    #    — WithoutCancel), заголовки ответа на stream-down GET ждались без срока; h2
+    #    PING-проверка (ReadIdleTimeout 45 с) была, PingTimeout — по умолчанию 15 с.
+    #
+    # Лечение в три слоя, каждый сам по себе ограничивает зависание:
+    #  a) сторож ClientBind (новый файл transport/wireguard/kelevra_client_bind_storozh.go
+    #     + точечные вставки в client_bind.go): N handshake initiation подряд без
+    #     единого входящего пакета ≥ окна → рвём wireConn → connect() передиаливает
+    #     detour. Сквозная проверка клиент↔мост, не зависит от того, где умерла линия
+    #     (TCP, сервер, портал→мост). Рвёт 4-й безответный initiation: ≈ 15 с после
+    #     первого безответного, ≈ 30 с после смерти линии (wireguard-go замечает
+    #     тишину через KeepaliveTimeout + RekeyTimeout = 15 с, timers.go).
+    #     Заодно connect(): быстрый путь читал c.conn без замка, а передиал пишет его
+    #     под connAccess — гонка апстрима, которую видит go test -race; со сторожем
+    #     передиалы чаще. Теперь c.conn читается под connAccess (поведение то же:
+    #     пока линия жива, замок никто не держит).
+    #  b) wireConn.Close: done закрывается до самого Close detour и вне замка —
+    #     медленный Close (h2 ждёт RST_STREAM на мёртвом TCP) не держит передиал.
+    #  c) XHTTP (файлы транспорта правятся прямо в v2rayxhttp/): таймаут на TCP+TLS,
+    #     таймаут заголовков GET, явные PingTimeout/WriteByteTimeout у h2.
+    #
+    # Тесты: tests/v_derevo/** копируются в дерево как *_test.go (в бинарь не входят):
+    #   go test -count=1 -run Kelevra ./transport/wireguard/ ./transport/v2rayxhttp/
+    # --------------------------------------------------------------------------------
+    shutil.copy2(
+        os.path.join(HERE, "wireguard", "kelevra_client_bind_storozh.go"),
+        os.path.join(core, "transport", "wireguard", "kelevra_client_bind_storozh.go"),
+    )
+    patch(
+        os.path.join(core, "transport", "wireguard", "client_bind.go"),
+        [
+            # 8a. connect(): быстрый путь читает c.conn под connAccess (гонка апстрима:
+            # запись c.conn при передиале — под замком, чтение здесь было без него)
+            (
+                "func (c *ClientBind) connect() (*wireConn, error) {\n"
+                "\tserverConn := c.conn\n"
+                "\tif serverConn != nil {\n",
+                "func (c *ClientBind) connect() (*wireConn, error) {\n"
+                "\t// Kelevra (правка 8): c.conn пишется под connAccess — и читаем под ним\n"
+                "\tc.connAccess.Lock()\n"
+                "\tserverConn := c.conn\n"
+                "\tc.connAccess.Unlock()\n"
+                "\tif serverConn != nil {\n",
+            ),
+            # 8a. поле сторожа в wireConn (поля выровнены как gofmt)
+            (
+                "\tconn   net.Conn\n"
+                "\taccess sync.Mutex\n"
+                "\tdone   chan struct{}\n"
+                "}",
+                "\tconn    net.Conn\n"
+                "\taccess  sync.Mutex\n"
+                "\tdone    chan struct{}\n"
+                "\tstorozh kelevraStorozh // Kelevra (правка 8): безответные рукопожатия рвут линию\n"
+                "}",
+            ),
+            # 8a. receive: любой входящий пакет — линия жива
+            (
+                "\tsizes[0] = n\n"
+                "\tif n > 3 {\n",
+                "\tudpConn.storozh.poluchen() // Kelevra (правка 8): входящий пакет — линия жива\n"
+                "\tsizes[0] = n\n"
+                "\tif n > 3 {\n",
+            ),
+            # 8a. Send: N initiation без ответа — рвём линию, следующий вызов передиалит
+            (
+                "\t\t_, err = udpConn.WriteToUDPAddrPort(buf, destination)\n"
+                "\t\tif err != nil {\n"
+                "\t\t\tudpConn.Close()\n"
+                "\t\t\treturn err\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\treturn nil\n"
+                "}",
+                "\t\t_, err = udpConn.WriteToUDPAddrPort(buf, destination)\n"
+                "\t\tif err != nil {\n"
+                "\t\t\tudpConn.Close()\n"
+                "\t\t\treturn err\n"
+                "\t\t}\n"
+                "\t\t// Kelevra (правка 8): N рукопожатий подряд без единого входящего пакета —\n"
+                "\t\t// линия мертва; рвём, connect() передиалит detour (kelevra_client_bind_storozh.go)\n"
+                "\t\tif rvat, skolko, za := udpConn.storozh.otpravlen(buf); rvat {\n"
+                "\t\t\tc.logger.Warn(\"kelevra link watchdog: \", skolko,\n"
+                "\t\t\t\t\" handshake initiations unanswered for \", za.Round(time.Millisecond), \", reconnecting\")\n"
+                "\t\t\tudpConn.Close()\n"
+                "\t\t\treturn E.New(\"kelevra link watchdog: peer silent, reconnecting\")\n"
+                "\t\t}\n"
+                "\t}\n"
+                "\treturn nil\n"
+                "}",
+            ),
+            # 8b. wireConn.Close: done — сразу и под замком, сам Close detour — вне замка
+            (
+                "func (w *wireConn) Close() error {\n"
+                "\tw.access.Lock()\n"
+                "\tdefer w.access.Unlock()\n"
+                "\tselect {\n"
+                "\tcase <-w.done:\n"
+                "\t\treturn net.ErrClosed\n"
+                "\tdefault:\n"
+                "\t}\n"
+                "\tw.PacketConn.Close()\n"
+                "\tclose(w.done)\n"
+                "\treturn nil\n"
+                "}",
+                "func (w *wireConn) Close() error {\n"
+                "\tw.access.Lock()\n"
+                "\tselect {\n"
+                "\tcase <-w.done:\n"
+                "\t\tw.access.Unlock()\n"
+                "\t\treturn net.ErrClosed\n"
+                "\tdefault:\n"
+                "\t}\n"
+                "\tclose(w.done)\n"
+                "\tw.access.Unlock()\n"
+                "\t// Kelevra (правка 8): Close detour — вне замка и после done: пока он ждёт\n"
+                "\t// (h2 RST_STREAM на мёртвом TCP), connect() уже видит done и передиаливает.\n"
+                "\treturn w.PacketConn.Close()\n"
+                "}",
+            ),
+        ],
+    )
+    shutil.copytree(
+        os.path.join(HERE, "tests", "v_derevo"),
+        core,
+        dirs_exist_ok=True,
+    )
+
+    print("живость канала (сторож ClientBind, таймауты XHTTP): правка наложена")
+
+    # --------------------------------------------------------------------------------
+    # 9. Мёртвое h2-соединение к узлу — за секунды, а не за минуту.
+    #
+    # Поймано на телефоне 06–07.11.2026 (мобильная сеть): приложения не грузятся
+    # ~15 с и дольше, после перезапуска приложения — грузятся сразу. Сеть не
+    # менялась, ядро не перезапускалось, проба канала новым потоком — 125–151 мс.
+    # В журнале 49 раз `http2: client connection lost`, подвисшие потоки живут ровно
+    # ~1m0s–1m3s = ReadIdleTimeout 45 с + PingTimeout: h2-соединение к узлу молча
+    # умерло (TCP не рвётся), а новые потоки приложений садятся на него (xmux отдаёт
+    # освободившийся клиент) и ждут PING-проверку x/net.
+    #
+    # Лечение — только файлы транспорта (копируются шагом 1, якорей в апстриме нет):
+    #  - v2rayxhttp/kelevra_mertvoe.go (новый): свой http2.ClientConnPool. Соединение
+    #    помнит последний байт от узла. Новый поток на соединении, молчавшем ≥ 10 с, —
+    #    PING сразу; поток без заголовков ответа 3 с — PING, и пока он в полёте,
+    #    соединение новым потокам не выдаётся. Мёртвым считается, только если PING без
+    #    ответа 4 с, после PING ни байта от узла и тишина ≥ 7 с: тогда ClientConn.Close()
+    #    — все его потоки сразу получают ошибку, приложения переподключаются. Байт от
+    #    узла во время PING — соединение живо (загруженное отвечает медленнее, но
+    #    данные идут). Строка в журнал ядра INFO `kelevra h2: connection to … dead: …`.
+    #  - client.go: h2 через kelevraNewH2Transport; ReadIdleTimeout 45 → 30 с.
+    #  - kelevra_zhivost.go: PingTimeout 10 → 5 с.
+    #  - dialer.go: OpenStream ставит надзор на поток (httptrace.GotConn) и снимает
+    #    его, когда client.Do вернулся; Close закрывает наш пул сам (без linkname).
+    #    Ошибка потока на соединении, которое признала мёртвым наша проверка, весь
+    #    клиент не закрывает: свежее соединение, поднятое за время проверки, живёт.
+    #    То же для PostPacket (packet-up, auto): соединение запоминается через GotConn.
+    #  - тишина для решения «мертво» — по большему из монотонных и стенных часов (сон
+    #    телефона); живость доказана меньше срока ответа назад — PING не шлём (ждущие
+    #    потоки медленного сервера иначе слали бы каждый свой); дозвон под подозрением
+    #    не удался — пул пересматривается до ошибки.
+    # Итог: поток на мёртвом соединении получает ошибку через ≈ 7 с (после простоя
+    # соединения ≥ 10 с — через ≈ 4 с), долгие потоки без новых — через ≈ 35 с.
+    # «Дом» (ClientBind через XHTTP) и сторож правки 8 не меняются: для них это та же
+    # ошибка чтения, по которой ClientBind передиаливает.
+    #
+    # Тесты: tests/v_derevo/transport/v2rayxhttp/kelevra_mertvoe_test.go (кладёт
+    # шаг 8), прогон тот же: go test -count=1 -run Kelevra ./transport/v2rayxhttp/
+    # --------------------------------------------------------------------------------
+    if not os.path.exists(os.path.join(core, "transport", "v2rayxhttp", "kelevra_mertvoe.go")):
+        fail("нет transport/v2rayxhttp/kelevra_mertvoe.go — шаг 1 не скопировал правку 9")
+    print("мёртвое h2-соединение к узлу распознаётся за секунды: правка наложена")
+
 
 if __name__ == "__main__":
     main()
