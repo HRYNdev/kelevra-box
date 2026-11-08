@@ -1,0 +1,172 @@
+name: stend-x86_64
+
+# APK под x86_64 для тестового стенда Android (redroid на x86_64-машине).
+#
+# Зачем отдельно. Выпуск (release.yml) публикует только arm64-v8a: телефоны все на нём.
+# На x86_64-стенде arm64-APK не стартует: транслятор ARM падает SIGILL на чтении MIDR_EL1
+# в рантайме Go (libbox, libopenflux), а на Android 15 транслятора нет вовсе.
+#
+# Что тут берётся из выпуска как есть. Ядро libbox.aar собирается в release.yml с
+# `gomobile bind -target android` — это ВСЕ четыре ABI, x86_64 в нём уже есть. Поэтому ядро
+# не копируется сюда вторым источником истины, а берётся вызовом release.yml с
+# core_only: true (тем же способом, что proverka-pr.yml и warm-core.yml); на ветке его кеш
+# с dev читается, ядро встаёт за минуту.
+#
+# Что тут своё:
+#   - libopenflux.so (комнаты «Телемост» и «WB Chat») собирается под x86_64, а не arm64;
+#   - из libbox.aar перед сборкой вырезаются чужие ABI: APK выходит только с x86_64, а
+#     упаковка не тратит время на три лишние библиотеки по ~100 МБ;
+#   - APK кладётся АРТЕФАКТОМ прогона. Ни релиза, ни тега, ни пульта: публикации здесь нет.
+#
+# Только ручной запуск: gh workflow run stend-x86_64.yml --ref <ветка>
+on:
+  workflow_dispatch:
+    inputs:
+      # Имена совпадают с входами release.yml намеренно: вызванный сценарий читает их из
+      # github.event.inputs, то есть из этого запуска.
+      core_ref:
+        description: "Тег/ветка ядра sing-box"
+        required: false
+        default: "v1.14.1"
+      olcrtc_ref:
+        description: "Ветка/тег/SHA olcrtc (в НАШЕМ форке)"
+        required: false
+        default: "kelevra"
+      kelevra_build:
+        description: "Номер сборки (пусто — номер прогона)"
+        required: false
+        default: ""
+
+env:
+  NDK_VERSION: "28.0.13004108"
+
+jobs:
+  yadro:
+    uses: ./.github/workflows/release.yml
+    with:
+      core_only: true
+    # те же права, что объявляет job release внутри вызванного сценария (см. warm-core.yml)
+    permissions:
+      contents: write
+
+  apk:
+    needs: yadro
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@v5
+        with:
+          path: sing-box-for-android
+          submodules: recursive
+
+      - name: Setup JDK
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Кеш Gradle
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Забрать ядро из job yadro
+        uses: actions/download-artifact@v7
+        with:
+          name: core-libbox
+          path: sing-box-for-android/app/libs
+
+      # В ядре все четыре ABI; оставляем только x86_64, и проверяем, что он там был.
+      - name: Ядро только x86_64
+        working-directory: sing-box-for-android/app/libs
+        run: |
+          test -f libbox.aar || { echo "ОШИБКА: ядро не собралось"; exit 1; }
+          unzip -l libbox.aar | grep -q 'jni/x86_64/libbox.so' || { echo "ОШИБКА: в ядре нет x86_64"; exit 1; }
+          zip -q -d libbox.aar 'jni/armeabi-v7a/*' 'jni/arm64-v8a/*' 'jni/x86/*' || true
+          unzip -l libbox.aar | grep -E '\.so$'
+
+      - name: Подготовка подписи
+        working-directory: sing-box-for-android
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > app/release.keystore
+          printf 'KEYSTORE_PASS=%s\nALIAS_NAME=%s\nALIAS_PASS=%s\n' "$KEYSTORE_PASS" "$KEY_ALIAS" "$KEYSTORE_PASS" > /tmp/local.properties
+          echo "LOCAL_PROPERTIES=$(base64 -w0 /tmp/local.properties)" >> $GITHUB_ENV
+          rm -f /tmp/local.properties
+          test -s app/release.keystore
+
+      - name: Номер сборки
+        env:
+          KELEVRA_BUILD_INPUT: ${{ github.event.inputs.kelevra_build }}
+        run: |
+          if printf '%s' "$KELEVRA_BUILD_INPUT" | grep -Eq '^[0-9]+$'; then
+            echo "KELEVRA_BUILD=$KELEVRA_BUILD_INPUT" >> "$GITHUB_ENV"
+          else
+            echo "KELEVRA_BUILD=$GITHUB_RUN_NUMBER" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Go (OpenFlux)
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.7"
+          cache: false
+
+      - name: Install NDK (OpenFlux)
+        run: sdkmanager --install "ndk;$NDK_VERSION"
+
+      - name: Build OpenFlux (x86_64)
+        working-directory: sing-box-for-android
+        env:
+          OPENFLUX_WBCHAT_DEPLOY_KEY: ${{ secrets.OPENFLUX_WBCHAT_DEPLOY_KEY }}
+        run: |
+          test -n "$OPENFLUX_WBCHAT_DEPLOY_KEY" || { echo "нет секрета OPENFLUX_WBCHAT_DEPLOY_KEY"; exit 1; }
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$OPENFLUX_WBCHAT_DEPLOY_KEY" > ~/.ssh/openflux_wbchat && chmod 600 ~/.ssh/openflux_wbchat
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/openflux_wbchat -o IdentitiesOnly=yes"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          ABIS="x86_64" bash core-openflux/sobrat.sh
+          test -s app/src/main/jniLibs/x86_64/libopenflux.so
+
+      - name: Build APK
+        working-directory: sing-box-for-android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleOtherRelease --no-daemon
+
+      - name: Проверка APK
+        working-directory: sing-box-for-android
+        run: |
+          APK=$(find app/build/outputs/apk -name '*x86_64*.apk' | head -1)
+          test -n "$APK" || { echo "APK x86_64 не найден"; exit 1; }
+          echo "APK: $APK"
+          unzip -l "$APK" | grep -E 'lib/.*\.so$'
+          ! unzip -l "$APK" | grep -qE 'lib/(arm64-v8a|armeabi-v7a|x86)/' || { echo "ОШИБКА: в APK чужие ABI"; exit 1; }
+          unzip -l "$APK" | grep -q 'lib/x86_64/libbox.so' || { echo "ОШИБКА: нет libbox.so x86_64"; exit 1; }
+          unzip -l "$APK" | grep -q 'lib/x86_64/libopenflux.so' || { echo "ОШИБКА: нет libopenflux.so x86_64"; exit 1; }
+          mkdir -p /tmp/apkcheck && unzip -o -q "$APK" 'lib/x86_64/libbox.so' 'classes*.dex' -d /tmp/apkcheck
+          grep -qa 'v2rayxhttp' /tmp/apkcheck/lib/x86_64/libbox.so || { echo "ОШИБКА: ядро без транспорта xhttp"; exit 1; }
+          for c in io/nekohasekai/mobile/Mobile io/nekohasekai/mobile/SocketProtector io/nekohasekai/mobile/LogWriter; do
+            grep -qa "$c" /tmp/apkcheck/*.dex || { echo "ОШИБКА: в APK нет класса $c"; exit 1; }
+          done
+          echo "APK x86_64: ядро, xhttp, olcrtc, OpenFlux на месте"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: kelevra-apk-x86_64-stend
+          path: sing-box-for-android/app/build/outputs/apk/**/*x86_64*.apk
+          if-no-files-found: error
