@@ -37,9 +37,9 @@
 | `avtomat.tcp_timeout_millis` | int | 400–40000 | 4000 | Потолок ожидания рукопожатия с узлом основного канала, мс | AutoMode.TCP_TIMEOUT_MILLIS |
 | `avtomat.tishina_rezolvera_min` | int | 1–120 | 15 | сколько держим вердикт, пока резолверы молчат, мин | AutoMode.SILENCE_HOLD_MILLIS |
 | `avtomat.transport_fails_to_wake` | int | 1–8 | 2 | Сторож транспорта: провалов подряд до полного захода | TransportWatch.FAILS_TO_WAKE |
-| `avtomat.transport_max_millis` | int | 6000–600000 | 60000 | Сторож транспорта: верхняя граница паузы между пробами при включённом экране, мс | TransportWatch.MAX_MILLIS |
-| `avtomat.transport_min_millis` | int | 3000–300000 | 30000 | Сторож транспорта: нижняя граница паузы между пробами при включённом экране, мс | TransportWatch.MIN_MILLIS |
 | `avtomat.transport_probe_timeout_millis` | int | 600–60000 | 6000 | Сторож транспорта: потолок ожидания пробы, мс | AutoMode.TRANSPORT_PROBE_TIMEOUT_MILLIS |
+| `avtomat.transport_step_millis` | int | 3000–300000 | 30000 | Сторож транспорта: шаг между пробами в окне, мс | TransportWatch.STEP_MILLIS |
+| `avtomat.transport_window_millis` | int | 18000–1800000 | 180000 | Сторож транспорта: сколько после смены сети идут пробы, мс | TransportWatch.WINDOW_MILLIS |
 | `avtomat.wb_kandidat` | bool | — | false | автомат пробует комнату WB раньше Телемоста, когда основной канал не поднимается | AutoMode.trialRaiseWb |
 | `belyj_spisok.domeny` | список | ≤ 5000 строк, домен | из кода | белый список оператора: домены напрямую (заменяет вшитый в APK) | BelyjSpisok.domeny |
 | `belyj_spisok.podseti` | список | ≤ 5000 строк, подсеть CIDR | из кода | белый список оператора: подсети напрямую (заменяет вшитый в APK) | BelyjSpisok.podseti |
@@ -134,7 +134,7 @@
 | `vykl.samopodyom` | bool | — | false | ядро не перезапускается само, когда сеть есть, а канал мёртв | AutoMode.samopodyomShag / SamopodyomYadra |
 | `vykl.skorost` | bool | — | false | без замера скорости основного канала | AutoMode: SpeedProbe |
 | `vykl.storozh_komnaty` | bool | — | false | присмотр за комнатой не запускается | BoxService: OlcRtcWatchdog |
-| `vykl.storozh_transporta` | bool | — | false | без пробы основного канала между полными заходами | AutoMode.waitOnMain / TransportWatch |
+| `vykl.storozh_transporta` | bool | — | false | без проб основного канала в окне после смены сети | AutoMode.waitOnMain / TransportWatch |
 | `vykl.svoi_taymer` | bool | — | false | живые наборы (svoi-*, интервал 2 мин) не докачиваются своим таймером — только при проверке путей | BoxService: svoiTik |
 | `vykl.uzly_bez_dns` | bool | — | false | имена узлов ядро снова спрашивает у DNS сети, а не у hosts профиля | BoxService: UzlyBezDnsPatch |
 | `vykl.vhody_proby` | bool | — | false | без своих входов честной пробы (пути не меряются) | BoxService: ProbeInboundPatch |
