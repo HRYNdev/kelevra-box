@@ -135,6 +135,18 @@ object PultKonstanty {
         c("zhurnal.povtor_pause_millis", 420000, 42000, 4200000, "Через сколько повторять неудачную отправку, мс", "LogUploadWork.POVTOR_PAUSE_MILLIS"),
         c("zhurnal.retry_give_up_millis", 86400000, 8640000, 86400000, "Сколько повторять неудачную отправку журнала, прежде чем ждать следующего круга, мс", "LogUploadWork.RETRY_GIVE_UP_MILLIS"),
         c("zhurnal.stuck_limit", 3, 1, 12, "После скольких подряд отказов ПО ОДНОМУ И ТОМУ ЖЕ хвосту считаем его безнадёжным", "LogUploadWork.STUCK_LIMIT"),
+        c("avtomat.transport_min_millis", 30000, 3000, 300000, "Сторож транспорта: нижняя граница паузы между пробами при включённом экране, мс", "TransportWatch.MIN_MILLIS"),
+        c("avtomat.transport_max_millis", 60000, 6000, 600000, "Сторож транспорта: верхняя граница паузы между пробами при включённом экране, мс", "TransportWatch.MAX_MILLIS"),
+        c("avtomat.transport_fails_to_wake", 2, 1, 8, "Сторож транспорта: провалов подряд до полного захода", "TransportWatch.FAILS_TO_WAKE"),
+        c("avtomat.transport_probe_timeout_millis", 6000, 600, 60000, "Сторож транспорта: потолок ожидания пробы, мс", "AutoMode.TRANSPORT_PROBE_TIMEOUT_MILLIS"),
+        c("avtomat.dom_zaderzhka_millis", 45000, 0, 450000, "Дома с живым туннелем: столько «дома» без смен сети до гашения туннеля (0 — гасить сразу), мс", "AutoMode.DOM_ZADERZHKA_MILLIS"),
+        c("samopodyom.pervyy_millis", 45000, 4500, 450000, "Самоподъём: столько подтверждённой смерти канала при живой сети до первого перезапуска ядра, мс", "SamopodyomYadra.PERVYY_MILLIS"),
+        c("samopodyom.posle_smeny_seti_millis", 30000, 3000, 300000, "Самоподъём: после смены сети первый перезапуск — через столько от самой смены, мс", "SamopodyomYadra.POSLE_SMENY_SETI_MILLIS"),
+        c("samopodyom.stupen2_millis", 120000, 12000, 1200000, "Самоподъём: пауза после первого перезапуска, мс", "SamopodyomYadra.STUPEN2_MILLIS"),
+        c("samopodyom.stupen3_millis", 300000, 30000, 3000000, "Самоподъём: пауза после второго перезапуска, мс", "SamopodyomYadra.STUPEN3_MILLIS"),
+        c("samopodyom.stupen4_millis", 900000, 90000, 9000000, "Самоподъём: пауза после третьего и дальнейших перезапусков, мс", "SamopodyomYadra.STUPEN4_MILLIS"),
+        c("samopodyom.sbros_millis", 600000, 60000, 6000000, "Самоподъём: столько живого канала — и лестница перезапусков сначала, мс", "SamopodyomYadra.SBROS_MILLIS"),
+        c("samopodyom.podtverzhdeniy", 2, 1, 8, "Самоподъём: заходов с пустым каналом до первого перезапуска", "SamopodyomYadra.PODTVERZHDENIY"),
     )
 
     private val SPISKI: List<Klyuch> = listOf(
@@ -174,6 +186,9 @@ object PultKonstanty {
         vykl("belyy_bez_okna", "провал основного в окне смены сети не засчитывается и при подсказке «белый список» (как до 24.10)", "AutoMode.failureCounts"),
         vykl("wb_srazu", "при заведомо мёртвом основном на живую комнату WB — по полным подтверждениям, а не с одной пробы (как до 24.10)", "AutoMode.wbProven"),
         vykl("pustoy_port", "принятое узлом соединение без прошедшего канала по-прежнему считается ответом узла (как до 24.10)", "AutoMode.hollowPort"),
+        vykl("storozh_transporta", "без пробы основного канала между полными заходами", "AutoMode.waitOnMain / TransportWatch"),
+        vykl("samopodyom", "ядро не перезапускается само, когда сеть есть, а канал мёртв", "AutoMode.samopodyomShag / SamopodyomYadra"),
+        vykl("uzly_bez_dns", "имена узлов ядро снова спрашивает у DNS сети, а не у hosts профиля", "BoxService: UzlyBezDnsPatch"),
     )
 
     /**

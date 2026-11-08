@@ -316,6 +316,37 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         override fun prepareCoreForWb(reason: String): Boolean = this@BoxService.prepareCoreForWb(reason)
 
         override fun coreReadyForWb(): Boolean = coreWbConfig
+
+        override fun perezapustitYadro(reason: String): Boolean? = this@BoxService.perezapustitYadro(reason)
+    }
+
+    /**
+     * Самоподъём ([SamopodyomYadra]): сеть есть, канал мёртв — перезапустить ядро sing-box.
+     *
+     * Путь тот же, что у остальных пересборок ([restartCore]) и под тем же замком: tun при
+     * том же снимке не пересоздаётся ([VPNService.openTun]), VPN-сеть Android не трогается —
+     * окно без канала равно перезапуску самого ядра. Запрета трафика мимо туннеля, как у
+     * Desktop, тут не нужно: tun всё это время открыт, пакеты в окне теряются, а не уходят
+     * напрямую. Не поднялось — tun отпускается, как на любой неудачной пересборке.
+     *
+     * @return см. [AutoMode.Host.perezapustitYadro].
+     */
+    private fun perezapustitYadro(reason: String): Boolean? {
+        synchronized(tunnelLock) {
+            if (serviceStopping || tunnelSuspended || status.value != Status.Started) return null
+            // Комнату поднимают или перезапускают — её вход идёт через это же ядро, ждём итога.
+            if (roomRaising || OlcRtcWatchdog.restarting || OlcRtcCore.state is OlcRtcCore.State.Starting) return null
+            KLog.w(TAG, "самоподъём: $reason — перезапускаю ядро")
+            runCatching { Zapisi.perehod("samopodyom_yadra", reason, kto = "автомат") }
+            return try {
+                restartCore("самоподъём: $reason")
+                true
+            } catch (e: Exception) {
+                KLog.w(TAG, "самоподъём: ядро не поднялось: ${e.message}")
+                runCatching { Zapisi.perehod("samopodyom_yadra_neudacha", "$reason: ${e.message}", kto = "автомат") }
+                false
+            }
+        }
     }
 
     private suspend fun startService() {
@@ -735,6 +766,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         val lifeline = LifelinePatch.addLifeline(result)
         LifelinePatch.log(lifeline)
         result = lifeline.content
+
+        // Имена своих узлов ядро разрешает hosts-сервером профиля, а не DNS сети
+        // ([UzlyBezDnsPatch]): после смены сети и под DPI на DNS набор узла не ждёт резолвер.
+        if (!Pult.vykl("uzly_bez_dns")) {
+            val uzly = UzlyBezDnsPatch.apply(result)
+            UzlyBezDnsPatch.log(uzly)
+            result = uzly.content
+        }
 
         // Выбор выхода из прошлого запуска не должен перекрывать `default` с сервера:
         // 15.08.2026 залипшая в кэше «Комната» пережила починку канала и вставала обратно

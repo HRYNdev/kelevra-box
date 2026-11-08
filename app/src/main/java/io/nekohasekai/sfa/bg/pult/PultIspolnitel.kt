@@ -146,6 +146,7 @@ object PultIspolnitel : Pult.Ispolnitel {
         chasti += "versiya=${BuildConfig.VERSION_NAME} kod=${BuildConfig.VERSION_CODE} yadro=${runCatching { Libbox.version() }.getOrDefault("?")}"
         chasti += "pasport ${runCatching { Kelevra.pasportStroka() }.getOrDefault("?")}"
         chasti += "avtomat ${runCatching { AutoMode.puls() }.getOrDefault("?")}"
+        chasti += "samopodyom ${runCatching { AutoMode.samopodyomStroka() }.getOrDefault("?")}"
         chasti += "pult ${Pult.zagolovok()}"
         val razresheniya = mutableListOf<String>()
         runCatching { razresheniya += "vpn=" + if (android.net.VpnService.prepare(ctx) == null) "1" else "0" }

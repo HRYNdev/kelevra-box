@@ -6,6 +6,7 @@
 | Ключ | Тип | Границы | По умолчанию | Что | Где в коде |
 |---|---|---|---|---|---|
 | `avtomat.connect_slack_millis` | int | 100–5000 | 500 | Запас поверх таймаута соединения: пул должен успеть отдать последний ответ, мс | AutoMode.CONNECT_SLACK_MILLIS |
+| `avtomat.dom_zaderzhka_millis` | int | 0–450000 | 45000 | Дома с живым туннелем: столько «дома» без смен сети до гашения туннеля (0 — гасить сразу), мс | AutoMode.DOM_ZADERZHKA_MILLIS |
 | `avtomat.hint_ttl_millis` | int | 30000–3000000 | 300000 | Сколько живёт подсказка про режим сети, мс | AutoMode.HINT_TTL_MILLIS |
 | `avtomat.manual_hold_millis` | int | 360000–36000000 | 3600000 | Сколько живёт выбор, сделанный руками, если сеть под нами так и не сменилась, мс | AutoMode.MANUAL_HOLD_MILLIS |
 | `avtomat.node_answer_trust_millis` | int | 9000–900000 | 90000 | Сколько ответ узла считается свежим доводом, мс | AutoMode.NODE_ANSWER_TRUST_MILLIS |
@@ -35,6 +36,10 @@
 | `avtomat.silent_recheck_rounds` | int | 1–40 | 10 | Сколько быстрых перепроверок подряд на молчании резолверов | AutoMode.SILENT_RECHECK_ROUNDS |
 | `avtomat.tcp_timeout_millis` | int | 400–40000 | 4000 | Потолок ожидания рукопожатия с узлом основного канала, мс | AutoMode.TCP_TIMEOUT_MILLIS |
 | `avtomat.tishina_rezolvera_min` | int | 1–120 | 15 | сколько держим вердикт, пока резолверы молчат, мин | AutoMode.SILENCE_HOLD_MILLIS |
+| `avtomat.transport_fails_to_wake` | int | 1–8 | 2 | Сторож транспорта: провалов подряд до полного захода | TransportWatch.FAILS_TO_WAKE |
+| `avtomat.transport_max_millis` | int | 6000–600000 | 60000 | Сторож транспорта: верхняя граница паузы между пробами при включённом экране, мс | TransportWatch.MAX_MILLIS |
+| `avtomat.transport_min_millis` | int | 3000–300000 | 30000 | Сторож транспорта: нижняя граница паузы между пробами при включённом экране, мс | TransportWatch.MIN_MILLIS |
+| `avtomat.transport_probe_timeout_millis` | int | 600–60000 | 6000 | Сторож транспорта: потолок ожидания пробы, мс | AutoMode.TRANSPORT_PROBE_TIMEOUT_MILLIS |
 | `avtomat.wb_kandidat` | bool | — | false | автомат пробует комнату WB раньше Телемоста, когда основной канал не поднимается | AutoMode.trialRaiseWb |
 | `belyj_spisok.domeny` | список | ≤ 5000 строк, домен | из кода | белый список оператора: домены напрямую (заменяет вшитый в APK) | BelyjSpisok.domeny |
 | `belyj_spisok.podseti` | список | ≤ 5000 строк, подсеть CIDR | из кода | белый список оператора: подсети напрямую (заменяет вшитый в APK) | BelyjSpisok.podseti |
@@ -96,6 +101,13 @@
 | `rezhim_seti.read_timeout_millis` | int | 400–40000 | 4000 | Ждём очередной порции данных, мс | NetworkModeDetector.READ_TIMEOUT_MILLIS |
 | `rezhim_seti.tcp_timeout_millis` | int | 250–25000 | 2500 | Ждём ответа на SYN, мс | NetworkModeDetector.TCP_TIMEOUT_MILLIS |
 | `rezhim_seti.tls_timeout_millis` | int | 400–40000 | 4000 | Ждём рукопожатия, мс | NetworkModeDetector.TLS_TIMEOUT_MILLIS |
+| `samopodyom.pervyy_millis` | int | 4500–450000 | 45000 | Самоподъём: столько подтверждённой смерти канала при живой сети до первого перезапуска ядра, мс | SamopodyomYadra.PERVYY_MILLIS |
+| `samopodyom.podtverzhdeniy` | int | 1–8 | 2 | Самоподъём: заходов с пустым каналом до первого перезапуска | SamopodyomYadra.PODTVERZHDENIY |
+| `samopodyom.posle_smeny_seti_millis` | int | 3000–300000 | 30000 | Самоподъём: после смены сети первый перезапуск — через столько от самой смены, мс | SamopodyomYadra.POSLE_SMENY_SETI_MILLIS |
+| `samopodyom.sbros_millis` | int | 60000–6000000 | 600000 | Самоподъём: столько живого канала — и лестница перезапусков сначала, мс | SamopodyomYadra.SBROS_MILLIS |
+| `samopodyom.stupen2_millis` | int | 12000–1200000 | 120000 | Самоподъём: пауза после первого перезапуска, мс | SamopodyomYadra.STUPEN2_MILLIS |
+| `samopodyom.stupen3_millis` | int | 30000–3000000 | 300000 | Самоподъём: пауза после второго перезапуска, мс | SamopodyomYadra.STUPEN3_MILLIS |
+| `samopodyom.stupen4_millis` | int | 90000–9000000 | 900000 | Самоподъём: пауза после третьего и дальнейших перезапусков, мс | SamopodyomYadra.STUPEN4_MILLIS |
 | `skorost.budget_millis` | int | 1500–150000 | 15000 | Дольше этого замер не тянем: ответ «медленно» уже получен, мс | SpeedProbe.BUDGET_MILLIS |
 | `skorost.cel` | строка | хост:порт/путь | из кода | цель замера скорости, `хост:порт/путь` | SpeedProbe.TARGET |
 | `skorost.cooldown_millis` | int | 60000–6000000 | 600000 | Не чаще этого: замер платный по трафику, мс | SpeedProbe.COOLDOWN_MILLIS |
@@ -119,9 +131,12 @@
 | `vykl.prismotr_komnaty` | bool | — | false | без приглядки к основному пути из комнаты | AutoMode.waitInRoom |
 | `vykl.puls` | bool | — | false | без заголовка X-Sostoyanie | Kelevra.deviceHeaders |
 | `vykl.pustoy_port` | bool | — | false | принятое узлом соединение без прошедшего канала по-прежнему считается ответом узла (как до 24.10) | AutoMode.hollowPort |
+| `vykl.samopodyom` | bool | — | false | ядро не перезапускается само, когда сеть есть, а канал мёртв | AutoMode.samopodyomShag / SamopodyomYadra |
 | `vykl.skorost` | bool | — | false | без замера скорости основного канала | AutoMode: SpeedProbe |
 | `vykl.storozh_komnaty` | bool | — | false | присмотр за комнатой не запускается | BoxService: OlcRtcWatchdog |
+| `vykl.storozh_transporta` | bool | — | false | без пробы основного канала между полными заходами | AutoMode.waitOnMain / TransportWatch |
 | `vykl.svoi_taymer` | bool | — | false | живые наборы (svoi-*, интервал 2 мин) не докачиваются своим таймером — только при проверке путей | BoxService: svoiTik |
+| `vykl.uzly_bez_dns` | bool | — | false | имена узлов ядро снова спрашивает у DNS сети, а не у hosts профиля | BoxService: UzlyBezDnsPatch |
 | `vykl.vhody_proby` | bool | — | false | без своих входов честной пробы (пути не меряются) | BoxService: ProbeInboundPatch |
 | `vykl.vozvrat_zalipshego` | bool | — | false | залипший выбор автомата не возвращается на default | BoxService: AutoModeSticky.release |
 | `vykl.wb_chat` | bool | — | false | ядро WB Chat не поднимается | BoxService: WbChatWatchdog |

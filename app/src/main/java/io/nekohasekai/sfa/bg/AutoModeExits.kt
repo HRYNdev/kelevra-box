@@ -81,6 +81,12 @@ object AutoModeExits {
          * По нему судим, есть ли ещё в конфиге выход, выбранный руками ([isStaleChoice]).
          */
         val choices: List<String> = emptyList(),
+        /**
+         * Адреса своих имён из hosts-сервера профиля (`svoi-imena`): имя узла → адреса.
+         * Рукопожатие с узлом идёт по ним, без DNS сети — так же, как набор узла в ядре
+         * ([UzlyBezDnsPatch]). Пусто — профиль без своих имён, имя спрашивается у сети.
+         */
+        val imena: Map<String, List<String>> = emptyMap(),
     ) {
         /** Узел очереди, к которому относится выход [tag] (сам узел или его конечный выход). */
         fun nodeOf(tag: String): String? =
@@ -258,6 +264,7 @@ object AutoModeExits {
             nodeOutbounds = nodeOutbounds,
             wb = wb,
             choices = chooser?.let { members(byTag.getValue(it)) }.orEmpty(),
+            imena = UzlyBezDnsPatch.adresaImen(root),
         )
     }
 
