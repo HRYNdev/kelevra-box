@@ -847,6 +847,9 @@ object AutoMode {
     /** Провалы сторожа транспорта подряд ([TransportWatch]); два — заход будится раньше ритма. */
     private val transportWatch = TransportWatch.Schetchik()
 
+    /** Окно проб сторожа транспорта: открывается сменой сети, вне его проб нет. */
+    private val transportWindow = TransportWatch.Okno()
+
     /** [CONFIRMATIONS] с пульта (`avtomat.podtverzhdeniy`); без пульта — константа. */
     internal fun podtverzhdeniy(): Int = io.nekohasekai.sfa.bg.pult.Pult.int("avtomat.podtverzhdeniy", CONFIRMATIONS)
 
@@ -1104,6 +1107,7 @@ object AutoMode {
             gate.reset(initial)
             domZaderzhka.reset()
             transportWatch.reset()
+            transportWindow.close()
             // На чьей сети стоит начальная обстановка, мы ещё не знаем — узнаем первым
             // же заходом. До того держать вердикт на молчании не на чем ([holdsVerdict]).
             situationNetwork = null
@@ -1222,6 +1226,11 @@ object AutoMode {
         lastValidated = nowValidated
         lastNetworkKey = nowKey
         networkChanged = true
+        // Новая сеть открывает окно проб сторожа транспорта заново; смена одних резолверов — нет.
+        if (network != null && !onlyResolvers) {
+            transportWatch.reset()
+            transportWindow.open(SystemClock.elapsedRealtime())
+        }
         // Окно смены сети: пока оно идёт, провал узла — провал сети, на запасной не уходим.
         nodeWatch.networkChanged(SystemClock.elapsedRealtime())
         if (onlyResolvers) {
@@ -1815,9 +1824,8 @@ object AutoMode {
                 // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
                 wait == Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS) && situation == Situation.Home &&
                     !Pult.vykl("prismotr_doma") -> waitAtHome(domWait)
-                // На основном канале между заходами — сторож транспорта ([TransportWatch]):
-                // мёртвый XHTTP иначе замечался через минуты, при одном узле в очереди — только
-                // пятиминутным ритмом.
+                // На основном канале — сторож транспорта ([TransportWatch]), но только в коротком
+                // окне после смены сети; вне окна [waitOnMain] ждёт обычным ритмом, без проб.
                 wait == Pult.long("avtomat.round_main_millis", ROUND_MAIN_MILLIS) && situation == Situation.Main &&
                     !Pult.vykl("storozh_transporta") -> waitOnMain(domWait)
                 else -> waitNext(domWait)
@@ -4726,27 +4734,34 @@ object AutoMode {
     }
 
     /**
-     * Ожидание на основном канале: тот же пятиминутный ритм полных заходов, но между ними —
-     * сторож транспорта ([TransportWatch]): короткая проба через закреплённый вход основного
-     * узла. Устроено как ожидание дома и в комнате: пауза режется на куски, на границе
-     * каждого идёт проба; разбудило событие — выходим сразу, заход и так вот-вот будет.
-     * Шаг по экрану: выключен — вдвое длиннее. В дозе проба не ходит ([peekTransport]).
+     * Ожидание на основном канале: тот же пятиминутный ритм полных заходов. Только в окне
+     * после смены сети ([TransportWatch.Okno]) между ними идёт сторож транспорта: короткая
+     * проба через закреплённый вход основного узла раз в [TransportWatch.STEP_MILLIS].
+     * Вне окна проб нет, ждём как обычно. Разбудило событие — выходим сразу, заход и так
+     * вот-вот будет. В дозе проба не ходит ([peekTransport]).
      */
     private fun waitOnMain(total: Long) {
         var left = total
         while (active && left > 0) {
-            val screenOn = runCatching { Application.powerManager.isInteractive }.getOrDefault(true)
-            val min = Pult.long("avtomat.transport_min_millis", TransportWatch.MIN_MILLIS)
-            val max = Pult.long("avtomat.transport_max_millis", TransportWatch.MAX_MILLIS).coerceAtLeast(min)
-            val slice = TransportWatch.slice(left, Random.nextLong(min, max + 1), screenOn)
+            val slice = TransportWatch.slice(
+                left,
+                transportWindow.left(SystemClock.elapsedRealtime()),
+                Pult.long("avtomat.transport_step_millis", TransportWatch.STEP_MILLIS),
+            )
+            if (slice <= 0L) {
+                waitNext(left)
+                return
+            }
             val before = SystemClock.elapsedRealtime()
             val woken = waitNext(slice)
-            val spent = SystemClock.elapsedRealtime() - before
-            left -= spent
+            val after = SystemClock.elapsedRealtime()
+            left -= after - before
             if (!active) return
             // Разбудило событие, а не наш таймер.
             if (woken) return
             if (left <= 0) return
+            // Окно кончилось на этом шаге — последней пробы не делаем.
+            if (!transportWindow.isOpen(after)) continue
             if (peekTransport()) return
         }
     }
