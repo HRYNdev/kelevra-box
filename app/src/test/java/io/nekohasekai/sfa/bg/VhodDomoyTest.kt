@@ -151,7 +151,7 @@ class VhodDomoyTest {
     }
 
     @Test
-    fun `один вход с порталом — мост прямо в него; ни одного — через Соединение`() {
+    fun `один вход с порталом — мост прямо в него, ни одного — через Соединение`() {
         val odin = profil.replace("\"server\": \"nodekv.example.org\", \"server_port\": 2083", "\"server\": \"drugoy.example.org\", \"server_port\": 2083")
         val e1 = JSONObject(VhodDomoyPatch.apply(odin, vhod()).content).getJSONArray("endpoints").getJSONObject(0)
         assertEquals("Финляндия · XHTTP", e1.getString("detour"))
