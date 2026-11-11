@@ -114,16 +114,11 @@ object VhodDomoyPatch {
             }
         }
         return when {
-            tegi.size == 1 -> tegi[0] to "портал: ${tegi[0]}"
-            tegi.size > 1 -> {
-                vyhody.put(
-                    JSONObject().put("type", "urltest").put("tag", TEG_MOSTA).put("outbounds", JSONArray(tegi))
-                        .put("url", "https://www.gstatic.com/generate_204").put("interval", "1m").put("tolerance", 300)
-                        // Сменился выход — сокет моста закрывается, WireGuard переоткрывает его через новый.
-                        .put("interrupt_exist_connections", true),
-                )
-                TEG_MOSTA to "порталы: ${tegi.joinToString()}"
-            }
+            // Первый вход с порталом, без группы: проба 167 (11.11.2026) — с urltest «Дом · мост» и
+            // interrupt_exist_connections рукопожатие с узлом дома прошло, а через ~минуту пакеты моста
+            // перестали доходить (у Desktop то же: мост XHTTP после Close не просыпается). Одна дорога
+            // без переключений; запасные — в журнал.
+            tegi.isNotEmpty() -> tegi[0] to "портал: ${tegi[0]}" + if (tegi.size > 1) " (запасные не используются: ${tegi.drop(1).joinToString()})" else ""
             else -> {
                 val soed = (0 until vyhody.length()).mapNotNull { vyhody.optJSONObject(it) }
                     .firstOrNull { it.optString("tag") == "Соединение" }?.optString("tag") ?: return null

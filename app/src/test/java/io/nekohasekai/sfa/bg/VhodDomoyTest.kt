@@ -127,15 +127,14 @@ class VhodDomoyTest {
         assertEquals("Дом", e.getString("tag"))
         assertEquals(zakrytyy, e.getString("private_key"))
         assertEquals("100.77.0.3/32", e.getJSONArray("address").getString(0))
-        assertEquals("Дом · мост", e.getString("detour"))
+        // мост — первый выход ровно на вход с порталом (имя без учёта регистра), без группы и без Vision :443
+        assertEquals("Финляндия · XHTTP", e.getString("detour"))
         val peer = e.getJSONArray("peers").getJSONObject(0)
         assertEquals("100.76.0.1", peer.getString("address"))
         assertEquals(51820, peer.getInt("port"))
         assertEquals(25, peer.getInt("persistent_keepalive_interval"))
-        // мост — группа из выходов ровно на входы с порталом (имя без учёта регистра), Vision :443 не в ней
-        val most = (0 until d.getJSONArray("outbounds").length()).map { d.getJSONArray("outbounds").getJSONObject(it) }
-            .first { it.getString("tag") == "Дом · мост" }
-        assertEquals(listOf("Финляндия · XHTTP", "Нидерланды"), (0 until most.getJSONArray("outbounds").length()).map { most.getJSONArray("outbounds").getString(it) })
+        val tegi = (0 until d.getJSONArray("outbounds").length()).map { d.getJSONArray("outbounds").getJSONObject(it).getString("tag") }
+        assertFalse("Дом · мост" in tegi)
         val rules = d.getJSONObject("route").getJSONArray("rules")
         assertEquals("sniff", rules.getJSONObject(0).getString("action"))
         assertEquals("Дом", rules.getJSONObject(1).getString("outbound"))
