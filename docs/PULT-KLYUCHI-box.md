@@ -59,6 +59,7 @@
 | `dom.memory_millis` | int | 4500–450000 | 45000 | Сколько признак дома считается стоящим после того, как его видели в последний раз, мс | HomeSign.MEMORY_MILLIS |
 | `dom.prismotr.max_millis` | int | 7000–700000 | 70000 | Верхняя граница паузы между пробами, мс | HomeWatch.MAX_MILLIS |
 | `dom.prismotr.min_millis` | int | 4000–400000 | 40000 | Нижняя граница паузы между пробами, мс | HomeWatch.MIN_MILLIS |
+| `dom.vhod` | bool | — | false | вход домой: ключ WireGuard устройства уходит в мозг, подписанный блок dom из сводки — «Дом» в ядре вне дома | VhodDomoy, VhodDomoyPatch |
 | `funkcii.avtorezhim` | bool | — | true | автомат выбирает выход сам | AutoMode |
 | `funkcii.komnata` | bool | — | true | комната (olcRTC) разрешена | OlcRtcParams.hasRoom |
 | `kanal.dolgiy_opros` | bool | — | false | долгий опрос …/pult/zhdat из службы (мгновенные команды) | PultSvyaz |

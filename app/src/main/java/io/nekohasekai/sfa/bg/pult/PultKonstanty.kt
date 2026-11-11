@@ -198,6 +198,8 @@ object PultKonstanty {
      */
     private val VKLYUCHATELI: List<Klyuch> = listOf(
         logich("avtomat.wb_kandidat", false, "автомат пробует комнату WB раньше Телемоста, когда основной канал не поднимается", "AutoMode.trialRaiseWb"),
+        // Вход домой (11.11.2026): пока только телефону Вовы, пультом на слот.
+        logich("dom.vhod", false, "вход домой: ключ WireGuard устройства уходит в мозг, подписанный блок dom из сводки — «Дом» в ядре вне дома", "VhodDomoy, VhodDomoyPatch"),
     )
 
     val KLYUCHI: List<Klyuch> = CHISLA + SPISKI + VYKLYUCHATELI + VKLYUCHATELI

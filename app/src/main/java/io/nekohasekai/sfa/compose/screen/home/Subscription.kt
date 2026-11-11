@@ -259,6 +259,9 @@ suspend fun loadSubscription(uslovno: Boolean = false): SubscriptionInfo? = with
         // Пульт: настройки и команды с сервера (KelevraServer/docs/PULT.md). Нет блока — не меняется ничего.
         runCatching { io.nekohasekai.sfa.bg.pult.Pult.prinyatIzSvodki(json, Kelevra.deviceId) }
             .onFailure { io.nekohasekai.sfa.bg.KLog.w("KelevraPult", "пульт не разобран: ${it.javaClass.simpleName}") }
+        // Вход домой: свой слот и подписанный блок dom (пульт уже разобран — флаг dom.vhod свежий).
+        runCatching { io.nekohasekai.sfa.bg.VhodDomoy.prinyatSvodku(json) }
+            .onFailure { io.nekohasekai.sfa.bg.KLog.w("KelevraDom", "сводка для входа домой не разобрана: ${it.javaClass.simpleName}") }
         razobratSvodku(json)
     }.getOrNull()
 }

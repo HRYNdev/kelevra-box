@@ -875,6 +875,14 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             result = probe.content
         }
 
+        // Вход домой ([VhodDomoyPatch]): эндпоинт «Дом» и правила сетей дома — первыми. Ядро есть только вне
+        // дома, так что дома «Дома» нет само собой. Пульт `dom.vhod` выключен — ничего не вписывается.
+        VhodDomoy.dlyaKonfiga()?.let { vhod ->
+            val dom = VhodDomoyPatch.apply(result, vhod)
+            KLog.i(TAG, dom.note)
+            result = dom.content
+        }
+
         // runningConfig ставит startCore — после удачного старта, не здесь.
         return result
     }
