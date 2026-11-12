@@ -53,6 +53,7 @@ import io.nekohasekai.sfa.compose.theme.KDivider
 import io.nekohasekai.sfa.compose.theme.KGroupTitle
 import io.nekohasekai.sfa.compose.theme.KRowItem
 import io.nekohasekai.sfa.compose.theme.Montserrat
+import io.nekohasekai.sfa.compose.theme.RobotoMono
 
 /** Срок словами для карточки: «Подписка до 14.11» / «Подписка закончилась»; срока нет — null. */
 @Composable
@@ -76,42 +77,67 @@ fun oplataZagolovok(info: OplataInfo, vid: VidOplaty): String? = when (vid.zagol
  * проверяется» при ждущей заявке, ниже «История» подтверждённых оплат (пусто — блока нет).
  */
 @Composable
-fun OplataRazdel(info: OplataInfo, now: Long, onOplatit: () -> Unit) {
+fun OplataRazdel(info: OplataInfo, now: Long, aktivna: Boolean?, trafik: String?, onOplatit: () -> Unit) {
+    // Одна карточка вместо «Состояния»: срок, трафик и цена, маленькая «Оплатить» справа; ниже — короткая история.
     val colors = K
     val srok = srokOplaty(info.srokMs, now)
-    val srokTekst = when {
+    val zagolovok = when {
         srok == SrokOplaty.Konchilsya -> stringResource(R.string.oplata_zakonchilas)
         info.srokMs > 0L -> stringResource(R.string.oplata_oplacheno_do, srokDdMm(info.srokMs))
-        else -> null
+        aktivna == false -> "Приостановлена"
+        else -> "Активна"
     }
-    val cenaTekst = stringResource(R.string.oplata_v_mesyac, info.cena)
-    KGroupTitle(stringResource(R.string.oplata_zagolovok))
+    val podpis = listOfNotNull(trafik, stringResource(R.string.oplata_v_mesyac, info.cena)).joinToString(" · ")
     KCard {
         KRowItem(
-            title = srokTekst ?: cenaTekst,
-            subtitle = if (srokTekst != null) cenaTekst else null,
+            label = "Состояние",
+            title = zagolovok,
+            subtitle = podpis,
             titleColor = if (srok == SrokOplaty.Obychnyj) null else colors.Warn,
+            trailing = {
+                if (info.zhdet) {
+                    Text(
+                        text = stringResource(R.string.oplata_proveryaetsya),
+                        fontFamily = Montserrat,
+                        fontSize = 13.sp,
+                        color = colors.Dim,
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.oplata_oplatit),
+                        fontFamily = Montserrat,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        color = colors.AccentInk,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(KDim.RadiusM))
+                            .background(colors.Accent)
+                            .clickable { onOplatit() }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                }
+            },
         )
-    }
-    Spacer(Modifier.height(KDim.Gap))
-    KButton(
-        text = stringResource(R.string.oplata_oplatit),
-        onClick = onOplatit,
-    )
-    if (info.zhdet) {
-        Soobshchenie(stringResource(R.string.oplata_proveryaetsya))
-    }
-    if (info.istoriya.isNotEmpty()) {
-        KGroupTitle(stringResource(R.string.oplata_istoriya))
-        KCard {
-            info.istoriya.forEachIndexed { i, z ->
-                if (i > 0) KDivider()
-                KRowItem(
-                    title = if (z.doMs > 0L) {
+        if (info.istoriya.isNotEmpty()) {
+            KDivider()
+            Text(
+                text = stringResource(R.string.oplata_istoriya).uppercase(),
+                fontFamily = RobotoMono,
+                fontSize = 10.sp,
+                letterSpacing = 1.2.sp,
+                color = colors.Dim2,
+            )
+            info.istoriya.take(3).forEach { z ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (z.doMs > 0L) {
                         stringResource(R.string.oplata_istoriya_zapis, dataDdMmGggg(z.dataMs), z.summa, srokDdMm(z.doMs))
                     } else {
                         stringResource(R.string.oplata_istoriya_zapis_bez_sroka, dataDdMmGggg(z.dataMs), z.summa)
                     },
+                    fontFamily = Montserrat,
+                    fontSize = 13.sp,
+                    color = colors.Dim,
                 )
             }
         }

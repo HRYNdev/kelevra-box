@@ -620,8 +620,10 @@ fun HomeScreen(
                     color = colors.Text,
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
+                // Платящему «Состояние» и оплата — одна карточка (OplataRazdel); остальным — как было.
                 // Сводки нет — открыли из карточки одной оплаты: состояния не знаем, строки нет.
-                if (sub != null) {
+                val oplRazdel = oplata?.takeIf { hasProfile && it.platit }
+                if (sub != null && oplRazdel == null) {
                     KCard {
                         KRowItem(
                             label = "Состояние",
@@ -630,12 +632,12 @@ fun HomeScreen(
                         )
                     }
                 }
-                // Оплата — здесь, у платящих всегда: срок, цена, «Оплатить» (и заранее), история.
-                val oplRazdel = oplata?.takeIf { hasProfile && it.platit }
                 if (oplRazdel != null) {
                     OplataRazdel(
                         info = oplRazdel,
                         now = now,
+                        aktivna = sub?.active,
+                        trafik = sub?.note,
                         onOplatit = {
                             // Шторка оплаты — поверх главного экрана, как и из карточки.
                             showSubscription = false
