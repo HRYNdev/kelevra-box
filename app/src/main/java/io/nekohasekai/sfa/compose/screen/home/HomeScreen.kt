@@ -172,6 +172,16 @@ fun HomeScreen(
             SubscriptionRefresh.loadLocal()
         }
     }
+    // Оплата: спрашиваем, только пока экран показан (при показе и возврате в приложение,
+    // не чаще [shagOprosaOplaty]); фоновых работ нет. Сбой держит прежнее и сводку не трогает.
+    val oplata by OplataSostoyanie.info.collectAsState()
+    var showOplata by remember { mutableStateOf(false) }
+    LaunchedEffect(hasProfile) {
+        if (hasProfile) OplataSostoyanie.obnovit()
+    }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        if (hasProfile) OplataSostoyanie.obnovit()
+    }
 
     val homePath = paths[PathId.HOME]
     val roomPath = paths[PathId.ROOM]
@@ -418,25 +428,61 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.height(KDim.Gap))
             }
-            // Флаг с сервера: карточку подписки можно убрать с главного экрана.
-            if (sub != null && vid.funkciya("kartochka_podpiski", true)) {
+            // Оплата есть только у платящих (oplata == null у остальных): им — строка оплаты в
+            // карточке и заметная карточка, когда срок на исходе или кончился. Остальным всё как было.
+            val opl = oplata?.takeIf { hasProfile && it.platit }
+            val oplNow = System.currentTimeMillis()
+            val oplSrok = opl?.let { srokOplaty(it.srokMs, oplNow) }
+            val oplZametno = oplSrok == SrokOplaty.Skoro || oplSrok == SrokOplaty.Konchilsya
+            // Флаг с сервера: карточку подписки можно убрать с главного экрана (оплату — нет).
+            if (sub != null && (vid.funkciya("kartochka_podpiski", true) || opl != null)) {
                 // Карточка говорит ровно одно: подписка жива и до каких пор. Кто ею
                 // пользуется и с какого телефона — подробность, и живёт она за нажатием:
                 // имя и прочие подробности показываем только при заходе во вкладку
                 // (решение 31.08.2026). На главном экране имя человека не торчит.
-                KCard(onClick = { showSubscription = true }) {
+                KCard(
+                    onClick = { showSubscription = true },
+                    borderColor = if (oplZametno) colors.Warn else null,
+                ) {
                     // имя аккаунта из панели человеку ничего не говорит: показываем состояние
                     KRowItem(
                         label = vid.tekst("kartochka_podpiska", "Подписка"),
-                        title = if (sub.active) "Активна" else "Приостановлена",
-                        subtitle = sub.note,
+                        title = if (opl != null && oplZametno) {
+                            oplataSrokTekst(opl, oplNow) ?: if (sub.active) "Активна" else "Приостановлена"
+                        } else if (sub.active) "Активна" else "Приостановлена",
+                        // Дата уже в заголовке — под ним только трафик.
+                        subtitle = if (opl != null && oplZametno) sub.noteBezSroka else sub.note,
                         chevron = true,
+                        titleColor = if (oplZametno) colors.Warn else null,
                     )
+                    if (opl != null) {
+                        KDivider()
+                        OplataStroka(opl, onOpen = { showOplata = true })
+                    }
+                }
+            } else if (sub == null && opl != null) {
+                // Сводки нет (сервер не ответил /info, на диске пусто), а оплата известна —
+                // карточка из одной оплаты: оплатить можно и без сводки.
+                KCard(borderColor = if (oplZametno) colors.Warn else null) {
+                    KRowItem(
+                        label = vid.tekst("kartochka_podpiska", "Подписка"),
+                        title = oplataSrokTekst(opl, oplNow) ?: androidx.compose.ui.res.stringResource(
+                            io.nekohasekai.sfa.R.string.oplata_podpiska,
+                        ),
+                        titleColor = if (oplZametno) colors.Warn else null,
+                    )
+                    KDivider()
+                    OplataStroka(opl, onOpen = { showOplata = true })
                 }
             }
         }
 
         Spacer(Modifier.height(40.dp))
+    }
+
+    val oplataShtorka = oplata?.takeIf { it.platit }
+    if (showOplata && oplataShtorka != null) {
+        OplataShtorka(oplataShtorka, onDismiss = { showOplata = false })
     }
 
     if (showExits) {

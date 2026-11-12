@@ -225,6 +225,8 @@ fun KBadge(text: String, small: Boolean = false, accent: Boolean = false) {
 fun KCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
+    /** Цвет рамки; null — обычная. Заметная карточка (срок подписки) — [KColors.Warn]. */
+    borderColor: Color? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     val colors = K
@@ -234,7 +236,7 @@ fun KCard(
             .fillMaxWidth()
             .clip(shape)
             .background(colors.Surface)
-            .border(BorderStroke(1.dp, colors.Border), shape)
+            .border(BorderStroke(1.dp, borderColor ?: colors.Border), shape)
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         content = content,
@@ -251,6 +253,8 @@ fun KRowItem(
     chevron: Boolean = false,
     trailing: @Composable (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    /** Цвет заголовка; null — обычный текст. */
+    titleColor: Color? = null,
 ) {
     val colors = K
     Row(
@@ -279,7 +283,7 @@ fun KRowItem(
                 fontFamily = Montserrat,
                 fontWeight = FontWeight.Medium,
                 fontSize = 15.sp,
-                color = colors.Text,
+                color = titleColor ?: colors.Text,
             )
             if (subtitle != null) {
                 Spacer(Modifier.height(3.dp))

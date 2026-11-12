@@ -115,13 +115,13 @@ data class SubscriptionInfo(
         get() {
             val parts = mutableListOf<String>()
             expires?.let { parts += "до ${humanDate(it)}" }
-            if (limitBytes > 0) {
-                parts += "${gigabytes(usedBytes)} из ${gigabytes(limitBytes)} ГБ"
-            } else {
-                parts += "без ограничений"
-            }
+            parts += noteBezSroka
             return parts.joinToString(" · ")
         }
+
+    /** Только трафик: когда срок уже стоит заголовком карточки (оплата, срок на исходе). */
+    val noteBezSroka: String
+        get() = if (limitBytes > 0) "${gigabytes(usedBytes)} из ${gigabytes(limitBytes)} ГБ" else "без ограничений"
 }
 
 /**

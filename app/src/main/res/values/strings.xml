@@ -778,4 +778,22 @@
     <string name="system_ask_vpn_title">Kelevra запрашивает разрешение на настройку VPN-подключения…</string>
     <string name="system_ask_vpn_yes">ОК</string>
     <string name="system_ask_vpn_no">Отмена</string>
+
+    <!-- Оплата подписки (KelevraServer/docs/OPLATA.md) -->
+    <string name="oplata_zagolovok">Оплата</string>
+    <string name="oplata_oplatit">Оплатить</string>
+    <string name="oplata_summa">%1$d ₽</string>
+    <string name="oplata_proveryaetsya">Оплата проверяется</string>
+    <string name="oplata_podpiska">Подписка</string>
+    <string name="oplata_podpiska_do">Подписка до %1$s</string>
+    <string name="oplata_zakonchilas">Подписка закончилась</string>
+    <string name="oplata_perevesti">Перевести через Т-Банк или Сбер</string>
+    <string name="oplata_drugoy_bank">Другой банк</string>
+    <string name="oplata_nomer">Номер</string>
+    <string name="oplata_ya_oplatil">Я оплатил</string>
+    <string name="oplata_uzhe_otpravleno">Уже отправлено</string>
+    <string name="oplata_net_svyazi">Нет связи с сервером</string>
+    <string name="oplata_ssylka_ne_otkrylas">Ссылка не открылась</string>
+    <string name="oplata_kopirovat">Копировать</string>
+    <string name="oplata_skopirovano">Скопировано</string>
 </resources>
