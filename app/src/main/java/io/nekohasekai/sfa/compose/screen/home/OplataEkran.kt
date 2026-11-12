@@ -9,7 +9,9 @@ import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -189,13 +191,20 @@ fun OplataShtorka(info: OplataInfo, onDismiss: () -> Unit) {
                     textAlign = TextAlign.Center,
                 )
             } else {
-                KButton(
-                    text = stringResource(R.string.oplata_ya_oplatil),
-                    // Есть кнопка перевода — она главная, «Я оплатил» второй.
-                    ghost = info.ssylka.isNotEmpty(),
-                    enabled = otpravka != OplataSostoyanie.Otpravka.Idet,
-                    onClick = { OplataSostoyanie.oplatil() },
-                )
+                if (info.ssylka.isNotEmpty()) {
+                    // Есть кнопка перевода — она главная; «Я оплатил» вторая, но явно рабочая (не «серая»).
+                    KnopkaVtoraya(
+                        text = stringResource(R.string.oplata_ya_oplatil),
+                        enabled = otpravka != OplataSostoyanie.Otpravka.Idet,
+                        onClick = { OplataSostoyanie.oplatil() },
+                    )
+                } else {
+                    KButton(
+                        text = stringResource(R.string.oplata_ya_oplatil),
+                        enabled = otpravka != OplataSostoyanie.Otpravka.Idet,
+                        onClick = { OplataSostoyanie.oplatil() },
+                    )
+                }
                 when (otpravka) {
                     OplataSostoyanie.Otpravka.UzheOtpravleno -> Soobshchenie(stringResource(R.string.oplata_uzhe_otpravleno))
                     OplataSostoyanie.Otpravka.Oshibka -> Soobshchenie(stringResource(R.string.oplata_net_svyazi), colors.Err)
@@ -204,6 +213,29 @@ fun OplataShtorka(info: OplataInfo, onDismiss: () -> Unit) {
             }
             Spacer(Modifier.height(20.dp))
         }
+    }
+}
+
+@Composable
+private fun KnopkaVtoraya(text: String, enabled: Boolean, onClick: () -> Unit) {
+    val colors = K
+    val shape = RoundedCornerShape(KDim.RadiusM)
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .border(1.5.dp, if (enabled) colors.Accent else colors.Border, shape)
+            .clickable(enabled = enabled) { onClick() }
+            .padding(vertical = 15.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            fontFamily = Montserrat,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 15.sp,
+            color = if (enabled) colors.Accent else colors.Dim2,
+        )
     }
 }
 
