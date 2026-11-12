@@ -73,6 +73,12 @@ object OplataSostoyanie {
         scope.launch { obnovitSeychas(sila) }
     }
 
+    /** Возврат в приложение: срок могли поменять в панели — спросить, если прошлый ответ старше минуты. */
+    fun obnovitPriVozvrate() {
+        val staryy = kogdaMs == 0L || System.currentTimeMillis() - kogdaMs > 60_000L
+        obnovit(sila = staryy || _info.value?.zhdet == true)
+    }
+
     private suspend fun obnovitSeychas(sila: Boolean) {
         if (!lock.tryLock()) return
         try {

@@ -181,7 +181,7 @@ fun HomeScreen(
     }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
         // Заявка ждёт подтверждения — при возврате в приложение спрашиваем сразу: владелец мог уже продлить.
-        if (hasProfile) OplataSostoyanie.obnovit(sila = OplataSostoyanie.info.value?.zhdet == true)
+        if (hasProfile) OplataSostoyanie.obnovitPriVozvrate()
     }
     val oplataZhdet = OplataSostoyanie.info.collectAsState().value?.zhdet == true
     LaunchedEffect(hasProfile, oplataZhdet) {
