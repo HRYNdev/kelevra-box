@@ -20,7 +20,7 @@ import java.net.URL
  * Оплата подписки: что сервер говорит про оплату и отправка «Я оплатил».
  *
  * Спрашивается только когда приложение на экране (главный экран зовёт [obnovit] при показе),
- * фоновых работ нет. Ходит тем же путём, что `/info` ([loadSubscription]): прямо к двери
+ * фоновых опросов нет; после удачного ответа переставляются напоминания ([OplataNapominaniya]). Ходит тем же путём, что `/info` ([loadSubscription]): прямо к двери
  * (дверь в профиле идёт `direct`, мимо узлов — снятая с узлов учётка запрос не ломает),
  * при обрыве — через локальный вход туннеля и по другим дверям ([ZapasnoyPut.poluchit]).
  *
@@ -95,15 +95,18 @@ object OplataSostoyanie {
                 is Otvet.Est -> {
                     _info.value = o.info.takeIf { it.platit }
                     kogdaMs = now
+                    OplataNapominaniya.perestavit(_info.value)
                 }
                 Otvet.NeNajden -> {
                     _info.value = null
                     kogdaMs = now
+                    OplataNapominaniya.perestavit(null)
                 }
                 Otvet.NeOplata -> {
                     KLog.i(TAG, "дверь не отвечает про оплату — не спрашиваю до перезапуска")
                     _info.value = null
                     neUmeet = b
+                    OplataNapominaniya.perestavit(null)
                 }
                 // Сбой и 429 подбора кода: держим прежнее, спросим при следующем показе экрана.
                 Otvet.Chasto, Otvet.Sboy -> Unit
@@ -127,6 +130,7 @@ object OplataSostoyanie {
                         if (b == baza) {
                             _info.value = o.info.takeIf { it.platit }
                             kogdaMs = System.currentTimeMillis()
+                            OplataNapominaniya.perestavit(_info.value)
                         }
                         Otpravka.Net
                     }

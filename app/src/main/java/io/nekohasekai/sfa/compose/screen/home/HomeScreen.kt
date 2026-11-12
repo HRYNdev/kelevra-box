@@ -437,12 +437,13 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.height(KDim.Gap))
             }
-            // Оплата есть только у платящих (oplata == null у остальных): им — строка оплаты в
-            // карточке и заметная карточка, когда срок на исходе или кончился. Остальным всё как было.
+            // Оплата есть только у платящих (oplata == null у остальных). Срок далеко — «Оплачено до»
+            // без строки оплаты (платить заранее — в разделе подписки); ≤ 3 суток и кончился — заметно
+            // и со строкой «Оплатить»; заявка ждёт — строка «Оплата проверяется». Остальным всё как было.
             val opl = oplata?.takeIf { hasProfile && it.platit }
             val oplNow = System.currentTimeMillis()
-            val oplSrok = opl?.let { srokOplaty(it.srokMs, oplNow) }
-            val oplZametno = oplSrok == SrokOplaty.Skoro || oplSrok == SrokOplaty.Konchilsya
+            val oplVid = opl?.let { vidOplaty(it, oplNow) }
+            val oplZametno = oplVid?.zametno == true
             // Флаг с сервера: карточку подписки можно убрать с главного экрана (оплату — нет).
             if (sub != null && (vid.funkciya("kartochka_podpiski", true) || opl != null)) {
                 // Карточка говорит ровно одно: подписка жива и до каких пор. Кто ею
@@ -454,34 +455,40 @@ fun HomeScreen(
                     borderColor = if (oplZametno) colors.Warn else null,
                 ) {
                     // имя аккаунта из панели человеку ничего не говорит: показываем состояние
+                    val sostoyanie = if (sub.active) "Активна" else "Приостановлена"
+                    val oplZagolovok = if (opl != null && oplVid != null) oplataZagolovok(opl, oplVid) else null
                     KRowItem(
                         label = vid.tekst("kartochka_podpiska", "Подписка"),
-                        title = if (opl != null && oplZametno) {
-                            oplataSrokTekst(opl, oplNow) ?: if (sub.active) "Активна" else "Приостановлена"
-                        } else if (sub.active) "Активна" else "Приостановлена",
+                        title = oplZagolovok ?: sostoyanie,
                         // Дата уже в заголовке — под ним только трафик.
-                        subtitle = if (opl != null && oplZametno) sub.noteBezSroka else sub.note,
+                        subtitle = if (oplZagolovok != null) sub.noteBezSroka else sub.note,
                         chevron = true,
                         titleColor = if (oplZametno) colors.Warn else null,
                     )
-                    if (opl != null) {
+                    if (opl != null && oplVid?.stroka != null) {
                         KDivider()
                         OplataStroka(opl, onOpen = { showOplata = true })
                     }
                 }
-            } else if (sub == null && opl != null) {
+            } else if (sub == null && opl != null && oplVid != null) {
                 // Сводки нет (сервер не ответил /info, на диске пусто), а оплата известна —
                 // карточка из одной оплаты: оплатить можно и без сводки.
-                KCard(borderColor = if (oplZametno) colors.Warn else null) {
+                KCard(
+                    onClick = { showSubscription = true },
+                    borderColor = if (oplZametno) colors.Warn else null,
+                ) {
                     KRowItem(
                         label = vid.tekst("kartochka_podpiska", "Подписка"),
-                        title = oplataSrokTekst(opl, oplNow) ?: androidx.compose.ui.res.stringResource(
+                        title = oplataZagolovok(opl, oplVid) ?: androidx.compose.ui.res.stringResource(
                             io.nekohasekai.sfa.R.string.oplata_podpiska,
                         ),
+                        chevron = true,
                         titleColor = if (oplZametno) colors.Warn else null,
                     )
-                    KDivider()
-                    OplataStroka(opl, onOpen = { showOplata = true })
+                    if (oplVid.stroka != null) {
+                        KDivider()
+                        OplataStroka(opl, onOpen = { showOplata = true })
+                    }
                 }
             }
         }
@@ -613,11 +620,27 @@ fun HomeScreen(
                     color = colors.Text,
                     modifier = Modifier.padding(bottom = 12.dp),
                 )
-                KCard {
-                    KRowItem(
-                        label = "Состояние",
-                        title = if (sub?.active == true) "Активна" else "Приостановлена",
-                        subtitle = sub?.note,
+                // Сводки нет — открыли из карточки одной оплаты: состояния не знаем, строки нет.
+                if (sub != null) {
+                    KCard {
+                        KRowItem(
+                            label = "Состояние",
+                            title = if (sub.active) "Активна" else "Приостановлена",
+                            subtitle = sub.note,
+                        )
+                    }
+                }
+                // Оплата — здесь, у платящих всегда: срок, цена, «Оплатить» (и заранее), история.
+                val oplRazdel = oplata?.takeIf { hasProfile && it.platit }
+                if (oplRazdel != null) {
+                    OplataRazdel(
+                        info = oplRazdel,
+                        now = now,
+                        onOplatit = {
+                            // Шторка оплаты — поверх главного экрана, как и из карточки.
+                            showSubscription = false
+                            showOplata = true
+                        },
                     )
                 }
                 val person = sub?.personName

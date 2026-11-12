@@ -796,4 +796,11 @@
     <string name="oplata_ssylka_ne_otkrylas">Ссылка не открылась</string>
     <string name="oplata_kopirovat">Копировать</string>
     <string name="oplata_skopirovano">Скопировано</string>
+    <string name="oplata_oplacheno_do">Оплачено до %1$s</string>
+    <string name="oplata_v_mesyac">%1$d ₽ в месяц</string>
+    <string name="oplata_istoriya">История</string>
+    <string name="oplata_istoriya_zapis">%1$s · %2$d ₽ · до %3$s</string>
+    <string name="oplata_istoriya_zapis_bez_sroka">%1$s · %2$d ₽</string>
+    <string name="oplata_napominanie_skoro">Подписка до %1$s · %2$d ₽</string>
+    <string name="oplata_napominanie_konec">Подписка закончилась · %1$d ₽</string>
 </resources>

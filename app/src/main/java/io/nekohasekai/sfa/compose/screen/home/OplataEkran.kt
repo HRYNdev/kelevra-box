@@ -49,6 +49,7 @@ import io.nekohasekai.sfa.compose.theme.K
 import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KCard
 import io.nekohasekai.sfa.compose.theme.KDim
+import io.nekohasekai.sfa.compose.theme.KDivider
 import io.nekohasekai.sfa.compose.theme.KGroupTitle
 import io.nekohasekai.sfa.compose.theme.KRowItem
 import io.nekohasekai.sfa.compose.theme.Montserrat
@@ -59,6 +60,62 @@ fun oplataSrokTekst(info: OplataInfo, now: Long): String? = when (srokOplaty(inf
     SrokOplaty.Konchilsya -> stringResource(R.string.oplata_zakonchilas)
     SrokOplaty.Skoro, SrokOplaty.Obychnyj ->
         if (info.srokMs > 0L) stringResource(R.string.oplata_podpiska_do, srokDdMm(info.srokMs)) else null
+}
+
+/** Заголовок карточки «Подписка» у платящего по [vidOplaty]; бессрочно — null (заголовок как был). */
+@Composable
+fun oplataZagolovok(info: OplataInfo, vid: VidOplaty): String? = when (vid.zagolovok) {
+    ZagolovokOplaty.OplachenoDo -> stringResource(R.string.oplata_oplacheno_do, srokDdMm(info.srokMs))
+    ZagolovokOplaty.PodpiskaDo -> stringResource(R.string.oplata_podpiska_do, srokDdMm(info.srokMs))
+    ZagolovokOplaty.Zakonchilas -> stringResource(R.string.oplata_zakonchilas)
+    ZagolovokOplaty.KakBylo -> null
+}
+
+/**
+ * Блок «Оплата» в разделе подписки: срок, цена, «Оплатить» всегда (заплатить заранее), «Оплата
+ * проверяется» при ждущей заявке, ниже «История» подтверждённых оплат (пусто — блока нет).
+ */
+@Composable
+fun OplataRazdel(info: OplataInfo, now: Long, onOplatit: () -> Unit) {
+    val colors = K
+    val srok = srokOplaty(info.srokMs, now)
+    val srokTekst = when {
+        srok == SrokOplaty.Konchilsya -> stringResource(R.string.oplata_zakonchilas)
+        info.srokMs > 0L -> stringResource(R.string.oplata_oplacheno_do, srokDdMm(info.srokMs))
+        else -> null
+    }
+    val cenaTekst = stringResource(R.string.oplata_v_mesyac, info.cena)
+    KGroupTitle(stringResource(R.string.oplata_zagolovok))
+    KCard {
+        KRowItem(
+            title = srokTekst ?: cenaTekst,
+            subtitle = if (srokTekst != null) cenaTekst else null,
+            titleColor = if (srok == SrokOplaty.Obychnyj) null else colors.Warn,
+        )
+    }
+    Spacer(Modifier.height(KDim.Gap))
+    KButton(
+        text = stringResource(R.string.oplata_oplatit),
+        onClick = onOplatit,
+    )
+    if (info.zhdet) {
+        Soobshchenie(stringResource(R.string.oplata_proveryaetsya))
+    }
+    if (info.istoriya.isNotEmpty()) {
+        KGroupTitle(stringResource(R.string.oplata_istoriya))
+        KCard {
+            info.istoriya.forEachIndexed { i, z ->
+                if (i > 0) KDivider()
+                KRowItem(
+                    title = if (z.doMs > 0L) {
+                        stringResource(R.string.oplata_istoriya_zapis, dataDdMmGggg(z.dataMs), z.summa, srokDdMm(z.doMs))
+                    } else {
+                        stringResource(R.string.oplata_istoriya_zapis_bez_sroka, dataDdMmGggg(z.dataMs), z.summa)
+                    },
+                )
+            }
+        }
+    }
 }
 
 /**
