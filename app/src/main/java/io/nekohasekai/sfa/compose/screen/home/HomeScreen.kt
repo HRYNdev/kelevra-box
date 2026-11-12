@@ -180,7 +180,16 @@ fun HomeScreen(
         if (hasProfile) OplataSostoyanie.obnovit()
     }
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-        if (hasProfile) OplataSostoyanie.obnovit()
+        // Заявка ждёт подтверждения — при возврате в приложение спрашиваем сразу: владелец мог уже продлить.
+        if (hasProfile) OplataSostoyanie.obnovit(sila = OplataSostoyanie.info.value?.zhdet == true)
+    }
+    val oplataZhdet = OplataSostoyanie.info.collectAsState().value?.zhdet == true
+    LaunchedEffect(hasProfile, oplataZhdet) {
+        // Пока заявка ждёт и экран открыт — раз в 30 с, чтобы «Оплата проверяется» сменилась без перезапуска.
+        while (hasProfile && oplataZhdet) {
+            delay(30_000)
+            OplataSostoyanie.obnovit(sila = true)
+        }
     }
 
     val homePath = paths[PathId.HOME]
