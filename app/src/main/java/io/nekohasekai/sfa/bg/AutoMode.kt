@@ -21,6 +21,7 @@ import io.nekohasekai.sfa.database.Settings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.runBlocking
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ExecutorCompletionService
 import java.util.concurrent.Executors
@@ -169,6 +170,12 @@ object AutoMode {
         val link: Link = Link.Unknown,
         /** Проба комнаты WB висит ([WbTrial.Pending]) прямо в этом заходе — только для текста. */
         val wbTrialPending: Boolean = false,
+        /**
+         * Диагноз самоподъёма ([SamopodyomYadra.Diagnoz.kod]): `ok`, `tunnel_mertv`,
+         * `uzly_nedostupny`, `net_seti`, `belyy_spisok`; `null` — не судили (туннель погашен,
+         * стоим в комнате, выход выбран руками). Экран его не рисует — он для журнала и пульта.
+         */
+        val diagnoz: String? = null,
     )
 
     private val _state = MutableStateFlow(State(auto = true, situation = Situation.Unknown))
@@ -220,7 +227,13 @@ object AutoMode {
 
     private fun publish(auto: Boolean, situation: Situation) {
         if (situation != _state.value.situation) perehodAt = System.currentTimeMillis()
-        _state.value = State(auto = auto, situation = situation, link = link, wbTrialPending = _state.value.wbTrialPending)
+        _state.value = State(
+            auto = auto,
+            situation = situation,
+            link = link,
+            wbTrialPending = _state.value.wbTrialPending,
+            diagnoz = _state.value.diagnoz,
+        )
     }
 
     /**
@@ -357,6 +370,15 @@ object AutoMode {
 
         /** Работающее ядро уже собрано с правками под комнату WB — пересобирать ради неё не нужно. */
         fun coreReadyForWb(): Boolean = false
+
+        /**
+         * Самоподъём ([SamopodyomYadra]): перезапустить ядро sing-box при поднятом туннеле.
+         *
+         * @return `true` — перезапущено; `false` — пробовали, ядро не поднялось (ступень
+         *   потрачена); `null` — не сейчас (служба уходит или поднимается, туннель погашен,
+         *   идёт подъём комнаты): ступень не тратится, решит следующий заход.
+         */
+        fun perezapustitYadro(reason: String): Boolean? = null
     }
 
     /**
@@ -614,6 +636,21 @@ object AutoMode {
     private const val ROOM_HONEST_PEEK_MILLIS = 60_000L
 
     /**
+     * Сколько «дома» должно продержаться подряд, прежде чем гасить туннель ([DomZaderzhka]).
+     * Полевые данные 31.10–07.11.2026: домашний вайфай одного телефона менял сеть каждые
+     * 20–30 с, и автомат поднимал/гасил ядро 204 раза за неделю. 45 с — больше периода
+     * дёргания и меньше минуты лишнего туннеля при настоящем возвращении домой.
+     */
+    internal const val DOM_ZADERZHKA_MILLIS = 45_000L
+
+    /**
+     * Ожидание ответа пробы сторожа транспорта ([TransportWatch]). Нижняя граница
+     * [HonestProbe.MIN_TIMEOUT_MILLIS] всё равно действует — служебный отклик под нагрузкой
+     * доходит до 9 с, и короче мерить нельзя.
+     */
+    private const val TRANSPORT_PROBE_TIMEOUT_MILLIS = 6_000
+
+    /**
      * Сколько живёт выбор, сделанный руками, если сеть под нами так и не сменилась.
      *
      * Отпускать выбор по смене сети правильно, но на соте этого события не бывает вовсе:
@@ -821,6 +858,30 @@ object AutoMode {
     private var pendingSwitch = false
 
     private val gate = AutoModeGate { podtverzhdeniy() }
+
+    /**
+     * Выдержка перед гашением туннеля дома ([DomZaderzhka]): «дома» должно продержаться
+     * [DOM_ZADERZHKA_MILLIS] без смен сети, иначе дёргающийся вайфай пересобирает ядро на
+     * каждое переключение. Подъём вне дома она не задерживает.
+     */
+    private val domZaderzhka = DomZaderzhka { Pult.long("avtomat.dom_zaderzhka_millis", DOM_ZADERZHKA_MILLIS) }
+
+    /** Провалы сторожа транспорта подряд ([TransportWatch]); два — заход будится раньше ритма. */
+    private val transportWatch = TransportWatch.Schetchik()
+
+    /** Самоподъём ядра: сеть есть, канал мёртв — перезапуск по лестнице ([SamopodyomYadra]). */
+    private val samopodyom = SamopodyomYadra()
+
+    /** Диагноз этого захода для самоподъёма; `null` — судить не по чему. Ставит [observe]. */
+    @Volatile
+    private var diagZahoda: SamopodyomYadra.Diagnoz? = null
+
+    /** Что показал [mainWorks] этого захода: рукопожатие с адресом узла и проба через канал. */
+    private var zamerPort: Boolean? = null
+    private var zamerKanal: Boolean? = null
+
+    /** Для диагностики пульта: диагноз и ступень лестницы самоподъёма. */
+    fun samopodyomStroka(): String = samopodyom.stroka()
 
     /** [CONFIRMATIONS] с пульта (`avtomat.podtverzhdeniy`); без пульта — константа. */
     internal fun podtverzhdeniy(): Int = io.nekohasekai.sfa.bg.pult.Pult.int("avtomat.podtverzhdeniy", CONFIRMATIONS)
@@ -1077,6 +1138,9 @@ object AutoMode {
             nodeWatch.reset(SystemClock.elapsedRealtime())
             nodeMeasurements.clear()
             gate.reset(initial)
+            domZaderzhka.reset()
+            transportWatch.reset()
+            samopodyom.sbros()
             // На чьей сети стоит начальная обстановка, мы ещё не знаем — узнаем первым
             // же заходом. До того держать вердикт на молчании не на чем ([holdsVerdict]).
             situationNetwork = null
@@ -1197,6 +1261,8 @@ object AutoMode {
         networkChanged = true
         // Окно смены сети: пока оно идёт, провал узла — провал сети, на запасной не уходим.
         nodeWatch.networkChanged(SystemClock.elapsedRealtime())
+        // Самоподъём: мёртвое время прежней сети не в счёт, первая ступень — от самой смены.
+        samopodyom.smenaSeti(SystemClock.elapsedRealtime())
         if (onlyResolvers) {
             KLog.i(TAG, "сеть та же, но резолверы сменились: ${describe(network)} — перепроверяю")
         } else {
@@ -1532,6 +1598,8 @@ object AutoMode {
             link = Link.Unknown
         }
         _state.value = _state.value.copy(auto = enabled, link = link)
+        // Человек сказал своё — лестница самоподъёма сначала.
+        samopodyom.sbros()
         gate.reset(Situation.Unknown)
         situationNetwork = null
         silentHoldAt = 0L
@@ -1547,6 +1615,7 @@ object AutoMode {
      */
     fun sbrosPamyati(why: String) {
         KLog.i(TAG, "сброс памяти автомата ($why): ручной выбор «${manualExit ?: "нет"}», отпечаток дома, залипший выход")
+        samopodyom.sbros()
         manualExit = null
         Settings.manualExitName = ""
         setManualRoom(false)
@@ -1615,6 +1684,7 @@ object AutoMode {
      */
     fun chooseManually(tag: String): Boolean {
         manualExit = tag
+        samopodyom.sbros()
         Settings.manualExitName = tag
         // Экран сразу применяет выбор в ядре, поэтому запоминаем его и мы: иначе автомат
         // будет считать, что стоит на основном канале, и мерять пробой чужой выход.
@@ -1773,19 +1843,27 @@ object AutoMode {
             // Проба комнаты WB висит ([wbTrialDeadline] не нулевой) — заход короче обычного
             // ритма, близко к её дедлайну, а не задним числом следующим полным кругом.
             val wbWait = wbTrialWaitIn(wait, SystemClock.elapsedRealtime(), wbTrialDeadline)
+            // Дома с живым туннелем идёт выдержка перед гашением ([DomZaderzhka]) — заход нужен
+            // к её концу, а не через пять минут.
+            val domWait = domWaitIn(wbWait, SystemClock.elapsedRealtime())
             // Полный ритм комнаты и дома досиживаем не вслепую: между заходами идёт одна
             // дешёвая проба. Спешка (серия, набор подтверждений) в этом не нуждается —
-            // там заход и так близко. Выбор формы ждёт по исходному [wait] (проба WB его не
-            // трогает, только итоговый срок — [wbWait]).
+            // там заход и так близко. Выбор формы ждёт по исходному [wait] (проба WB и
+            // выдержка дома его не трогают, только итоговый срок — [domWait]).
             when {
                 wait == Pult.long("avtomat.round_room_millis", ROUND_ROOM_MILLIS) &&
                     (situation == Situation.Room || situation == Situation.Wb) &&
-                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(wbWait)
+                    !Pult.vykl("prismotr_komnaty") -> waitInRoom(domWait)
                 // Дома проба ловит то, о чём иначе некому сказать: ограничение, наступившее
                 // без смены сети. Ядра в этот момент нет, исходящих нет, ломаться нечему.
                 wait == Pult.long("avtomat.round_home_millis", ROUND_HOME_MILLIS) && situation == Situation.Home &&
-                    !Pult.vykl("prismotr_doma") -> waitAtHome(wbWait)
-                else -> waitNext(wbWait)
+                    !Pult.vykl("prismotr_doma") -> waitAtHome(domWait)
+                // На основном канале между заходами — сторож транспорта ([TransportWatch]):
+                // мёртвый XHTTP иначе замечался через минуты, при одном узле в очереди — только
+                // пятиминутным ритмом.
+                wait == Pult.long("avtomat.round_main_millis", ROUND_MAIN_MILLIS) && situation == Situation.Main &&
+                    !Pult.vykl("storozh_transporta") -> waitOnMain(domWait)
+                else -> waitNext(domWait)
             }
         }
     }
@@ -1878,6 +1956,9 @@ object AutoMode {
             idle = true
             burst.cancel()
             settled = true
+            // Выход выбран руками — самоподъём не судит (как и Desktop при выборе не своей группы).
+            diagZahoda = null
+            samopodyomShag(host)
             publish(auto = false, situation = Situation.Unknown)
             return Situation.Unknown
         }
@@ -1895,6 +1976,12 @@ object AutoMode {
 
         val was = gate.current
         val observed = observe(host)
+        // Самоподъём — сразу по свежему замеру этого захода: решение о перезапуске ядра
+        // принимается на тех же пробах, что и обстановка, своих проб у него нет.
+        samopodyomShag(host)
+        // Выдержка дома считает непрерывные наблюдения «дома» без смен сети — каждому заходу
+        // по наблюдению, до любых поблажек задвижки ([DomZaderzhka]).
+        domZaderzhka.observe(home = observed == Situation.Home, networkChanged = trustOnce, now = SystemClock.elapsedRealtime())
 
         // Резолверы промолчали, сеть та же, и стоим мы на рабочем выходе — вердикт «не
         // знаю». Задвижке такое наблюдение даже не показываем: набор подтверждений
@@ -1942,6 +2029,8 @@ object AutoMode {
         when {
             changed -> {
                 KLog.i(TAG, "обстановка сменилась: ${name(was)} → ${name(observed)}")
+                // Провалы сторожа транспорта — про прежнюю обстановку.
+                transportWatch.reset()
                 // Запись с полями: от смены обстановки зависит, погасит ли автомат туннель, —
                 // и «кто выключил» потом читается рядом с остановками сервиса (см. BoxService).
                 runCatching {
@@ -1972,17 +2061,75 @@ object AutoMode {
         return gate.current
     }
 
+    /**
+     * Диагноз этого захода для самоподъёма ([SamopodyomYadra.diagnozZahoda]).
+     *
+     * Судим только там, где перезапуск ядра — наше дело и может помочь: туннель поднят,
+     * мы не дома и стоим не в комнате (и комнату сейчас не поднимают — её вход идёт через
+     * то же ядро, перезапуск порвал бы его), основной канал этим заходом мерили. Иначе
+     * `null` — и мёртвое время не копится.
+     */
+    private fun samopodyomDiagnoz(
+        host: Host,
+        home: Boolean,
+        inRoom: Boolean,
+        mainMeasured: Boolean,
+        main: Boolean,
+        whitelistNow: Boolean,
+    ): SamopodyomYadra.Diagnoz? {
+        if (home || inRoom) return null
+        if (!runCatching { host.tunnelLive() }.getOrDefault(false)) return null
+        if (roomUp() || wbUp() || runCatching { host.roomRaising() }.getOrDefault(false)) return null
+        if (!mainMeasured) return if (whitelistNow) SamopodyomYadra.Diagnoz.BelyySpisok else null
+        return SamopodyomYadra.diagnozZahoda(main, zamerPort, zamerKanal, whitelistNow)
+    }
+
+    /**
+     * Шаг самоподъёма по диагнозу этого захода: строка журнала на смену состояния и, если
+     * лестница велит, перезапуск ядра через [Host.perezapustitYadro]. Выключатель пульта
+     * `vykl.samopodyom` — не судим вовсе (как до правки).
+     */
+    private fun samopodyomShag(host: Host) {
+        val now = SystemClock.elapsedRealtime()
+        val d = if (Pult.vykl("samopodyom")) null else diagZahoda
+        val (reshenie, stroka) = samopodyom.nablyudenie(d, now)
+        stroka?.let { KLog.i(TAG, it) }
+        val kod = samopodyom.diagnoz?.kod
+        if (_state.value.diagnoz != kod) _state.value = _state.value.copy(diagnoz = kod)
+        val r = reshenie as? SamopodyomYadra.Reshenie.Perezapusk ?: return
+        val prichina = "сеть есть, канал мёртв ${r.mertvMillis / 1000} с" +
+            (if (r.posleSmenySeti) " (после смены сети)" else "") + ", ступень ${r.stupen}"
+        KLog.w(TAG, "самоподъём: $prichina — перезапускаю ядро")
+        val itog = runCatching { host.perezapustitYadro(prichina) }.getOrElse {
+            KLog.w(TAG, "самоподъём: перезапуск сорвался: ${it.message}")
+            false
+        }
+        when (itog) {
+            null -> KLog.i(TAG, "самоподъём: ядро сейчас трогать нельзя — решу следующим заходом")
+            else -> {
+                samopodyom.perezapushcheno(SystemClock.elapsedRealtime())
+                // Канал на новом ядре перемерит следующий заход в обычном ритме (поиск — 12 с и
+                // дальше): своей серии проб самоподъём не заводит.
+                if (!itog) KLog.w(TAG, "самоподъём: ядро не поднялось — следующая ступень по лестнице")
+            }
+        }
+    }
+
     private fun observe(host: Host): Situation {
         // Каждый заход начинается зрячим, пока сводка DNS не скажет обратного: иначе
         // молчание одного захода тянулось бы в следующие.
         observationSilent = false
         observationBlind = false
+        diagZahoda = null
+        zamerPort = null
+        zamerKanal = null
         // По умолчанию снято: если этот заход дойдёт до пробы WB и она зависнет
         // ([WbTrial.Pending]), ниже выставим обратно — заново, каждым заходом.
         setWbTrialPending(false)
         val network = physicalNetwork() ?: run {
             observedNetworkKey = null
             observationNote = "сети нет вовсе"
+            diagZahoda = SamopodyomYadra.Diagnoz.NetSeti
             noteLink(null, "заход")
             PathRegistry.allUnavailable("сети нет")
             refreshLink()
@@ -2151,6 +2298,7 @@ object AutoMode {
         val inRoom = gate.current == Situation.Room || gate.current == Situation.Wb
         mainRefused = false
         mainHollow = false
+        var mainMeasured = false
         val main = when {
             home -> {
                 peekWanted = false
@@ -2175,6 +2323,7 @@ object AutoMode {
 
             else -> {
                 if (nodeIndex != 0) maybeReturnToPrimary(network, host)
+                mainMeasured = true
                 val works = mainWorks(network, host, inRoom = inRoom)
                 if (works) nodeWatch.nodeAlive()
                 works || reserveIfDead(network, host)
@@ -2199,6 +2348,7 @@ object AutoMode {
         }
         // Фоновый замер мог закончиться, пока шёл заход: его «белый список» нужен уже этому.
         val whitelistNow = hint == NetworkMode.Whitelist || cachedHint(network) == NetworkMode.Whitelist
+        diagZahoda = samopodyomDiagnoz(host, home, inRoom, mainMeasured, main, whitelistNow)
         val netSettled = nodeWatch.settled(SystemClock.elapsedRealtime(), validated(network))
         val mainSettled = failureCounts(netSettled, whitelistNow)
         if (!(home || main) && !mainSettled) {
@@ -2801,21 +2951,31 @@ object AutoMode {
         if (!repeat) KLog.i(TAG, "действую по обстановке «${name(situation)}»")
         when (situation) {
             Situation.Home -> {
-                // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
-                //
-                // Зовём и на повторе тоже. Вызов идемпотентный (погашенный туннель отвечает
-                // «ничего не делал»), а поднять туннель теперь может не только [apply]:
-                // [trialRaiseRoom] делает это сам, когда комната нужна, а туннеля нет.
-                // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
-                // следующей смены обстановки — то есть ровно то, чего дом и избегает.
-                if (host.suspendTunnel("дома обход делает роутер")) selected = null
-                // Дома не нужна и комната WB: туннель погашен, её присмотр гасит ядро сам.
-                releaseWb("дома обход делает роутер")
-                // Туннеля дома нет, и запасной узел, выбранный до дома, ничего не значит: из дома
-                // выходим с первого узла очереди. Раньше очередь сбрасывал только [start], а
-                // возврат ([maybeReturnToPrimary]) дома не идёт — и «Финляндия», выбранная за
-                // секунды мигания вайфая 17.10.2026 в 22:44, пережила весь вечер дома.
-                if (queueIndexAfter(situation, nodeIndex) == 0) resetQueue("дома туннель не нужен")
+                val now = SystemClock.elapsedRealtime()
+                // Гистерезис ([DomZaderzhka]): туннель живой, а «дома» ещё не продержалось —
+                // не гасим. Дёргающийся вайфай (204 подъёма и гашения за неделю на одном
+                // телефоне, 31.10–07.11.2026) иначе пересобирал ядро на каждое переключение.
+                // Уже погашенный туннель выдержки не ждёт: ниже всё идемпотентно, как и было.
+                // Заход к концу выдержки подтянет [domWaitIn].
+                if (host.tunnelLive() && !domZaderzhka.ready(now)) {
+                    KLog.i(TAG, "дома, но туннель гасить рано: держу ещё ${(domZaderzhka.leftMillis(now) + 999) / 1000} с — вайфай мог дёрнуться")
+                } else {
+                    // Гашение туннеля снимает и ядро комнаты — отдельно просить не надо.
+                    //
+                    // Зовём и на повторе тоже. Вызов идемпотентный (погашенный туннель отвечает
+                    // «ничего не делал»), а поднять туннель теперь может не только [apply]:
+                    // [trialRaiseRoom] делает это сам, когда комната нужна, а туннеля нет.
+                    // С прежним `!repeat` поднятый так туннель оставался бы висеть дома до
+                    // следующей смены обстановки — то есть ровно то, чего дом и избегает.
+                    if (host.suspendTunnel("дома обход делает роутер")) selected = null
+                    // Дома не нужна и комната WB: туннель погашен, её присмотр гасит ядро сам.
+                    releaseWb("дома обход делает роутер")
+                    // Туннеля дома нет, и запасной узел, выбранный до дома, ничего не значит: из дома
+                    // выходим с первого узла очереди. Раньше очередь сбрасывал только [start], а
+                    // возврат ([maybeReturnToPrimary]) дома не идёт — и «Финляндия», выбранная за
+                    // секунды мигания вайфая 17.10.2026 в 22:44, пережила весь вечер дома.
+                    if (queueIndexAfter(situation, nodeIndex) == 0) resetQueue("дома туннель не нужен")
+                }
             }
 
             Situation.Main -> {
@@ -3888,6 +4048,8 @@ object AutoMode {
         mainRefused = knock == Knock.Refused
         mainHollow = false
         val portOpen = knock?.let { it == Knock.Open }
+        zamerPort = portOpen
+        zamerKanal = null
         // Узел молчит — приглядке есть что искать. Отозвался (или адресов мы не знаем) —
         // искать нечего.
         peekWanted = portOpen == false
@@ -3918,6 +4080,7 @@ object AutoMode {
             !host.tunnelLive() -> null
             else -> probeThroughMain(host, proxy)
         }
+        zamerKanal = trafficFlows
         mainHollow = hollowPort(portOpen, trafficFlows)
         if (mainHollow && nodeAnsweredAt != 0L) {
             // Принятое соединение без единого байта за ним — не ответ узла. 24.10.2026 (МегаФон,
@@ -4318,6 +4481,20 @@ object AutoMode {
     }
 
     /**
+     * Адрес узла для рукопожатия: из hosts-сервера профиля ([AutoModeExits.Layout.imena]),
+     * без DNS — тем же адресом ядро набирает узел ([UzlyBezDnsPatch]). Имени в профиле нет —
+     * спрашиваем сеть, как раньше. Литерал адреса `InetAddress.getByName` разбирает без DNS.
+     */
+    private fun adresUzla(network: Network, host: String): InetAddress? {
+        val izProfilya = (layout.imena[UzlyBezDnsPatch.kanon(host)] ?: baseLayout.imena[UzlyBezDnsPatch.kanon(host)])
+            ?.firstOrNull()
+        if (izProfilya != null) {
+            runCatching { InetAddress.getByName(izProfilya) }.getOrNull()?.let { return it }
+        }
+        return network.getAllByName(host).firstOrNull()
+    }
+
+    /**
      * Примет ли адрес соединение.
      *
      * Сокет уводится мимо нашего же tun ([ProbeSocket]): одна привязка к сети от правила
@@ -4378,7 +4555,7 @@ object AutoMode {
         endpoint: AutoModeExits.Endpoint,
         timeoutMillis: Int,
     ): Knock = runCatching {
-        val address = network.getAllByName(endpoint.host).firstOrNull() ?: return Knock.Other
+        val address = adresUzla(network, endpoint.host) ?: return Knock.Other
         ProbeSocket.open { network.bindSocket(it) }.use { socket ->
             val started = SystemClock.elapsedRealtime()
             try {
@@ -4661,6 +4838,92 @@ object AutoMode {
             if (woken) return
             if (left <= 0) return
             if (peekHome()) return
+        }
+    }
+
+    /**
+     * Пауза до следующего захода с учётом выдержки дома: пока туннель живой, а «дома» ещё
+     * не продержалось ([DomZaderzhka.pending]), заход нужен к концу выдержки, не позже.
+     */
+    private fun domWaitIn(wait: Long, now: Long): Long {
+        if (!domZaderzhka.pending(now)) return wait
+        val live = host?.let { runCatching { it.tunnelLive() }.getOrDefault(false) } ?: false
+        if (!live) return wait
+        return minOf(wait, domZaderzhka.leftMillis(now) + 1_000L)
+    }
+
+    /**
+     * Ожидание на основном канале: тот же пятиминутный ритм полных заходов, но между ними —
+     * сторож транспорта ([TransportWatch]): короткая проба через закреплённый вход основного
+     * узла. Устроено как ожидание дома и в комнате: пауза режется на куски, на границе
+     * каждого идёт проба; разбудило событие — выходим сразу, заход и так вот-вот будет.
+     * Шаг по экрану: выключен — вдвое длиннее. В дозе проба не ходит ([peekTransport]).
+     */
+    private fun waitOnMain(total: Long) {
+        var left = total
+        while (active && left > 0) {
+            val screenOn = runCatching { Application.powerManager.isInteractive }.getOrDefault(true)
+            val min = Pult.long("avtomat.transport_min_millis", TransportWatch.MIN_MILLIS)
+            val max = Pult.long("avtomat.transport_max_millis", TransportWatch.MAX_MILLIS).coerceAtLeast(min)
+            val slice = TransportWatch.slice(left, Random.nextLong(min, max + 1), screenOn)
+            val before = SystemClock.elapsedRealtime()
+            val woken = waitNext(slice)
+            val spent = SystemClock.elapsedRealtime() - before
+            left -= spent
+            if (!active) return
+            // Разбудило событие, а не наш таймер.
+            if (woken) return
+            if (left <= 0) return
+            if (peekTransport()) return
+        }
+    }
+
+    /**
+     * Сторож транспорта: один запрос через закреплённый вход основного узла, мимо селектора —
+     * живые соединения не трогаются.
+     *
+     * Ничего не решает и не переключает: два провала подряд ([TransportWatch.Schetchik]) —
+     * повод для полного захода сейчас, а не через пять минут; там своя проба, задвижка с
+     * подтверждениями и очередь узлов. Это закрывает дыру одного узла в очереди: живые
+     * отказы ([otkazyUzla]) будят заход только при двух и более узлах.
+     *
+     * Не ходим: в дозе (радио спит — не будим), без туннеля (входа нет), без сети (заход
+     * разбудит система), без закреплённого входа (мерить нечем — выдумывать «мёртв» нельзя).
+     *
+     * @return true — провалов набралось, полный заход нужен немедленно.
+     */
+    private fun peekTransport(): Boolean {
+        if (!avtoSam()) return false
+        val host = this.host ?: return false
+        if (runCatching { Application.powerManager.isDeviceIdleMode }.getOrDefault(false)) return false
+        if (!runCatching { host.tunnelLive() }.getOrDefault(false)) return false
+        val main = layout.main ?: return false
+        val entry = layout.entryFor(main) ?: return false
+        if (physicalNetwork() == null) return false
+        val result = ProxyProbe.through(entry, PROBE_HOST, PROBE_PORT, Pult.int("avtomat.transport_probe_timeout_millis", TRANSPORT_PROBE_TIMEOUT_MILLIS))
+        return when (result) {
+            is ProxyProbe.Result.Live -> {
+                transportWatch.ok()
+                // Замер настоящий и ровно про основной путь — в реестр он ложится так же, как
+                // из полного захода; иначе экран пять минут показывал бы возраст прошлого захода.
+                PathRegistry.alive(PathId.MAIN, result.latencyMs)
+                refreshLink()
+                false
+            }
+
+            // Вход из прошлой жизни ядра (пересобрано посреди паузы): про канал это не говорит ничего.
+            is ProxyProbe.Result.Unmeasured -> false
+
+            is ProxyProbe.Result.Dead -> {
+                KLog.i(TAG, "сторож транспорта: основной канал не ответил (${result.reason}), провал ${transportWatch.fails + 1}")
+                if (!transportWatch.fail()) return false
+                KLog.w(TAG, "сторож транспорта: провалы подряд — проверяю обстановку целиком, не дожидаясь ритма")
+                // Серией перепроверок пользуемся той же, что и после смены сети: обстановка
+                // изменилась так же доказанно, а подтверждений задвижка всё равно требует —
+                // переключение остаётся защищённым от одиночного невезения.
+                burst.restart()
+                true
+            }
         }
     }
 

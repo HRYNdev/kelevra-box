@@ -278,6 +278,14 @@ class MainActivity :
             }
             return
         }
+        if (intent.action == io.nekohasekai.sfa.compose.screen.home.OplataNapominaniya.ACTION_OPLATA) {
+            // Тап по напоминанию об оплате: главный экран и свежий ответ /oplata.
+            intent.action = null
+            io.nekohasekai.sfa.compose.screen.home.OplataNapominaniya.ubrat(this)
+            io.nekohasekai.sfa.compose.screen.home.OplataSostoyanie.obnovit(sila = true)
+            pendingNavigationRoute.value = Screen.Dashboard.route
+            return
+        }
         if (intent.action == io.nekohasekai.sfa.update.ObnovleniyaPult.ACTION_USTANOVIT) {
             KLog.i("KelevraObnovlenie", "тап по «Обновление готово» — передаю файл системе")
             zaprosUstanovki.value = true
@@ -1011,6 +1019,10 @@ class MainActivity :
         LaunchedEffect(pendingRoute) {
             if (pendingRoute != null) {
                 navController.navigate(pendingRoute) {
+                    // Главный экран — начало графа: снимаем всё, что открыто поверх.
+                    if (pendingRoute == Screen.Dashboard.route) {
+                        popUpTo(navController.graph.findStartDestination().id)
+                    }
                     launchSingleTop = true
                 }
                 pendingNavigationRoute.value = null

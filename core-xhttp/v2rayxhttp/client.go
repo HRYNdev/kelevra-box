@@ -32,7 +32,6 @@ import (
 	"github.com/sagernet/sing/common/ntp"
 	sHTTP "github.com/sagernet/sing/protocol/http"
 	"github.com/sagernet/sing/service"
-	"golang.org/x/net/http2"
 )
 
 type Client struct {
@@ -320,12 +319,22 @@ func getBaseRequestURL(options *option.V2RayXHTTPBaseOptions, dest M.Socksaddr, 
 func createHTTPClient(ctx context.Context, dest M.Socksaddr, dialer N.Dialer, options *option.V2RayXHTTPBaseOptions, tlsConfig tls.Config) DialerClient {
 	httpVersion := decideHTTPVersion(tlsConfig)
 	dialContext := func(ctxInner context.Context) (net.Conn, error) {
+		// Kelevra (правка 8): контекст запроса без отмены (WithoutCancel) —
+		// без своего срока зависший TLS держит OpenStream и весь ClientBind навсегда.
+		// Контекст нужен только на время диала и рукопожатия (kelevra_zhivost.go).
+		ctxInner, cancel := context.WithTimeout(ctxInner, kelevraDialTimeout)
+		defer cancel()
 		conn, err := dialer.DialContext(ctxInner, "tcp", dest)
 		if err != nil {
 			return nil, err
 		}
 		if tlsConfig != nil && httpVersion != "3" {
-			return tls.ClientHandshake(ctxInner, conn, tlsConfig)
+			tlsConn, err := tls.ClientHandshake(ctxInner, conn, tlsConfig)
+			if err != nil {
+				conn.Close()
+				return nil, err
+			}
+			return tlsConn, nil
 		}
 		return conn, nil
 	}
@@ -375,18 +384,16 @@ func createHTTPClient(ctx context.Context, dest M.Socksaddr, dialer N.Dialer, op
 		}
 	case "2":
 		if keepAlivePeriod == 0 {
-			keepAlivePeriod = net.ChromeH2KeepAlivePeriod
+			// Kelevra (правка 9): 30 с вместо ChromeH2KeepAlivePeriod 45 с (kelevra_zhivost.go)
+			keepAlivePeriod = kelevraH2ReadIdleTimeout
 		}
 		if keepAlivePeriod < 0 {
 			keepAlivePeriod = 0
 		}
-		transport = &http2.Transport{
-			DialTLSContext: func(ctxInner context.Context, network string, addr string, cfg *gotls.Config) (net.Conn, error) {
-				return dialContext(ctxInner)
-			},
-			IdleConnTimeout: net.ConnIdleTimeout,
-			ReadIdleTimeout: keepAlivePeriod,
-		}
+		// Kelevra (правка 8): PING без ответа и запись без прогресса — соединение мёртво.
+		// Kelevra (правка 9): свой пул соединений — мёртвое соединение под новым потоком
+		// распознаётся за секунды, его потоки сразу получают ошибку (kelevra_mertvoe.go).
+		transport = kelevraNewH2Transport(dialContext, keepAlivePeriod, net.ConnIdleTimeout, kelevraLogger(ctx))
 	default:
 		httpDialContext := func(ctxInner context.Context, network string, addr string) (net.Conn, error) {
 			return dialContext(ctxInner)
