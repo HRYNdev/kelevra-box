@@ -637,7 +637,7 @@ fun HomeScreen(
                         info = oplRazdel,
                         now = now,
                         aktivna = sub?.active,
-                        trafik = sub?.note,
+                        trafik = sub?.noteBezSroka,
                         onOplatit = {
                             // Шторка оплаты — поверх главного экрана, как и из карточки.
                             showSubscription = false
