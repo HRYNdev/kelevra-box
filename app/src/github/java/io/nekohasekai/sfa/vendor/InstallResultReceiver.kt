@@ -51,6 +51,22 @@ class InstallResultReceiver : BroadcastReceiver() {
                     runCatching { context.startActivity(it) }
                         .onFailure { e -> Log.w(TAG_ISHOD, "окно подтверждения не открылось: ${e.message}") }
                 }
+                // Открылось ли окно, отсюда не узнать: из фона система гасит его молча, и
+                // установка висела «ждёт подтверждения» без единого следа для человека.
+                // Поэтому всегда ещё и «Обновление готово — нажмите»: тап открывает
+                // приложение и ставит тот же файл с окном. Снимает уведомление успех установки.
+                val pending = goAsync()
+                GlobalScope.launch(Dispatchers.IO) {
+                    try {
+                        val info = UpdateState.updateInfo.value ?: run {
+                            UpdateState.loadFromCache()
+                            UpdateState.updateInfo.value
+                        }
+                        if (info != null) UpdatePovtorWork.pokazatGotovo(context.applicationContext, info)
+                    } finally {
+                        pending.finish()
+                    }
+                }
             }
             PackageInstaller.STATUS_SUCCESS -> {
                 Log.d(TAG, "Installation successful")

@@ -32,8 +32,8 @@ import java.util.concurrent.TimeUnit
 /**
  * Повтор обновления после отказа.
  *
- * Разовая работа по лестнице [IshodUstanovki.zaderzhkaMinut]: заново скачивает и проверяет
- * файл, чтобы следующее нажатие не упиралось в сеть, и напоминает уведомлением. Поставить
+ * Разовая работа по лестнице [IshodUstanovki.zaderzhkaMinut]: берёт скачанный файл или
+ * докачивает его, чтобы следующее нажатие не упиралось в сеть, и напоминает уведомлением. Поставить
  * версию сама может только при тихой установке — без неё системное окно подтверждения из
  * фона не откроется. Лестница конечная, счётчик отказов на версию живёт в настройках, так
  * что зациклиться работа не может.
@@ -154,7 +154,9 @@ class UpdatePovtorWork(appContext: Context, params: WorkerParameters) : Coroutin
         }
         KLog.i(TAG, "повтор обновления: версия ${info.versionName}")
         val apkFile = try {
-            ApkDownloader().use { it.download(info.downloadUrl, info) }
+            ApkDownloader.download(info.downloadUrl, info) {
+                ZagruzkaNaPerednem.zakrepit(this, info.versionName)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {

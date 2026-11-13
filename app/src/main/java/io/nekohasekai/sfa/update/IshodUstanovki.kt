@@ -147,33 +147,25 @@ object IshodUstanovki {
     fun versiyaIzImeni(imya: String): Int =
         Regex("""^update-(\d+)\.apk$""").matchEntire(imya)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
-    /** Уникальное имя временного файла на один вызов: два воркера одной версии не пишут в один файл. */
-    fun imyaChastichnogoFayla(versionCode: Int): String =
-        "${imyaFayla(versionCode)}.${java.util.UUID.randomUUID()}.part"
+    /**
+     * Недокачанный файл версии — одно постоянное имя: следующая попытка, следующая работа
+     * и следующий запуск продолжают его с места обрыва ([ZagruzkaApk]). Раньше имя было
+     * случайным на каждый вызов, а файл стирался перед каждой попыткой.
+     */
+    fun imyaChastichnogoFayla(versionCode: Int): String = "${imyaFayla(versionCode)}.part"
 
     /**
      * Файлы кэша обновлений, которые уборка перед скачиванием снесёт: всё, кроме готового
-     * файла [imyaGotovogo] и чужих свежих `.part` — младше [porogMs] мс с последней записи.
+     * и недокачанного файла версии [versionCode] — файлы прошлых версий и остатки старых
+     * временных файлов со случайными именами.
      *
-     * Порог 5 минут: заметно дольше одной попытки скачивания на обычной сети (в
-     * ApkDownloader их всего 2 подряд), и заметно короче ближайшего повтора в лестнице
-     * (15 минут) — «свежий» .part не спутать со следующим циклом того же воркера.
-     *
-     * До этой правки уборка сносила ЛЮБОЙ файл, кроме готового apk, включая `.part`,
-     * который прямо сейчас пишет второй воркер: UpdateWorker и UpdatePovtorWork не
-     * сериализованы между собой (#14), скачанные байты терялись, rename падал с
-     * NoSuchFileException. Красный тест на старой версии этой функции — ApkKeshTest.
+     * Свежий чужой `.part` больше не бережётся по времени записи: загрузка одна на всё
+     * приложение ([ZagruzkaApk]), второго пишущего нет.
      */
-    fun kUdaleniyu(
-        files: List<java.io.File>,
-        imyaGotovogo: String,
-        seychasMs: Long,
-        porogMs: Long = 5 * 60_000L,
-    ): List<java.io.File> =
-        files.filter { file ->
-            file.name != imyaGotovogo &&
-                !(file.name.endsWith(".part") && seychasMs - file.lastModified() < porogMs)
-        }
+    fun kUdaleniyu(files: List<java.io.File>, versionCode: Int): List<java.io.File> {
+        val ostavit = setOf(imyaFayla(versionCode), imyaChastichnogoFayla(versionCode))
+        return files.filter { it.name !in ostavit }
+    }
 
     /** «sha256:<64 hex>» из поля digest у файла релиза; всё прочее — null. */
     fun sha256IzDigest(digest: String?): String? =
@@ -207,6 +199,14 @@ object IshodUstanovki {
             "VERIFICATION_FAILURE" in soobshchenie.orEmpty().uppercase() &&
             bylaTihaya &&
             !uzhePovtoryali
+
+    /**
+     * Можно ли ставить версию [versiya] тихо. Нельзя, если тихую установку этой версии уже
+     * отклонила проверка системы ([otklonenaDlya] — номер из `updatePovtorSOknom`): иначе
+     * каждое следующее нажатие «Установить» снова шло тихо, получало тот же отказ, а повтор
+     * с окном на версию уже был израсходован — и окно подтверждения человек больше не видел.
+     */
+    fun tihoDlyaVersii(versiya: Int, otklonenaDlya: Int): Boolean = versiya <= 0 || versiya != otklonenaDlya
 
     /** Как шла установка: «тихая» (без окна системы) или «с окном». */
     fun rezhim(tihaya: Boolean): String = if (tihaya) "тихая" else "с окном"

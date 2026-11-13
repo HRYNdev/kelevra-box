@@ -114,8 +114,11 @@ class UpdateWorker(private val appContext: Context, params: WorkerParameters) : 
         UpdateState.setUpdate(updateInfo)
 
         // Файл качаем заранее в любом случае: и для тихой установки, и для «одного нажатия».
+        // Уже скачанный и сверенный берётся без сети; качать — на переднем плане.
         val apkFile = try {
-            ApkDownloader().use { it.download(updateInfo.downloadUrl, updateInfo) }
+            ApkDownloader.download(updateInfo.downloadUrl, updateInfo) {
+                ZagruzkaNaPerednem.zakrepit(this, updateInfo.versionName)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
