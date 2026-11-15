@@ -394,6 +394,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 KLog.i(TAG, "сервис запущен дома: профиль «$lastProfileName», ядро не поднимаем")
                 tunnelSuspended = true
                 status.postValue(Status.Started)
+                Pult.sluzhbaPoshla()
                 withContext(Dispatchers.Main) {
                     notification.show(lastProfileName, R.string.status_home)
                 }
@@ -469,6 +470,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             runCatching { Zapisi.start() }
             KLog.i(TAG, "сервис запущен: профиль «$lastProfileName», ядро поднято")
             status.postValue(Status.Started)
+            Pult.sluzhbaPoshla()
             withContext(Dispatchers.Main) {
                 notification.show(lastProfileName, R.string.status_started)
             }
@@ -1759,6 +1761,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             withContext(Dispatchers.Main) {
                 KLog.i(TAG, "сервис остановлен")
                 status.value = Status.Stopped
+                Pult.sluzhbaOstanovlena()
                 service.stopSelf()
             }
         }
@@ -1811,6 +1814,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 callback.onServiceAlert(type.ordinal, message)
             }
             status.value = Status.Stopped
+            Pult.sluzhbaOstanovlena()
             service.stopSelf()
         }
     }
@@ -1930,6 +1934,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             }
             notification.close()
             status.value = Status.Stopped
+            Pult.sluzhbaOstanovlena()
             KLog.i(TAG, "служба погашена тихо: $pochemu")
             service.stopSelf()
         }

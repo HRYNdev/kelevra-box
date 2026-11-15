@@ -182,29 +182,110 @@ class PultYadroTest {
         assertEquals(PultYadro.SHAG_MAX_MS, s.ispytanie!!.nablyudenoMs)
     }
 
+    private val sborka = 711175
+
+    /** Служба поднялась (флаг стоит), процесс умер, новый процесс стартует. */
+    private fun upalSoSluzhboy(s: PultSostoyanie, kogda: Long) =
+        PultYadro.naStarte(s.copy(sluzhbaZhila = true), kogda, sborka)
+
     @Test
-    fun `три падения подряд на испытании — откат`() {
-        var s = naIspytanii()
+    fun `три смерти процесса при работающей службе — откат`() {
+        var s = naIspytanii().copy(sborka = sborka)
         val t = t0 + 20 * 60_000L
-        s = PultYadro.naStarte(s, t + 60_000L).sostoyanie
-        s = PultYadro.naStarte(s, t + 70_000L).sostoyanie
+        s = upalSoSluzhboy(s, t + 60_000L).sostoyanie
+        s = upalSoSluzhboy(s, t + 70_000L).sostoyanie
         assertNotNull(s.ispytanie)
-        val itog = PultYadro.naStarte(s, t + 80_000L)
+        val itog = upalSoSluzhboy(s, t + 80_000L)
         assertNull(itog.sostoyanie.ispytanie)
         assertEquals(30, itog.sostoyanie.nastroyki["opros.info_min"])
         assertTrue(itog.sostoyanie.otkat)
     }
 
     @Test
-    fun `перезапуски после долгой жизни процесса — не падения`() {
-        var s = naIspytanii()
+    fun `старты процесса без службы — не падения, сколько бы их ни было`() {
+        var s = naIspytanii().copy(sborka = sborka)
+        val t = t0 + 20 * 60_000L
+        repeat(40) { i -> s = PultYadro.naStarte(s, t + i * 46_000L, sborka).sostoyanie }
+        assertNotNull(s.ispytanie)
+        assertEquals(0, s.ispytanie!!.startov)
+        assertFalse(s.otkat)
+        assertTrue(s.plohieVersii.isEmpty())
+    }
+
+    @Test
+    fun `штатно остановленная служба не делает следующий старт падением`() {
+        var s = naIspytanii().copy(sborka = sborka)
+        repeat(5) { i ->
+            s = PultYadro.naStarte(s.copy(sluzhbaZhila = false), t0 + 20 * 60_000L + i * 1000L, sborka).sostoyanie
+        }
+        assertEquals(0, s.ispytanie!!.startov)
+    }
+
+    @Test
+    fun `старт процесса снимает флаг службы до её запуска`() {
+        val s = upalSoSluzhboy(naIspytanii().copy(sborka = sborka), t0 + 20 * 60_000L).sostoyanie
+        assertFalse(s.sluzhbaZhila)
+        assertEquals(1, s.ispytanie!!.startov)
+    }
+
+    @Test
+    fun `падения, между которыми служба прожила дольше порога, не копятся`() {
+        var s = naIspytanii().copy(sborka = sborka)
         val t = t0 + 20 * 60_000L
         repeat(5) { i ->
-            s = PultYadro.naStarte(s, t + i * 60_000L).sostoyanie
+            s = upalSoSluzhboy(s, t + i * 60_000L).sostoyanie
             s = PultYadro.prozhilBezPadeniya(s)
         }
         assertNotNull(s.ispytanie)
         assertEquals(0, s.ispytanie!!.startov)
+    }
+
+    @Test
+    fun `новая сборка забывает метки отката старой, не трогая настройки и испытание`() {
+        val staroe = naIspytanii().copy(
+            sborka = 711174,
+            plohieVersii = setOf(99L),
+            plohieOtpechatki = setOf("abc"),
+            otkat = true,
+            sluzhbaZhila = true,
+        )
+        val itog = PultYadro.naStarte(staroe, t0 + 30 * 60_000L, sborka)
+        val s = itog.sostoyanie
+        assertEquals(sborka, s.sborka)
+        assertTrue(s.plohieVersii.isEmpty())
+        assertTrue(s.plohieOtpechatki.isEmpty())
+        assertFalse(s.otkat)
+        assertFalse(PultYadro.zagolovok(s).contains("pult:otkat"))
+        // Обновление убило процесс со службой — это не падение.
+        assertNotNull(s.ispytanie)
+        assertEquals(0, s.ispytanie!!.startov)
+        assertEquals(staroe.nastroyki, s.nastroyki)
+    }
+
+    @Test
+    fun `та же сборка метки отката сохраняет`() {
+        val s0 = PultSostoyanie(sborka = sborka, plohieVersii = setOf(99L), plohieOtpechatki = setOf("abc"), otkat = true)
+        val s = PultYadro.naStarte(s0, t0, sborka).sostoyanie
+        assertEquals(setOf(99L), s.plohieVersii)
+        assertEquals(setOf("abc"), s.plohieOtpechatki)
+        assertTrue(s.otkat)
+    }
+
+    @Test
+    fun `состояние без поля сборки (старое) считается другой сборкой`() {
+        val staroe = PultSostoyanie(plohieVersii = setOf(99L), otkat = true)
+        val s = PultSostoyanie.izJson(staroe.vJson())
+        assertEquals(0, s.sborka)
+        val novoe = PultYadro.naStarte(s, t0, sborka).sostoyanie
+        assertTrue(novoe.plohieVersii.isEmpty())
+        assertFalse(novoe.otkat)
+    }
+
+    @Test
+    fun `сборка и флаг службы переживают запись на диск`() {
+        val s = PultSostoyanie.izJson(PultSostoyanie(sborka = sborka, sluzhbaZhila = true).vJson())
+        assertEquals(sborka, s.sborka)
+        assertTrue(s.sluzhbaZhila)
     }
 
     @Test
@@ -268,7 +349,7 @@ class PultYadroTest {
     @Test
     fun `команда, прерванная падением, после старта получает ошибку`() {
         val itog = prinyat(PultSostoyanie(), dannye(1, komandy = JSONArray().put(komanda("x", "diagnostika"))))
-        val s = PultYadro.naStarte(itog.sostoyanie, t0 + 5000).sostoyanie
+        val s = PultYadro.naStarte(itog.sostoyanie, t0 + 5000, sborka).sostoyanie
         assertEquals("oshibka-prervano", s.komandy["x"]!!.itog)
     }
 

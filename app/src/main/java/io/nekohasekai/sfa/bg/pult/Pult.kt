@@ -93,7 +93,7 @@ object Pult {
             if (dir != null) return
             dir = papka
             val prochitano = runCatching { PultSostoyanie.izJson(JSONObject(File(papka, FAYL).readText())) }.getOrNull()
-            val itog = PultYadro.naStarte(prochitano ?: PultSostoyanie(), System.currentTimeMillis())
+            val itog = PultYadro.naStarte(prochitano ?: PultSostoyanie(), System.currentTimeMillis(), io.nekohasekai.sfa.BuildConfig.VERSION_CODE)
             s = itog.sostoyanie
             itog.zhurnal.forEach { KLog.w(TAG, it) }
             sohranit()
@@ -104,14 +104,32 @@ object Pult {
             )
             if (itog.nastroykiIzmenilis) ispolnitel?.nastroykiIzmenilis()
         }
-        // Процесс прожил достаточно — это не падение: счётчик стартов испытания с нуля.
+    }
+
+    /** Служба запущена: с этого момента смерть процесса — падение. Прожила [PultYadro.ZHIZN_BEZ_PADENIYA_MS] — счётчик падений с нуля. */
+    fun sluzhbaPoshla() {
+        zagruzitEsliNado()
+        synchronized(zamok) {
+            s = s.copy(sluzhbaZhila = true)
+            sohranit()
+        }
         scope.launch {
             kotlinx.coroutines.delay(PultYadro.ZHIZN_BEZ_PADENIYA_MS)
             synchronized(zamok) {
+                if (!s.sluzhbaZhila) return@launch
                 val bylo = s
                 s = PultYadro.prozhilBezPadeniya(s)
                 if (s !== bylo) sohranit()
             }
+        }
+    }
+
+    /** Служба остановлена штатно (нами): дальнейшая смерть процесса падением не считается. */
+    fun sluzhbaOstanovlena() {
+        synchronized(zamok) {
+            if (!s.sluzhbaZhila) return
+            s = s.copy(sluzhbaZhila = false)
+            sohranit()
         }
     }
 
