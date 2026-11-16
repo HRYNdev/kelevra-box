@@ -179,4 +179,38 @@ class OplataTest {
         assertEquals(emptyList<Napominanie>(), napominaniya(OplataInfo(platit = false), 0L, ekb))
         assertEquals(emptyList<Napominanie>(), napominaniya(null, 0L, ekb))
     }
+
+    @Test
+    fun `отказ — разбор поля, старый сервер без поля и ждущая заявка — нет отказа`() {
+        assertTrue(razobratOplatu(JSONObject("""{"platit": true, "cena": 249, "zhdet": false, "otkaz": true}"""))!!.otkaz)
+        assertFalse(razobratOplatu(JSONObject("""{"platit": true, "cena": 249, "zhdet": false}"""))!!.otkaz)
+        assertFalse(razobratOplatu(JSONObject("""{"platit": true, "cena": 249, "zhdet": true, "otkaz": true}"""))!!.otkaz)
+        assertFalse(razobratOplatu(JSONObject("""{"platit": false, "otkaz": true}"""))!!.otkaz)
+    }
+
+    @Test
+    fun `карточка — отказ показывает оплата не найдена, ждущая заявка важнее`() {
+        val now = 1_800_000_000_000L
+        fun v(srok: Long, otkaz: Boolean, zhdet: Boolean = false) =
+            vidOplaty(OplataInfo(platit = true, cena = 249, srokMs = srok, zhdet = zhdet, otkaz = otkaz), now)
+        assertEquals(VidOplaty(ZagolovokOplaty.OplachenoDo, false, StrokaOplaty.NeNajdena), v(now + 10 * den, otkaz = true))
+        assertEquals(VidOplaty(ZagolovokOplaty.PodpiskaDo, true, StrokaOplaty.NeNajdena), v(now + 2 * den, otkaz = true))
+        assertEquals(VidOplaty(ZagolovokOplaty.Zakonchilas, true, StrokaOplaty.NeNajdena), v(now - 1, otkaz = true))
+        assertEquals(StrokaOplaty.Proveryaetsya, v(now + 10 * den, otkaz = true, zhdet = true).stroka)
+        assertEquals(null, v(now + 10 * den, otkaz = false).stroka)
+    }
+
+    @Test
+    fun `ждущая заявка без удачного ответа дольше пяти минут — снова обычная оплата`() {
+        val now = 1_800_000_000_000L
+        val zhdet = OplataInfo(platit = true, cena = 249, srokMs = now - 1, zhdet = true)
+        assertEquals(zhdet, bezUstarevshegoZhdet(zhdet, now - 60_000L, now))
+        assertEquals(zhdet, bezUstarevshegoZhdet(zhdet, now - ZHDET_BEZ_OTVETA_MS, now))
+        val snyato = bezUstarevshegoZhdet(zhdet, now - ZHDET_BEZ_OTVETA_MS - 1, now)!!
+        assertFalse(snyato.zhdet)
+        assertEquals(StrokaOplaty.Oplatit, vidOplaty(snyato, now).stroka)
+        val neZhdet = zhdet.copy(zhdet = false)
+        assertEquals(neZhdet, bezUstarevshegoZhdet(neZhdet, 0L, now))
+        assertNull(bezUstarevshegoZhdet(null, 0L, now))
+    }
 }

@@ -25,6 +25,8 @@ data class OplataInfo(
     val srokMs: Long = 0L,
     /** «Я оплатил» нажато, срок ещё не продлён. */
     val zhdet: Boolean = false,
+    /** Последняя заявка закрыта отказом, новой нет. Старый сервер поля не шлёт — false. */
+    val otkaz: Boolean = false,
     /** Подтверждённые оплаты, свежие первыми; нет — пусто. */
     val istoriya: List<OplataZapis> = emptyList(),
 )
@@ -47,6 +49,7 @@ fun razobratOplatu(json: JSONObject): OplataInfo? {
         nomer = json.optString("nomer").chistyTekst(),
         srokMs = srokMillis(json.optString("srok")),
         zhdet = json.optBoolean("zhdet"),
+        otkaz = !json.optBoolean("zhdet") && json.optBoolean("otkaz"),
         istoriya = razobratIstoriyu(json),
     )
 }
@@ -103,6 +106,17 @@ fun srokDdMm(srokMs: Long, zona: TimeZone = TimeZone.getDefault()): String =
 /** Как часто спрашивать `/oplata`, пока приложение на экране: час; ждёт подтверждения — 5 минут. */
 fun shagOprosaOplaty(zhdet: Boolean): Long = if (zhdet) 5L * 60 * 1000 else 60L * 60 * 1000
 
+/** Заявка ждёт, а удачного ответа сервера нет дольше этого — «Оплата проверяется» не показываем. */
+const val ZHDET_BEZ_OTVETA_MS = 5L * 60 * 1000
+
+/**
+ * Ждущая заявка по ответу [poluchenoMs] (0 — ответа не было), сейчас [nowMs]: ответ старше
+ * [ZHDET_BEZ_OTVETA_MS] — zhdet снимается, вместо «Оплата проверяется» снова обычная оплата.
+ * Иначе — [info] как есть.
+ */
+fun bezUstarevshegoZhdet(info: OplataInfo?, poluchenoMs: Long, nowMs: Long): OplataInfo? =
+    if (info != null && info.zhdet && nowMs - poluchenoMs > ZHDET_BEZ_OTVETA_MS) info.copy(zhdet = false) else info
+
 /** Дата заявки «ДД.ММ.ГГГГ» по часам телефона. */
 fun dataDdMmGggg(ms: Long, zona: TimeZone = TimeZone.getDefault()): String =
     SimpleDateFormat("dd.MM.yyyy", Locale.US).apply { timeZone = zona }.format(java.util.Date(ms))
@@ -123,7 +137,7 @@ enum class ZagolovokOplaty {
 }
 
 /** Строка оплаты под заголовком карточки. */
-enum class StrokaOplaty { Oplatit, Proveryaetsya }
+enum class StrokaOplaty { Oplatit, Proveryaetsya, NeNajdena }
 
 /**
  * Что показать в карточке «Подписка» на главном экране.
@@ -133,7 +147,8 @@ data class VidOplaty(val zagolovok: ZagolovokOplaty, val zametno: Boolean, val s
 
 /**
  * Обычный срок (> 3 суток) и бессрочно — без строки оплаты: платить заранее — из раздела подписки.
- * ≤ 3 суток и кончился — заметно и со строкой «Оплатить». Ждёт заявка — строка «Оплата проверяется» всегда.
+ * ≤ 3 суток и кончился — заметно и со строкой «Оплатить». Ждёт заявка — строка «Оплата проверяется» всегда;
+ * заявка закрыта отказом — строка «Оплата не найдена» до новой отправки.
  */
 fun vidOplaty(info: OplataInfo, nowMs: Long): VidOplaty {
     val srok = srokOplaty(info.srokMs, nowMs)
@@ -146,6 +161,7 @@ fun vidOplaty(info: OplataInfo, nowMs: Long): VidOplaty {
     val zametno = srok == SrokOplaty.Skoro || srok == SrokOplaty.Konchilsya
     val stroka = when {
         info.zhdet -> StrokaOplaty.Proveryaetsya
+        info.otkaz -> StrokaOplaty.NeNajdena
         zametno -> StrokaOplaty.Oplatit
         else -> null
     }

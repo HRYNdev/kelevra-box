@@ -118,6 +118,14 @@ fun OplataRazdel(info: OplataInfo, now: Long, aktivna: Boolean?, trafik: String?
                 }
             },
         )
+        if (info.otkaz) {
+            Text(
+                text = stringResource(R.string.oplata_ne_najdena),
+                fontFamily = Montserrat,
+                fontSize = 13.sp,
+                color = colors.Warn,
+            )
+        }
         if (info.istoriya.isNotEmpty()) {
             KDivider()
             Text(
@@ -145,11 +153,11 @@ fun OplataRazdel(info: OplataInfo, now: Long, aktivna: Boolean?, trafik: String?
 }
 
 /**
- * Строка оплаты внутри карточки подписки: «249 ₽» и справа «Оплатить» либо «Оплата проверяется».
- * Нажатие — шторка оплаты.
+ * Строка оплаты внутри карточки подписки: «249 ₽» и справа «Оплатить», «Оплата проверяется» или
+ * «Оплата не найдена» ([stroka] из [vidOplaty]). Нажатие — шторка оплаты.
  */
 @Composable
-fun OplataStroka(info: OplataInfo, onOpen: () -> Unit) {
+fun OplataStroka(info: OplataInfo, stroka: StrokaOplaty, onOpen: () -> Unit) {
     val colors = K
     Row(
         modifier = Modifier
@@ -165,15 +173,20 @@ fun OplataStroka(info: OplataInfo, onOpen: () -> Unit) {
             color = colors.Text,
             modifier = Modifier.weight(1f),
         )
-        if (info.zhdet) {
-            Text(
+        when (stroka) {
+            StrokaOplaty.Proveryaetsya -> Text(
                 text = stringResource(R.string.oplata_proveryaetsya),
                 fontFamily = Montserrat,
                 fontSize = 13.sp,
                 color = colors.Dim,
             )
-        } else {
-            Text(
+            StrokaOplaty.NeNajdena -> Text(
+                text = stringResource(R.string.oplata_ne_najdena),
+                fontFamily = Montserrat,
+                fontSize = 13.sp,
+                color = colors.Warn,
+            )
+            StrokaOplaty.Oplatit -> Text(
                 text = stringResource(R.string.oplata_oplatit),
                 fontFamily = Montserrat,
                 fontWeight = FontWeight.SemiBold,
@@ -291,7 +304,10 @@ fun OplataShtorka(info: OplataInfo, onDismiss: () -> Unit) {
                 when (otpravka) {
                     OplataSostoyanie.Otpravka.UzheOtpravleno -> Soobshchenie(stringResource(R.string.oplata_uzhe_otpravleno))
                     OplataSostoyanie.Otpravka.Oshibka -> Soobshchenie(stringResource(R.string.oplata_net_svyazi), colors.Err)
-                    else -> Unit
+                    OplataSostoyanie.Otpravka.Idet -> Unit
+                    // Заявка закрыта отказом — до новой отправки.
+                    OplataSostoyanie.Otpravka.Net ->
+                        if (info.otkaz) Soobshchenie(stringResource(R.string.oplata_ne_najdena), colors.Warn)
                 }
             }
             Spacer(Modifier.height(20.dp))

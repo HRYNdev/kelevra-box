@@ -24,7 +24,9 @@ import java.net.URL
  * (дверь в профиле идёт `direct`, мимо узлов — снятая с узлов учётка запрос не ломает),
  * при обрыве — через локальный вход туннеля и по другим дверям ([ZapasnoyPut.poluchit]).
  *
- * Сбой сети или сервера держит прежнее и ничего больше не трогает: ни сводку, ни экран.
+ * Сбой сети или сервера держит прежнее и ничего больше не трогает: ни сводку, ни экран. Исключение — ждущая
+ * заявка: удачного ответа нет дольше [ZHDET_BEZ_OTVETA_MS] — zhdet снимается ([bezUstarevshegoZhdet]),
+ * «Оплата проверяется» не висит без срока.
  */
 object OplataSostoyanie {
     private const val TAG = "KelevraOplata"
@@ -96,6 +98,7 @@ object OplataSostoyanie {
             }
             if (b == neUmeet) return
             val now = System.currentTimeMillis()
+            snyatUstarevshiyZhdet(now)
             if (!sila && kogdaMs > 0L && now - kogdaMs < shagOprosaOplaty(_info.value?.zhdet == true)) return
             when (val o = zapros(b, post = false)) {
                 is Otvet.Est -> {
@@ -114,14 +117,26 @@ object OplataSostoyanie {
                     neUmeet = b
                     OplataNapominaniya.perestavit(null)
                 }
-                // Сбой и 429 подбора кода: держим прежнее, спросим при следующем показе экрана.
-                Otvet.Chasto, Otvet.Sboy -> Unit
+                // Сбой и 429 подбора кода: держим прежнее (кроме устаревшей ждущей заявки),
+                // спросим при следующем показе экрана.
+                Otvet.Chasto, Otvet.Sboy -> snyatUstarevshiyZhdet(System.currentTimeMillis())
             }
         } catch (e: Exception) {
             KLog.w(TAG, "оплата не прочитана: ${e.javaClass.simpleName}")
+            snyatUstarevshiyZhdet(System.currentTimeMillis())
         } finally {
             lock.unlock()
         }
+    }
+
+    /** Ждущая заявка без удачного ответа дольше [ZHDET_BEZ_OTVETA_MS] — снять zhdet, вернуть напоминания. */
+    private fun snyatUstarevshiyZhdet(now: Long) {
+        val bylo = _info.value
+        val stalo = bezUstarevshegoZhdet(bylo, kogdaMs, now)
+        if (stalo === bylo) return
+        KLog.i(TAG, "заявка ждёт, ответа сервера нет дольше ${ZHDET_BEZ_OTVETA_MS / 60_000} мин — «проверяется» снято")
+        _info.value = stalo
+        OplataNapominaniya.perestavit(stalo)
     }
 
     /** «Я оплатил»: `POST /oplatil`. Итог — в [otpravka] и [info]. */
