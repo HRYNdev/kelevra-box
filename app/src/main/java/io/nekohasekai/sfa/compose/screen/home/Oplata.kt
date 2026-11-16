@@ -106,17 +106,6 @@ fun srokDdMm(srokMs: Long, zona: TimeZone = TimeZone.getDefault()): String =
 /** Как часто спрашивать `/oplata`, пока приложение на экране: час; ждёт подтверждения — 5 минут. */
 fun shagOprosaOplaty(zhdet: Boolean): Long = if (zhdet) 5L * 60 * 1000 else 60L * 60 * 1000
 
-/** Заявка ждёт, а удачного ответа сервера нет дольше этого — «Оплата проверяется» не показываем. */
-const val ZHDET_BEZ_OTVETA_MS = 5L * 60 * 1000
-
-/**
- * Ждущая заявка по ответу [poluchenoMs] (0 — ответа не было), сейчас [nowMs]: ответ старше
- * [ZHDET_BEZ_OTVETA_MS] — zhdet снимается, вместо «Оплата проверяется» снова обычная оплата.
- * Иначе — [info] как есть.
- */
-fun bezUstarevshegoZhdet(info: OplataInfo?, poluchenoMs: Long, nowMs: Long): OplataInfo? =
-    if (info != null && info.zhdet && nowMs - poluchenoMs > ZHDET_BEZ_OTVETA_MS) info.copy(zhdet = false) else info
-
 /** Дата заявки «ДД.ММ.ГГГГ» по часам телефона. */
 fun dataDdMmGggg(ms: Long, zona: TimeZone = TimeZone.getDefault()): String =
     SimpleDateFormat("dd.MM.yyyy", Locale.US).apply { timeZone = zona }.format(java.util.Date(ms))

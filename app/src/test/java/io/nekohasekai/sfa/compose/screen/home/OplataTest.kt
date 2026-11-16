@@ -199,18 +199,4 @@ class OplataTest {
         assertEquals(StrokaOplaty.Proveryaetsya, v(now + 10 * den, otkaz = true, zhdet = true).stroka)
         assertEquals(null, v(now + 10 * den, otkaz = false).stroka)
     }
-
-    @Test
-    fun `ждущая заявка без удачного ответа дольше пяти минут — снова обычная оплата`() {
-        val now = 1_800_000_000_000L
-        val zhdet = OplataInfo(platit = true, cena = 249, srokMs = now - 1, zhdet = true)
-        assertEquals(zhdet, bezUstarevshegoZhdet(zhdet, now - 60_000L, now))
-        assertEquals(zhdet, bezUstarevshegoZhdet(zhdet, now - ZHDET_BEZ_OTVETA_MS, now))
-        val snyato = bezUstarevshegoZhdet(zhdet, now - ZHDET_BEZ_OTVETA_MS - 1, now)!!
-        assertFalse(snyato.zhdet)
-        assertEquals(StrokaOplaty.Oplatit, vidOplaty(snyato, now).stroka)
-        val neZhdet = zhdet.copy(zhdet = false)
-        assertEquals(neZhdet, bezUstarevshegoZhdet(neZhdet, 0L, now))
-        assertNull(bezUstarevshegoZhdet(null, 0L, now))
-    }
 }
