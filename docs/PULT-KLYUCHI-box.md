@@ -6,7 +6,7 @@
 | Ключ | Тип | Границы | По умолчанию | Что | Где в коде |
 |---|---|---|---|---|---|
 | `avtomat.connect_slack_millis` | int | 100–5000 | 500 | Запас поверх таймаута соединения: пул должен успеть отдать последний ответ, мс | AutoMode.CONNECT_SLACK_MILLIS |
-| `avtomat.dom_zaderzhka_millis` | int | 0–450000 | 45000 | Дома с живым туннелем: столько «дома» без смен сети до гашения туннеля (0 — гасить сразу), мс | AutoMode.DOM_ZADERZHKA_MILLIS |
+| `avtomat.dom_zaderzhka_millis` | int | 0–450000 | 0 | Дома с живым туннелем: столько «дома» без смен сети до гашения туннеля (0 — гасить сразу), мс | AutoMode.DOM_ZADERZHKA_MILLIS |
 | `avtomat.hint_ttl_millis` | int | 30000–3000000 | 300000 | Сколько живёт подсказка про режим сети, мс | AutoMode.HINT_TTL_MILLIS |
 | `avtomat.manual_hold_millis` | int | 360000–36000000 | 3600000 | Сколько живёт выбор, сделанный руками, если сеть под нами так и не сменилась, мс | AutoMode.MANUAL_HOLD_MILLIS |
 | `avtomat.node_answer_trust_millis` | int | 9000–900000 | 90000 | Сколько ответ узла считается свежим доводом, мс | AutoMode.NODE_ANSWER_TRUST_MILLIS |
