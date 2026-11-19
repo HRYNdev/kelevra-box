@@ -157,6 +157,14 @@ fun vidOplaty(info: OplataInfo, nowMs: Long): VidOplaty {
     return VidOplaty(zagolovok, zametno, stroka)
 }
 
+/**
+ * Отказ рядом с выросшим сроком. Владелец продлил срок руками после отказа, новой заявки нет:
+ * последняя запись у сервера всё ещё «отказ», и рядом с новым «Оплачено до» висело «Оплата не
+ * найдена». [srokPriOtkaze] — срок, при котором отказ увидели впервые; вырос — отказа нет.
+ */
+fun bezStarogoOtkaza(info: OplataInfo, srokPriOtkaze: Long?): OplataInfo =
+    if (info.otkaz && srokPriOtkaze != null && info.srokMs > srokPriOtkaze) info.copy(otkaz = false) else info
+
 /** Напоминание об оплате: за трое суток до срока или в день окончания. */
 enum class VidNapominaniya { Skoro, Konec }
 

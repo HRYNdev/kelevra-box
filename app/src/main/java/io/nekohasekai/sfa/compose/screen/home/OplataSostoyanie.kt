@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -59,6 +60,19 @@ object OplataSostoyanie {
     /** Адрес не умеет оплату (отдал не ответ оплаты): до перезапуска приложения не спрашиваем. */
     @Volatile private var neUmeet: String? = null
 
+    /** Срок, при котором впервые увидели отказ ([bezStarogoOtkaza]); null — отказа нет. */
+    @Volatile private var srokPriOtkaze: Long? = null
+
+    /** Ответ сервера → то, что покажем: отказ при выросшем сроке снимаем. */
+    private fun prinyat(info: OplataInfo?): OplataInfo? {
+        if (info == null || !info.otkaz) {
+            srokPriOtkaze = null
+            return info
+        }
+        val bylo = srokPriOtkaze ?: info.srokMs.also { srokPriOtkaze = it }
+        return bezStarogoOtkaza(info, bylo)
+    }
+
     /** Ответ двери. */
     private sealed interface Otvet {
         data class Est(val info: OplataInfo) : Otvet
@@ -93,13 +107,14 @@ object OplataSostoyanie {
                 _otpravka.value = Otpravka.Net
                 baza = b
                 kogdaMs = 0L
+                srokPriOtkaze = null
             }
             if (b == neUmeet) return
             val now = System.currentTimeMillis()
             if (!sila && kogdaMs > 0L && now - kogdaMs < shagOprosaOplaty(_info.value?.zhdet == true)) return
             when (val o = zapros(b, post = false)) {
                 is Otvet.Est -> {
-                    _info.value = o.info.takeIf { it.platit }
+                    _info.value = prinyat(o.info.takeIf { it.platit })
                     kogdaMs = now
                     OplataNapominaniya.perestavit(_info.value)
                 }
@@ -124,33 +139,45 @@ object OplataSostoyanie {
         }
     }
 
-    /** «Я оплатил»: `POST /oplatil`. Итог — в [otpravka] и [info]. */
+    /**
+     * «Я оплатил»: `POST /oplatil`. Итог — в [otpravka] и [info].
+     *
+     * Под тем же замком, что и опрос: GET, начатый до нажатия, приходил позже POST и своим
+     * `zhdet=false` перезаписывал «проверяется» — карточка снова звала оплатить, а повторное
+     * нажатие получало «уже отправлено». Теперь POST ждёт идущий GET, а новый GET во время
+     * POST не начинается ([obnovitSeychas] берёт замок через tryLock).
+     */
     fun oplatil() {
-        if (_otpravka.value == Otpravka.Idet) return
-        _otpravka.value = Otpravka.Idet
+        synchronized(this) {
+            if (_otpravka.value == Otpravka.Idet) return
+            _otpravka.value = Otpravka.Idet
+        }
         scope.launch {
-            val itog = runCatching {
-                val b = bazaPodpiski() ?: return@runCatching Otpravka.Oshibka
-                when (val o = zapros(b, post = true)) {
-                    is Otvet.Est -> {
-                        if (b == baza) {
-                            _info.value = o.info.takeIf { it.platit }
-                            kogdaMs = System.currentTimeMillis()
-                            OplataNapominaniya.perestavit(_info.value)
-                        }
-                        Otpravka.Net
-                    }
-                    Otvet.Chasto -> Otpravka.UzheOtpravleno
-                    Otvet.NeNajden, Otvet.NeOplata, Otvet.Sboy -> Otpravka.Oshibka
-                }
-            }.getOrElse {
-                KLog.w(TAG, "«Я оплатил» не отправлено: ${it.javaClass.simpleName}")
-                Otpravka.Oshibka
-            }
+            val itog = lock.withLock { otpravit() }
             KLog.i(TAG, "«Я оплатил»: ${itog.javaClass.simpleName}")
             _otpravka.value = itog
         }
     }
+
+    private suspend fun otpravit(): Otpravka =
+        runCatching {
+            val b = bazaPodpiski() ?: return@runCatching Otpravka.Oshibka
+            when (val o = zapros(b, post = true)) {
+                is Otvet.Est -> {
+                    if (b == baza) {
+                        _info.value = prinyat(o.info.takeIf { it.platit })
+                        kogdaMs = System.currentTimeMillis()
+                        OplataNapominaniya.perestavit(_info.value)
+                    }
+                    Otpravka.Net
+                }
+                Otvet.Chasto -> Otpravka.UzheOtpravleno
+                Otvet.NeNajden, Otvet.NeOplata, Otvet.Sboy -> Otpravka.Oshibka
+            }
+        }.getOrElse {
+            KLog.w(TAG, "«Я оплатил» не отправлено: ${it.javaClass.simpleName}")
+            Otpravka.Oshibka
+        }
 
     /** Сбросить сообщение под кнопкой (шторка закрыта). */
     fun zabytOtpravku() {

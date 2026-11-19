@@ -199,4 +199,15 @@ class OplataTest {
         assertEquals(StrokaOplaty.Proveryaetsya, v(now + 10 * den, otkaz = true, zhdet = true).stroka)
         assertEquals(null, v(now + 10 * den, otkaz = false).stroka)
     }
+
+    @Test
+    fun `отказ при выросшем сроке снимается, при прежнем — остаётся`() {
+        val now = 1_800_000_000_000L
+        val otkaz = OplataInfo(platit = true, cena = 249, srokMs = now + 2 * den, otkaz = true)
+        assertTrue(bezStarogoOtkaza(otkaz, srokPriOtkaze = now + 2 * den).otkaz)
+        assertTrue(bezStarogoOtkaza(otkaz, srokPriOtkaze = null).otkaz)
+        val prodlili = otkaz.copy(srokMs = now + 32 * den)
+        assertFalse(bezStarogoOtkaza(prodlili, srokPriOtkaze = now + 2 * den).otkaz)
+        assertEquals(null, vidOplaty(bezStarogoOtkaza(prodlili, now + 2 * den), now).stroka)
+    }
 }
