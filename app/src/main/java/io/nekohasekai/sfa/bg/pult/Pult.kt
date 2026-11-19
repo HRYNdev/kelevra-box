@@ -39,6 +39,17 @@ object Pult {
     @Volatile
     var ispolnitel: Ispolnitel? = null
 
+    /**
+     * Хранилище пользователя открыто (телефон разблокирован после перезагрузки). Ставит
+     * [io.nekohasekai.sfa.Application]; в JVM-тестах — всегда да.
+     */
+    @Volatile
+    var razblokirovano: () -> Boolean = { true }
+
+    /** Причина смерти прошлого процесса по записи системы ([PultYadro.naStarte]); ставит Application. */
+    @Volatile
+    var proshlyyUpal: () -> Boolean? = { null }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Команды выполняются по одной: «перейди на ключ» и «обнови профиль» не должны толкаться. */
@@ -87,13 +98,37 @@ object Pult {
      * Поднять принятый пульт с диска — один раз на процесс. Звать из фона после разблокировки
      * (filesDir — шифрованное хранилище). Повторный вызов ничего не делает: так его можно
      * звать и из фоновых работ, которые могут стартовать раньше [Application].
+     *
+     * До разблокировки (процесс поднят плиткой, она directBootAware) файл не читается, и
+     * раньше это было неотличимо от «файла нет»: пустое состояние запоминалось до конца
+     * процесса и первой же записью затирало принятый пульт вместе с испытанием. Теперь до
+     * разблокировки и при нечитаемом файле не поднимаем вовсе — поднимет следующий вызов.
      */
     fun zagruzit(papka: File) {
         synchronized(zamok) {
             if (dir != null) return
+            if (!runCatching { razblokirovano() }.getOrDefault(true)) {
+                KLog.i(TAG, "телефон ещё не разблокирован — пульт с диска подниму позже")
+                return
+            }
+            val fayl = File(papka, FAYL)
+            val tekst = if (fayl.exists()) {
+                runCatching { fayl.readText() }.getOrElse {
+                    KLog.w(TAG, "пульт с диска не прочитался: ${it.javaClass.simpleName}: ${it.message} — подниму позже")
+                    return
+                }
+            } else {
+                null
+            }
+            // Битый текст — не беда хранилища, ждать нечего: начинаем с пустого, как раньше.
+            val prochitano = tekst?.let { t -> runCatching { PultSostoyanie.izJson(JSONObject(t)) }.getOrNull() }
             dir = papka
-            val prochitano = runCatching { PultSostoyanie.izJson(JSONObject(File(papka, FAYL).readText())) }.getOrNull()
-            val itog = PultYadro.naStarte(prochitano ?: PultSostoyanie(), System.currentTimeMillis(), io.nekohasekai.sfa.BuildConfig.VERSION_CODE)
+            val itog = PultYadro.naStarte(
+                prochitano ?: PultSostoyanie(),
+                System.currentTimeMillis(),
+                io.nekohasekai.sfa.BuildConfig.VERSION_CODE,
+                runCatching { proshlyyUpal() }.getOrNull(),
+            )
             s = itog.sostoyanie
             itog.zhurnal.forEach { KLog.w(TAG, it) }
             sohranit()

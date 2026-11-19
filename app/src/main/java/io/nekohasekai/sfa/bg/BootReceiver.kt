@@ -44,6 +44,9 @@ class BootReceiver : BroadcastReceiver() {
     }
 
     private suspend fun obrabotat(obnovilos: Boolean) {
+        // Процесс мог подняться до разблокировки (плитка) — тогда пульт с диска отложен до неё,
+        // а BOOT_COMPLETED приходит как раз после.
+        io.nekohasekai.sfa.bg.pult.Pult.zagruzitEsliNado()
         val vklyuchena = Settings.startedByUser
         if (obnovilos) {
             // Успех установки своего обновления система часто не присылает: процесс

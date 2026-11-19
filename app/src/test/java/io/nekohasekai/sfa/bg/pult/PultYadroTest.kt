@@ -202,6 +202,27 @@ class PultYadroTest {
     }
 
     @Test
+    fun `убийство процесса системой при работающей службе — не падение`() {
+        var s = naIspytanii().copy(sborka = sborka)
+        val t = t0 + 20 * 60_000L
+        repeat(5) { i ->
+            s = PultYadro.naStarte(s.copy(sluzhbaZhila = true), t + i * 10_000L, sborka, upalPoSisteme = false).sostoyanie
+        }
+        assertNotNull(s.ispytanie)
+        assertEquals(0, s.ispytanie!!.startov)
+        assertFalse(s.otkat)
+        assertFalse(s.sluzhbaZhila)
+    }
+
+    @Test
+    fun `падение по записи системы считается, без записи — по флагу службы`() {
+        val s = naIspytanii().copy(sborka = sborka, sluzhbaZhila = true)
+        val t = t0 + 20 * 60_000L
+        assertEquals(1, PultYadro.naStarte(s, t, sborka, upalPoSisteme = true).sostoyanie.ispytanie!!.startov)
+        assertEquals(1, PultYadro.naStarte(s, t, sborka, upalPoSisteme = null).sostoyanie.ispytanie!!.startov)
+    }
+
+    @Test
     fun `старты процесса без службы — не падения, сколько бы их ни было`() {
         var s = naIspytanii().copy(sborka = sborka)
         val t = t0 + 20 * 60_000L

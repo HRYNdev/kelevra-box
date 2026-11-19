@@ -304,8 +304,11 @@ object PultYadro {
      * старой (плохие версии и отпечатки, флаг отката, счётчик падений) забываются сами.
      * На испытании падением считается только старт после смерти процесса при работающей службе.
      * [PADENIY_DO_OTKATA] падений подряд — откат.
+     * [upalPoSisteme] — причина смерти прошлого процесса по записи системы ([PrichinaSmerti]):
+     * false — его убили (нехватка памяти, производитель, человек), это не падение и при живой
+     * службе; true — упал; null — система не сказала (Android < 11), судим по флагу службы.
      */
-    fun naStarte(s: PultSostoyanie, nowMs: Long, sborka: Int): Itog {
+    fun naStarte(s: PultSostoyanie, nowMs: Long, sborka: Int, upalPoSisteme: Boolean? = null): Itog {
         var s1 = prervannye(s, nowMs)
         val novaya = s1.sborka != sborka
         if (novaya) {
@@ -318,7 +321,7 @@ object PultYadro {
                 ispytanie = s1.ispytanie?.copy(startov = 0),
             )
         }
-        val upal = s1.sluzhbaZhila
+        val upal = s1.sluzhbaZhila && upalPoSisteme != false
         // Новый процесс службы ещё не имеет: флаг подымет служба, когда запустится.
         s1 = s1.copy(sluzhbaZhila = false)
         val isp = s1.ispytanie ?: return Itog(s1)

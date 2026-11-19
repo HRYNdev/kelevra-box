@@ -188,12 +188,31 @@ class BoxService(private val service: Service, private val platformInterface: Pl
     @Volatile
     private var serviceStopping = false
 
+    /**
+     * Выключить попросили, пока служба поднималась (`Starting`): остановке ещё не за что
+     * взяться, и раньше просьба молча терялась — VPN оставался включённым. Кто просил;
+     * выполняется в конце подъёма ([vypolnitOtlozhennyyStop]), `null` — не просили.
+     */
+    @Volatile
+    private var otlozhennyyStop: String? = null
+
+    /**
+     * Включить попросили, пока служба гасится (`Stopping`): раньше команда терялась и
+     * служба доезжала до «выключено». Выполняется после остановки.
+     */
+    @Volatile
+    private var otlozhennyyStart = false
+
     private val receiver =
         object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.action) {
                     Action.SERVICE_CLOSE -> {
-                        stopService(intent.getStringExtra(EXTRA_KTO) ?: "не указан")
+                        val kto = intent.getStringExtra(EXTRA_KTO) ?: "не указан"
+                        if (!stopService(kto) && status.value == Status.Starting) {
+                            KLog.i(TAG, "стоп во время подъёма (кто: $kto) — выполню, когда подъём дойдёт до конца")
+                            otlozhennyyStop = kto
+                        }
                     }
 
                     PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED -> {
@@ -413,6 +432,7 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 fillRuleSetsAtHome(content)
                 // Дома туннеля нет — присмотр WB Chat ждёт его подъёма и сам поднимет ядро.
                 startWbChat()
+                vypolnitOtlozhennyyStop()
                 return
             }
 
@@ -486,6 +506,19 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             stopAndAlert(Alert.StartService, e.message)
             return
         }
+        vypolnitOtlozhennyyStop()
+    }
+
+    /**
+     * Подъём дошёл до «запущена» — выполнить стоп, присланный во время подъёма
+     * ([otlozhennyyStop]). Статус к этому моменту уже `Started`: его `postValue` ушёл на
+     * главный поток раньше, чем `withContext(Main)` после него.
+     */
+    private suspend fun vypolnitOtlozhennyyStop() {
+        val kto = otlozhennyyStop ?: return
+        otlozhennyyStop = null
+        KLog.i(TAG, "подъём дошёл до конца — выполняю стоп, присланный во время подъёма")
+        withContext(Dispatchers.Main) { stopService(kto) }
     }
 
     /**
@@ -1723,6 +1756,9 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         if (status.value != Status.Started) return false
         KLog.i(TAG, "сервис останавливается (кто: $kto)")
         runCatching { Zapisi.perehod("servis_ostanovlen", "сервис останавливается", kto = kto) }
+        // Флаг «служба жила» снимаем до разбора, а не после: смерть процесса посреди
+        // штатной остановки (закрытие ядра) — не падение пульта.
+        Pult.sluzhbaOstanovlena()
         serviceStopping = true
         status.value = Status.Stopping
         if (receiverRegistered) {
@@ -1763,6 +1799,12 @@ class BoxService(private val service: Service, private val platformInterface: Pl
                 status.value = Status.Stopped
                 Pult.sluzhbaOstanovlena()
                 service.stopSelf()
+                if (otlozhennyyStart) {
+                    otlozhennyyStart = false
+                    KLog.i(TAG, "включить просили во время остановки — запускаю")
+                    runCatching { BoxService.start() }
+                        .onFailure { KLog.w(TAG, "запуск после остановки не прошёл: ${it.javaClass.simpleName}: ${it.message}") }
+                }
             }
         }
         return true
@@ -1849,7 +1891,13 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         // Записи переходов нужны и дома, где ядра нет: «кто погасил / поднял туннель».
         runCatching { Zapisi.start() }
         komandaPrishlaAt = SystemClock.elapsedRealtime()
-        if (status.value != Status.Stopped) return Service.START_STICKY
+        if (status.value != Status.Stopped) {
+            if (status.value == Status.Stopping && !perezapusk) {
+                KLog.i(TAG, "команда на запуск во время остановки — запущу, когда служба остановится")
+                otlozhennyyStart = true
+            }
+            return Service.START_STICKY
+        }
         KLog.i(
             TAG,
             if (perezapusk) "служба поднята системой без команды (липкий перезапуск после смерти процесса)" else "команда на запуск сервиса",
@@ -1860,6 +1908,8 @@ class BoxService(private val service: Service, private val platformInterface: Pl
         tunnelPogashen = false
         if (!perezapusk) runCatching { AvtoVozvrat.ubratUvedomlenie(Application.application) }
         serviceStopping = false
+        otlozhennyyStop = null
+        otlozhennyyStart = false
         status.value = Status.Starting
         // Ставим до всего остального: дома ядро не поднимается вовсе, а проба «мы дома»
         // идёт с первого же захода — и защита ей нужна ровно тогда же.
@@ -1952,6 +2002,10 @@ class BoxService(private val service: Service, private val platformInterface: Pl
             // Сюда приходят без нашей остановки: человек ничего не нажимал, а службы нет.
             KLog.w(TAG, "сервис уничтожен системой без команды остановки (статус ${status.value})")
             zhiva = false
+            // Службы нет, процесс жив: его дальнейшая смерть — уже не смерть со службой. Иначе
+            // флаг оставался на диске, и следующее убийство пустого процесса шло испытанию
+            // пульта падением. Самоподъём ниже поднимет флаг заново.
+            Pult.sluzhbaOstanovlena()
             AvtoVozvrat.posleGibeli()
         }
         binder.close()
