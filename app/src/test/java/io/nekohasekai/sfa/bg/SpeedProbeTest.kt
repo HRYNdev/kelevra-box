@@ -20,6 +20,15 @@ class SpeedProbeTest {
     }
 
     @Test
+    fun `код ответа берётся из строки статуса`() {
+        assertEquals(200, SpeedProbe.kodOtveta("HTTP/1.1 200 OK"))
+        assertEquals(301, SpeedProbe.kodOtveta("HTTP/1.1 301 Moved Permanently"))
+        assertEquals(404, SpeedProbe.kodOtveta("HTTP/1.0 404"))
+        assertEquals(null, SpeedProbe.kodOtveta("SSH-2.0-OpenSSH"))
+        assertEquals(null, SpeedProbe.kodOtveta(""))
+    }
+
+    @Test
     fun `замер за нулевое время не выдаёт бесконечность`() {
         assertEquals(0L, Speed.Measured(bytes = 4096, millis = 0).bytesPerSecond)
     }

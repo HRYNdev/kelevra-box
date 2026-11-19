@@ -84,6 +84,16 @@ object SpeedProbe {
 
     private var lastRunAt = 0L
 
+    /**
+     * Код ответа из строки статуса (`HTTP/1.1 200 OK` → 200); не HTTP — null. Ответ не 2xx
+     * (цель переехала, редирект на https, ошибка) короткий и приходит мгновенно, и раньше он
+     * мерился как скорость: живой основной канал раз в 10 минут объявлялся задушенным.
+     */
+    fun kodOtveta(status: String): Int? {
+        if (!status.startsWith("HTTP/1.")) return null
+        return status.split(' ').getOrNull(1)?.trim()?.toIntOrNull()
+    }
+
     /** Прошёл ли срок с прошлого замера. */
     fun due(now: Long = SystemClock.elapsedRealtime(), cooldown: Long = Pult.long("skorost.cooldown_millis", COOLDOWN_MILLIS)): Boolean =
         lastRunAt == 0L || now - lastRunAt >= cooldown
@@ -139,9 +149,10 @@ object SpeedProbe {
         out.flush()
 
         val status = input.readLine().orEmpty()
-        if (!status.startsWith("HTTP/1.")) {
-            return Speed.Failed(if (status.isBlank()) "ответа нет" else "ответ не похож на HTTP")
-        }
+        val kod = kodOtveta(status)
+            ?: return Speed.Failed(if (status.isBlank()) "ответа нет" else "ответ не похож на HTTP")
+        // Ответ пришёл — канал данные несёт; судить о полосе по чужой ошибке нельзя.
+        if (kod !in 200..299) return Speed.Unmeasurable("цель ответила кодом $kod")
         // Заголовки до пустой строки: их вес в скорость не считаем, меряем само тело.
         while (true) {
             val line = input.readLine() ?: return Speed.Failed("ответ оборвался на заголовках")
@@ -150,14 +161,25 @@ object SpeedProbe {
 
         val buffer = ByteArray(16 * 1024)
         var read = 0
+        var konchilsya = false
+        val enough = Pult.int("skorost.enough_bytes", ENOUGH_BYTES)
         val startedAt = SystemClock.elapsedRealtime()
-        while (read < Pult.int("skorost.enough_bytes", ENOUGH_BYTES) && SystemClock.elapsedRealtime() - startedAt < Pult.long("skorost.budget_millis", BUDGET_MILLIS)) {
+        while (read < enough && SystemClock.elapsedRealtime() - startedAt < Pult.long("skorost.budget_millis", BUDGET_MILLIS)) {
             val n = input.read(buffer)
-            if (n <= 0) break
+            if (n <= 0) {
+                konchilsya = true
+                break
+            }
             read += n
         }
         val spent = SystemClock.elapsedRealtime() - startedAt
         if (read == 0) return Speed.Failed("тело не пришло вовсе")
+        // Файл кончился раньше порога: короткое тело лежит в сокете целиком и «качается» за
+        // 0 мс — скорость 0, то есть «задушен». Вывода о полосе такой замер не даёт. Порог с
+        // пульта выше вшитого (больше файла) — целый файл мерой остаётся.
+        if (konchilsya && read < minOf(enough, ENOUGH_BYTES)) {
+            return Speed.Unmeasurable("цель отдала только $read Б — мало для вывода о полосе")
+        }
         Speed.Measured(read, spent)
     }
 }
