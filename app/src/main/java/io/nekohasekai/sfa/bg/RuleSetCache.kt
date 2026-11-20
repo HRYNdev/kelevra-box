@@ -272,7 +272,19 @@ object RuleSetCache {
     private val ZAGLUSHKA_TEKST = """{"version":2,"rules":[{"domain_suffix":["$ZAGLUSHKA_DOMEN"]}]}"""
 
     /**
-     * Локальная заглушка текстового набора, которого ещё нет в кэше ([RuleSetLocalPatch]).
+     * Пустой бинарный набор: «SRS», версия 1, затем zlib с числом правил 0 — как его читает
+     * `srs.Read` ядра. Ничего не совпадает, трафик идёт по остальным правилам до докачки.
+     */
+    internal val ZAGLUSHKA_BINARY: ByteArray = run {
+        val out = java.io.ByteArrayOutputStream()
+        out.write(MAGIC)
+        out.write(1)
+        java.util.zip.DeflaterOutputStream(out).use { it.write(0) }
+        out.toByteArray()
+    }
+
+    /**
+     * Локальная заглушка набора (текстового или бинарного), которого ещё нет в кэше ([RuleSetLocalPatch]).
      * Лежит под именем самого набора и помечена протухшей (время файла — 0), поэтому первая же
      * докачка кладёт настоящий набор на её место, а ядро перечитывает файл без перезапуска.
      * Файл уже есть (настоящий или заглушка) — его и отдаём. Не вышло записать — `null`:
@@ -282,7 +294,7 @@ object RuleSetCache {
         val target = File(dir, remote.tag + SUFFIX)
         if (target.isFile && target.length() > 0) return target
         val tmp = File(dir, remote.tag + SUFFIX + ".tmp")
-        tmp.writeText(ZAGLUSHKA_TEKST)
+        if (remote.format == "binary") tmp.writeBytes(ZAGLUSHKA_BINARY) else tmp.writeText(ZAGLUSHKA_TEKST)
         if (!tmp.renameTo(target)) {
             tmp.delete()
             return null
@@ -293,6 +305,7 @@ object RuleSetCache {
 
     /** Это заглушка, а не скачанный набор. */
     fun isZaglushka(file: File): Boolean = runCatching {
+        if (file.length() == ZAGLUSHKA_BINARY.size.toLong()) return file.readBytes().contentEquals(ZAGLUSHKA_BINARY)
         file.length() < 256 && file.readText(Charsets.UTF_8).contains(ZAGLUSHKA_DOMEN)
     }.getOrDefault(false)
 

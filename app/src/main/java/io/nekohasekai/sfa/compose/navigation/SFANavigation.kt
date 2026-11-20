@@ -717,6 +717,7 @@ fun SFANavHost(
             popExitTransition = slideOutToRight,
         ) {
             ConnectScreen(
+                serviceStatus = serviceStatus,
                 onDone = { navController.popBackStack(Screen.Dashboard.route, false) },
                 onBack = { navController.popBackStack() },
             )

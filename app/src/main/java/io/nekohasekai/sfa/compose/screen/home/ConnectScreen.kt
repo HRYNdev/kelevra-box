@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,6 +56,7 @@ import io.nekohasekai.sfa.compose.theme.KButton
 import io.nekohasekai.sfa.compose.theme.KDim
 import io.nekohasekai.sfa.compose.theme.Montserrat
 import io.nekohasekai.sfa.compose.theme.RobotoMono
+import io.nekohasekai.sfa.constant.Status
 
 /**
  * Первый запуск: код -> предупреждение о системном вопросе -> готово.
@@ -65,6 +67,7 @@ import io.nekohasekai.sfa.compose.theme.RobotoMono
  */
 @Composable
 fun ConnectScreen(
+    serviceStatus: Status = Status.Stopped,
     onDone: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -145,7 +148,7 @@ fun ConnectScreen(
                 },
             )
 
-            else -> StepDone(onDone = onDone)
+            else -> StepDone(serviceStatus = serviceStatus, onDone = onDone)
         }
     }
 }
@@ -372,13 +375,34 @@ private fun SystemAsk(title: String, yes: String, no: String) {
     }
 }
 
+/**
+ * «Сеть подключена» — только когда служба и правда поднялась. Раньше экран говорил это сразу
+ * после разрешений, и упавший старт (стенд 20.11.2026) выглядел для нового человека как готовый.
+ */
 @Composable
-private fun ColumnScope.StepDone(onDone: () -> Unit) {
-    StepHeader(
-        icon = Icons.Outlined.CheckCircle,
-        title = "Готово",
-        text = "Сеть подключена.\nПодключение включается автоматически.",
-    )
+private fun ColumnScope.StepDone(serviceStatus: Status, onDone: () -> Unit) {
+    // Старт идёт не мгновенно: «остановлена» до первого «запускается» — ещё не отказ.
+    var zapuskalas by remember { mutableStateOf(false) }
+    LaunchedEffect(serviceStatus) {
+        if (serviceStatus == Status.Starting || serviceStatus == Status.Started) zapuskalas = true
+    }
+    when {
+        serviceStatus == Status.Started -> StepHeader(
+            icon = Icons.Outlined.CheckCircle,
+            title = "Готово",
+            text = "Сеть подключена.\nПодключение включается автоматически.",
+        )
+        zapuskalas && serviceStatus == Status.Stopped -> StepHeader(
+            icon = Icons.Outlined.ErrorOutline,
+            title = "Не подключилось",
+            text = "Откройте приложение и включите подключение ещё раз.",
+        )
+        else -> StepHeader(
+            icon = Icons.Outlined.Shield,
+            title = "Подключение",
+            text = "",
+        )
+    }
     Spacer(Modifier.weight(1f))
     KButton(text = "Открыть", onClick = onDone)
     Spacer(Modifier.height(20.dp))
