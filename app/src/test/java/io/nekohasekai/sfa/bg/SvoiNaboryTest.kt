@@ -175,23 +175,43 @@ class SvoiNaboryTest {
     }
 
     @Test
-    fun `текстового набора нет в кэше — ядро получает заглушку, а не удалённый набор`() {
+    fun `набора нет в кэше — ядро получает заглушку, а не удалённый набор`() {
         // Ядро 1.14 без своего хранилища не стартует, если удалённый набор не скачался
-        // («initial rule-set», эмулятор 25.10.2026) — под белым списком так и было бы.
+        // («initial rule-set», эмулятор 25.10.2026; бинарный meta на новой установке — стенд 20.11.2026).
         val made = mutableListOf<String>()
         val result = RuleSetLocalPatch.useCached(profil(mimoRoute), emptyMap()) { remote ->
             made += remote.tag
-            source("${remote.tag}.srs", """{"version":2,"rules":[{"domain_suffix":["${RuleSetCache.ZAGLUSHKA_DOMEN}"]}]}""")
+            if (remote.format == "binary") {
+                tmp.newFile("${remote.tag}.srs").apply { writeBytes(RuleSetCache.ZAGLUSHKA_BINARY) }
+            } else {
+                source("${remote.tag}.srs", """{"version":2,"rules":[{"domain_suffix":["${RuleSetCache.ZAGLUSHKA_DOMEN}"]}]}""")
+            }
         }
         assertTrue(result.note, result.patched)
-        assertEquals("заглушки только текстовым наборам", listOf("svoi-tunnel", "svoi-tunnel-2", "svoi-mimo", "svoi-blok", "svoi-blok-2", "svoi-razreshit"), made)
+        assertEquals(
+            "заглушки и текстовым, и бинарным наборам",
+            setOf("svoi-tunnel", "svoi-tunnel-2", "svoi-mimo", "svoi-blok", "svoi-blok-2", "svoi-razreshit", "ads", "main-domains"),
+            made.toSet(),
+        )
         assertEquals(made, result.placeholders)
         assertTrue("заглушка — не «правила загружены»", result.ready.isEmpty())
-        assertEquals(listOf("ads", "main-domains"), result.missing)
+        assertTrue(result.missing.isEmpty())
         val sets = JSONObject(result.content).getJSONObject("route").getJSONArray("rule_set")
         val byTag = (0 until sets.length()).map { sets.getJSONObject(it) }.associateBy { it.getString("tag") }
         assertEquals("local", byTag.getValue("svoi-tunnel").getString("type"))
-        assertEquals("remote", byTag.getValue("ads").getString("type"))
+        assertEquals("local", byTag.getValue("ads").getString("type"))
+        assertEquals("binary", byTag.getValue("ads").getString("format"))
+    }
+
+    @Test
+    fun `бинарная заглушка — пустой набор SRS и узнаётся как заглушка`() {
+        val z = tmp.newFile("ads.srs").apply { writeBytes(RuleSetCache.ZAGLUSHKA_BINARY) }
+        assertEquals("binary", RuleSetCache.kindOf(z))
+        assertTrue(RuleSetCache.isZaglushka(z))
+        val inflated = java.util.zip.InflaterInputStream(z.readBytes().copyOfRange(4, z.length().toInt()).inputStream()).readBytes()
+        assertEquals("число правил 0", listOf<Byte>(0), inflated.toList())
+        val real = tmp.newFile("youtube.srs").apply { writeBytes(byteArrayOf(0x53, 0x52, 0x53, 1, 0x78, 0x9c.toByte(), 1, 2, 3, 4, 5, 6, 7, 8, 9)) }
+        assertFalse(RuleSetCache.isZaglushka(real))
     }
 
     @Test

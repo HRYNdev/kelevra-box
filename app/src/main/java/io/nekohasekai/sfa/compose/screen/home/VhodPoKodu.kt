@@ -183,7 +183,7 @@ object Vhod {
             }
         },
         primenit = { s ->
-            Settings.selectedProfile = s.profilId
+            ProfileManager.vybrat(s.profilId)
             perezagruzitServis()
         },
     )
@@ -267,7 +267,7 @@ private suspend fun sohranenoDlya(id: Long): VhodPoKodu.Sohraneno {
     val vybran = Settings.selectedProfile
     if (vybran == id) return VhodPoKodu.Sohraneno(id, uzheVybran = true)
     if (vybran == -1L || ProfileManager.get(vybran) == null) {
-        Settings.selectedProfile = id
+        ProfileManager.vybrat(id)
         return VhodPoKodu.Sohraneno(id, uzheVybran = true)
     }
     return VhodPoKodu.Sohraneno(id, uzheVybran = false)
