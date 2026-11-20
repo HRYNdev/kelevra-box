@@ -52,6 +52,17 @@ object ProfileManager {
         return profile
     }
 
+    /**
+     * Сделать профиль выбранным и сказать об этом подписчикам. Без оповещения экран, прочитавший
+     * выбор раньше записи (create зовёт подписчиков до выбора), так и показывал «профиля нет».
+     */
+    fun vybrat(id: Long) {
+        Settings.selectedProfile = id
+        for (callback in callbacks.toList()) {
+            callback()
+        }
+    }
+
     suspend fun update(profile: Profile): Int {
         try {
             return instance.profileDao().update(profile)

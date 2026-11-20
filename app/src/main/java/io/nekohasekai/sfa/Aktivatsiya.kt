@@ -60,7 +60,10 @@ object Aktivatsiya {
                 conn.disconnect()
             }
         }.onFailure { KLog.i(TAG, "справочник дверей не загружен: ${it.javaClass.simpleName}") }
-        Priglashenie.spisokDverej(SubscriptionLink.DEFAULT_HOST, keshSpravochnika(), zapomnennye())
+        // Встроенные двери — в конце: без справочника (GitHub не открылся на новой установке)
+        // оставалась одна subkv, а она новых людей не знает, и верный код выходил «не найден».
+        (Priglashenie.spisokDverej(SubscriptionLink.DEFAULT_HOST, keshSpravochnika(), zapomnennye()) +
+            ZapasnoyPut.VSTROENNYE).distinct()
     }
 
     /**
