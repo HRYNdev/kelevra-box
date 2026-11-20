@@ -439,7 +439,8 @@ fun HomeScreen(
             }
             // Оплата есть только у платящих (oplata == null у остальных). Срок далеко — «Оплачено до»
             // без строки оплаты (платить заранее — в разделе подписки); ≤ 3 суток и кончился — заметно
-            // и со строкой «Оплатить»; заявка ждёт — строка «Оплата проверяется». Остальным всё как было.
+            // и со строкой «Оплатить»; заявка ждёт — строка «Оплата проверяется»; отказ — «Оплата не найдена».
+            // Остальным всё как было.
             val opl = oplata?.takeIf { hasProfile && it.platit }
             val oplNow = System.currentTimeMillis()
             val oplVid = opl?.let { vidOplaty(it, oplNow) }
@@ -467,7 +468,7 @@ fun HomeScreen(
                     )
                     if (opl != null && oplVid?.stroka != null) {
                         KDivider()
-                        OplataStroka(opl, onOpen = { showOplata = true })
+                        OplataStroka(opl, oplVid.stroka, onOpen = { showOplata = true })
                     }
                 }
             } else if (sub == null && opl != null && oplVid != null) {
@@ -487,7 +488,7 @@ fun HomeScreen(
                     )
                     if (oplVid.stroka != null) {
                         KDivider()
-                        OplataStroka(opl, onOpen = { showOplata = true })
+                        OplataStroka(opl, oplVid.stroka, onOpen = { showOplata = true })
                     }
                 }
             }

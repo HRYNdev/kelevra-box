@@ -638,10 +638,10 @@ object AutoMode {
     /**
      * Сколько «дома» должно продержаться подряд, прежде чем гасить туннель ([DomZaderzhka]).
      * Полевые данные 31.10–07.11.2026: домашний вайфай одного телефона менял сеть каждые
-     * 20–30 с, и автомат поднимал/гасил ядро 204 раза за неделю. 45 с — больше периода
-     * дёргания и меньше минуты лишнего туннеля при настоящем возвращении домой.
+     * 20–30 с, и автомат поднимал/гасил ядро 204 раза за неделю. С 13.11.2026 «дома» туннель
+     * гаснет сразу: 0 по умолчанию, выдержку при нужде задаёт пульт (`avtomat.dom_zaderzhka_millis`).
      */
-    internal const val DOM_ZADERZHKA_MILLIS = 45_000L
+    internal const val DOM_ZADERZHKA_MILLIS = 0L
 
     /**
      * Ожидание ответа пробы сторожа транспорта ([TransportWatch]). Нижняя граница
@@ -1190,10 +1190,10 @@ object AutoMode {
             // не нужно: он и так начинает с захода.
             alarm.reset()
             active = true
-            thread = Thread(::loop, "automode").apply {
-                isDaemon = true
-                start()
-            }
+            // Поле — до start(): поток сверяет себя с ним первой же строкой цикла.
+            val t = Thread(::loop, "automode").apply { isDaemon = true }
+            thread = t
+            t.start()
             KLog.i(
                 TAG,
                 "автомат включён (${if (Settings.autoModeEnabled) "сам" else "выключен человеком"}): " +
@@ -1207,17 +1207,37 @@ object AutoMode {
     }
 
     fun stop() {
-        synchronized(lock) { stopLocked() }
+        // Поток ждём вне замка: спит он в `lock.wait` и, чтобы проснуться, должен этот замок
+        // взять. Раньше join шёл под замком и всегда истекал целой секундой — на главном
+        // потоке, на каждом выключении VPN.
+        val t = synchronized(lock) {
+            if (!active && thread == null) return
+            otpustitPotok()
+        }
+        t?.join(1_000)
+        synchronized(lock) {
+            // Пока ждали, автомат могли включить заново — новую сессию не трогаем.
+            if (!active) zabytSessiyu()
+        }
     }
 
     private fun stopLocked() {
         if (!active && thread == null) return
+        otpustitPotok()
+        zabytSessiyu()
+    }
+
+    /** Снять флаг и разбудить поток. Ждать его — вне [lock] (см. [stop]). */
+    private fun otpustitPotok(): Thread? {
         active = false
         val t = thread
         thread = null
         alarm.wake()
         t?.interrupt()
-        t?.join(1_000)
+        return t
+    }
+
+    private fun zabytSessiyu() {
         host = null
         forgetWb()
         PathRegistry.reset()
@@ -1799,12 +1819,15 @@ object AutoMode {
     }
 
     private fun loop() {
-        while (active) {
+        // Поток, переживший остановку (заход длиннее секунды ожидания), после нового start()
+        // видел общий `active=true` и шёл циклом рядом с новым. Работает только свой поток.
+        val svoy = Thread.currentThread()
+        while (active && thread === svoy) {
             val situation = runCatching { round() }.getOrElse {
                 KLog.w(TAG, "заход сорвался: ${it.message}")
                 _state.value.situation
             }
-            if (!active) return
+            if (!active || thread !== svoy) return
             // Серия перепроверок после смены сети идёт вперёд обычного ритма и обрывается
             // сама, как только обстановка устоялась.
             val hurry = burst.next(settled)
@@ -3228,13 +3251,14 @@ object AutoMode {
 
     private fun waitNext(millis: Long): Boolean {
         synchronized(lock) {
-            if (!active) return true
+            if (!active || thread !== Thread.currentThread()) return true
             return try {
                 // Long.MAX_VALUE — «ждать вечно», ровно то, что нужно при отсутствии сети.
                 alarm.sleep(millis)
             } catch (_: InterruptedException) {
                 Thread.currentThread().interrupt()
-                active = false
+                // Прерван старый поток после остановки — флаг уже принадлежит новой сессии.
+                if (thread === Thread.currentThread()) active = false
                 true
             }
         }

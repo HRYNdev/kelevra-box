@@ -70,6 +70,12 @@ class Application : Application() {
         // Исполнитель команд пульта — сразу: фоновая работа может принять пульт раньше,
         // чем фон ниже прочитает его с диска.
         io.nekohasekai.sfa.bg.pult.Pult.ispolnitel = io.nekohasekai.sfa.bg.pult.PultIspolnitel
+        // До разблокировки пульт с диска не поднимается (см. Pult.zagruzit); убийство процесса
+        // системой падением на испытании не считается (см. PrichinaSmerti).
+        io.nekohasekai.sfa.bg.pult.Pult.razblokirovano = {
+            (getSystemService(Context.USER_SERVICE) as android.os.UserManager).isUserUnlocked
+        }
+        io.nekohasekai.sfa.bg.pult.Pult.proshlyyUpal = { io.nekohasekai.sfa.bg.pult.PrichinaSmerti.proshlyyUpal(this) }
 
         AppLifecycleObserver.register(this)
 

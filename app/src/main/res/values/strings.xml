@@ -784,6 +784,7 @@
     <string name="oplata_oplatit">Оплатить</string>
     <string name="oplata_summa">%1$d ₽</string>
     <string name="oplata_proveryaetsya">Оплата проверяется</string>
+    <string name="oplata_ne_najdena">Оплата не найдена</string>
     <string name="oplata_podpiska">Подписка</string>
     <string name="oplata_podpiska_do">Подписка до %1$s</string>
     <string name="oplata_zakonchilas">Подписка закончилась</string>

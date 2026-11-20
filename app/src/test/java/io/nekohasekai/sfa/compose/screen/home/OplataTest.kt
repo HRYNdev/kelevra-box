@@ -144,7 +144,7 @@ class OplataTest {
     }
 
     @Test
-    fun `напоминания — полдень за трое суток прошёл: только окончание`() {
+    fun `напоминания — полдень за трое суток прошёл, только окончание`() {
         val info = platit("2026-12-12T07:00:00Z")
         val now = srokMillis("2026-12-09T07:01:00Z")
         assertEquals(
@@ -178,5 +178,36 @@ class OplataTest {
         assertEquals(emptyList<Napominanie>(), napominaniya(info.copy(srokMs = 0L), 0L, ekb))
         assertEquals(emptyList<Napominanie>(), napominaniya(OplataInfo(platit = false), 0L, ekb))
         assertEquals(emptyList<Napominanie>(), napominaniya(null, 0L, ekb))
+    }
+
+    @Test
+    fun `отказ — разбор поля, старый сервер без поля и ждущая заявка — нет отказа`() {
+        assertTrue(razobratOplatu(JSONObject("""{"platit": true, "cena": 249, "zhdet": false, "otkaz": true}"""))!!.otkaz)
+        assertFalse(razobratOplatu(JSONObject("""{"platit": true, "cena": 249, "zhdet": false}"""))!!.otkaz)
+        assertFalse(razobratOplatu(JSONObject("""{"platit": true, "cena": 249, "zhdet": true, "otkaz": true}"""))!!.otkaz)
+        assertFalse(razobratOplatu(JSONObject("""{"platit": false, "otkaz": true}"""))!!.otkaz)
+    }
+
+    @Test
+    fun `карточка — отказ показывает оплата не найдена, ждущая заявка важнее`() {
+        val now = 1_800_000_000_000L
+        fun v(srok: Long, otkaz: Boolean, zhdet: Boolean = false) =
+            vidOplaty(OplataInfo(platit = true, cena = 249, srokMs = srok, zhdet = zhdet, otkaz = otkaz), now)
+        assertEquals(VidOplaty(ZagolovokOplaty.OplachenoDo, false, StrokaOplaty.NeNajdena), v(now + 10 * den, otkaz = true))
+        assertEquals(VidOplaty(ZagolovokOplaty.PodpiskaDo, true, StrokaOplaty.NeNajdena), v(now + 2 * den, otkaz = true))
+        assertEquals(VidOplaty(ZagolovokOplaty.Zakonchilas, true, StrokaOplaty.NeNajdena), v(now - 1, otkaz = true))
+        assertEquals(StrokaOplaty.Proveryaetsya, v(now + 10 * den, otkaz = true, zhdet = true).stroka)
+        assertEquals(null, v(now + 10 * den, otkaz = false).stroka)
+    }
+
+    @Test
+    fun `отказ при выросшем сроке снимается, при прежнем — остаётся`() {
+        val now = 1_800_000_000_000L
+        val otkaz = OplataInfo(platit = true, cena = 249, srokMs = now + 2 * den, otkaz = true)
+        assertTrue(bezStarogoOtkaza(otkaz, srokPriOtkaze = now + 2 * den).otkaz)
+        assertTrue(bezStarogoOtkaza(otkaz, srokPriOtkaze = null).otkaz)
+        val prodlili = otkaz.copy(srokMs = now + 32 * den)
+        assertFalse(bezStarogoOtkaza(prodlili, srokPriOtkaze = now + 2 * den).otkaz)
+        assertEquals(null, vidOplaty(bezStarogoOtkaza(prodlili, now + 2 * den), now).stroka)
     }
 }

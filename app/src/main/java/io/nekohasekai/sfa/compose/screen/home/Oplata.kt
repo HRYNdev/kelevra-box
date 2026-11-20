@@ -25,6 +25,8 @@ data class OplataInfo(
     val srokMs: Long = 0L,
     /** «Я оплатил» нажато, срок ещё не продлён. */
     val zhdet: Boolean = false,
+    /** Последняя заявка закрыта отказом, новой нет. Старый сервер поля не шлёт — false. */
+    val otkaz: Boolean = false,
     /** Подтверждённые оплаты, свежие первыми; нет — пусто. */
     val istoriya: List<OplataZapis> = emptyList(),
 )
@@ -47,6 +49,7 @@ fun razobratOplatu(json: JSONObject): OplataInfo? {
         nomer = json.optString("nomer").chistyTekst(),
         srokMs = srokMillis(json.optString("srok")),
         zhdet = json.optBoolean("zhdet"),
+        otkaz = !json.optBoolean("zhdet") && json.optBoolean("otkaz"),
         istoriya = razobratIstoriyu(json),
     )
 }
@@ -123,7 +126,7 @@ enum class ZagolovokOplaty {
 }
 
 /** Строка оплаты под заголовком карточки. */
-enum class StrokaOplaty { Oplatit, Proveryaetsya }
+enum class StrokaOplaty { Oplatit, Proveryaetsya, NeNajdena }
 
 /**
  * Что показать в карточке «Подписка» на главном экране.
@@ -133,7 +136,8 @@ data class VidOplaty(val zagolovok: ZagolovokOplaty, val zametno: Boolean, val s
 
 /**
  * Обычный срок (> 3 суток) и бессрочно — без строки оплаты: платить заранее — из раздела подписки.
- * ≤ 3 суток и кончился — заметно и со строкой «Оплатить». Ждёт заявка — строка «Оплата проверяется» всегда.
+ * ≤ 3 суток и кончился — заметно и со строкой «Оплатить». Ждёт заявка — строка «Оплата проверяется» всегда;
+ * заявка закрыта отказом — строка «Оплата не найдена» до новой отправки.
  */
 fun vidOplaty(info: OplataInfo, nowMs: Long): VidOplaty {
     val srok = srokOplaty(info.srokMs, nowMs)
@@ -146,11 +150,20 @@ fun vidOplaty(info: OplataInfo, nowMs: Long): VidOplaty {
     val zametno = srok == SrokOplaty.Skoro || srok == SrokOplaty.Konchilsya
     val stroka = when {
         info.zhdet -> StrokaOplaty.Proveryaetsya
+        info.otkaz -> StrokaOplaty.NeNajdena
         zametno -> StrokaOplaty.Oplatit
         else -> null
     }
     return VidOplaty(zagolovok, zametno, stroka)
 }
+
+/**
+ * Отказ рядом с выросшим сроком. Владелец продлил срок руками после отказа, новой заявки нет:
+ * последняя запись у сервера всё ещё «отказ», и рядом с новым «Оплачено до» висело «Оплата не
+ * найдена». [srokPriOtkaze] — срок, при котором отказ увидели впервые; вырос — отказа нет.
+ */
+fun bezStarogoOtkaza(info: OplataInfo, srokPriOtkaze: Long?): OplataInfo =
+    if (info.otkaz && srokPriOtkaze != null && info.srokMs > srokPriOtkaze) info.copy(otkaz = false) else info
 
 /** Напоминание об оплате: за трое суток до срока или в день окончания. */
 enum class VidNapominaniya { Skoro, Konec }

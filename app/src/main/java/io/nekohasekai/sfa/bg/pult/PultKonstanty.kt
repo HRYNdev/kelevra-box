@@ -139,7 +139,7 @@ object PultKonstanty {
         c("avtomat.transport_max_millis", 60000, 6000, 600000, "Сторож транспорта: верхняя граница паузы между пробами при включённом экране, мс", "TransportWatch.MAX_MILLIS"),
         c("avtomat.transport_fails_to_wake", 2, 1, 8, "Сторож транспорта: провалов подряд до полного захода", "TransportWatch.FAILS_TO_WAKE"),
         c("avtomat.transport_probe_timeout_millis", 6000, 600, 60000, "Сторож транспорта: потолок ожидания пробы, мс", "AutoMode.TRANSPORT_PROBE_TIMEOUT_MILLIS"),
-        c("avtomat.dom_zaderzhka_millis", 45000, 0, 450000, "Дома с живым туннелем: столько «дома» без смен сети до гашения туннеля (0 — гасить сразу), мс", "AutoMode.DOM_ZADERZHKA_MILLIS"),
+        c("avtomat.dom_zaderzhka_millis", 0, 0, 450000, "Дома с живым туннелем: столько «дома» без смен сети до гашения туннеля (0 — гасить сразу), мс", "AutoMode.DOM_ZADERZHKA_MILLIS"),
         c("samopodyom.pervyy_millis", 45000, 4500, 450000, "Самоподъём: столько подтверждённой смерти канала при живой сети до первого перезапуска ядра, мс", "SamopodyomYadra.PERVYY_MILLIS"),
         c("samopodyom.posle_smeny_seti_millis", 30000, 3000, 300000, "Самоподъём: после смены сети первый перезапуск — через столько от самой смены, мс", "SamopodyomYadra.POSLE_SMENY_SETI_MILLIS"),
         c("samopodyom.stupen2_millis", 120000, 12000, 1200000, "Самоподъём: пауза после первого перезапуска, мс", "SamopodyomYadra.STUPEN2_MILLIS"),

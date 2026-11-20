@@ -36,10 +36,12 @@ object PultYadro {
     const val SHAG_MAX_MS = 2 * 60_000L
 
     /**
-     * Падений до отката. Падение = старт процесса, который не прожил [ZHIZN_BEZ_PADENIYA_MS]:
-     * свой счётчик стартов растёт на каждом старте и обнуляется, когда процесс прожил столько
-     * ([prozhilBezPadeniya]). Так ловятся и падения ядра на Go (мимо ловушки Java), а обычное
-     * убийство процесса системой спустя часы падением не считается.
+     * Падений до отката. Падение = смерть процесса при РАБОТАЮЩЕЙ службе: флаг
+     * [PultSostoyanie.sluzhbaZhila] ставит служба при запуске и снимает при штатной остановке,
+     * поэтому новый процесс, нашедший флаг поднятым, знает, что прошлый умер вместе со службой
+     * (в том числе падение ядра на Go мимо ловушки Java). Старт процесса без службы (шторка,
+     * приложение, система убила кэшированный процесс) падением не считается. Счётчик падений
+     * обнуляется, когда процесс со службой прожил [ZHIZN_BEZ_PADENIYA_MS] ([prozhilBezPadeniya]).
      */
     const val PADENIY_DO_OTKATA = 3
     const val ZHIZN_BEZ_PADENIYA_MS = 2 * 60_000L
@@ -298,20 +300,39 @@ object PultYadro {
     }
 
     /**
-     * Старт процесса на испытании. Первый старт после начала испытания — ещё не падение
-     * (процесс, где пульт принят, жил); каждый следующий без [prozhilBezPadeniya] между
-     * ними — падение. [PADENIY_DO_OTKATA] подряд — откат.
+     * Старт процесса. [sborka] — versionCode запущенного приложения: на новой сборке метки отката
+     * старой (плохие версии и отпечатки, флаг отката, счётчик падений) забываются сами.
+     * На испытании падением считается только старт после смерти процесса при работающей службе.
+     * [PADENIY_DO_OTKATA] падений подряд — откат.
+     * [upalPoSisteme] — причина смерти прошлого процесса по записи системы ([PrichinaSmerti]):
+     * false — его убили (нехватка памяти, производитель, человек), это не падение и при живой
+     * службе; true — упал; null — система не сказала (Android < 11), судим по флагу службы.
      */
-    fun naStarte(s: PultSostoyanie, nowMs: Long): Itog {
-        val s1 = prervannye(s, nowMs)
+    fun naStarte(s: PultSostoyanie, nowMs: Long, sborka: Int, upalPoSisteme: Boolean? = null): Itog {
+        var s1 = prervannye(s, nowMs)
+        val novaya = s1.sborka != sborka
+        if (novaya) {
+            s1 = s1.copy(
+                sborka = sborka,
+                plohieVersii = emptySet(),
+                plohieOtpechatki = emptySet(),
+                otkat = false,
+                sluzhbaZhila = false,
+                ispytanie = s1.ispytanie?.copy(startov = 0),
+            )
+        }
+        val upal = s1.sluzhbaZhila && upalPoSisteme != false
+        // Новый процесс службы ещё не имеет: флаг подымет служба, когда запустится.
+        s1 = s1.copy(sluzhbaZhila = false)
         val isp = s1.ispytanie ?: return Itog(s1)
-        val startov = isp.startov + 1
-        if (startov >= PADENIY_DO_OTKATA) return otkatit(s1, "процесс падал $startov раза подряд на испытании, не проживая ${ZHIZN_BEZ_PADENIYA_MS / 60_000} мин")
         // Время, пока процесса не было, испытанию не засчитывается.
-        return Itog(s1.copy(ispytanie = isp.copy(startov = startov, posledniyStartMs = nowMs, otmetkaMs = nowMs)))
+        if (!upal) return Itog(s1.copy(ispytanie = isp.copy(otmetkaMs = nowMs)))
+        val padeniy = isp.startov + 1
+        if (padeniy >= PADENIY_DO_OTKATA) return otkatit(s1, "процесс со службой умер $padeniy раза подряд на испытании")
+        return Itog(s1.copy(ispytanie = isp.copy(startov = padeniy, posledniyStartMs = nowMs, otmetkaMs = nowMs)))
     }
 
-    /** Процесс прожил [ZHIZN_BEZ_PADENIYA_MS] — счётчик падений с нуля. */
+    /** Процесс со службой прожил [ZHIZN_BEZ_PADENIYA_MS] — счётчик падений с нуля. */
     fun prozhilBezPadeniya(s: PultSostoyanie): PultSostoyanie {
         val isp = s.ispytanie ?: return s
         return if (isp.startov == 0) s else s.copy(ispytanie = isp.copy(startov = 0))
@@ -386,6 +407,10 @@ data class PultSostoyanie(
     val oshibkiObnovleniya: List<String> = emptyList(),
     /** Выкатка, которую больше не пробуем: «versiya_kod:sha256» — файл не сошёлся с подписанным хешем. */
     val plohieObnovleniya: Set<String> = emptySet(),
+    /** versionCode сборки, что писала состояние: на другой сборке метки отката забываются. */
+    val sborka: Int = 0,
+    /** Служба сейчас запущена (ставит служба, снимает штатная остановка); поднятым на старте процесса = прошлый умер со службой. */
+    val sluzhbaZhila: Boolean = false,
 ) {
     data class Ispytanie(
         val versiya: Long,
@@ -428,6 +453,8 @@ data class PultSostoyanie(
         obnovlenie?.let { j.put("obnovlenie", it.vJson()) }
         j.put("oshibki_obnovleniya", JSONArray(oshibkiObnovleniya))
         j.put("plohie_obnovleniya", JSONArray(plohieObnovleniya.toList()))
+        j.put("sborka", sborka)
+        j.put("sluzhba_zhila", sluzhbaZhila)
         return j
     }
 
@@ -481,6 +508,8 @@ data class PultSostoyanie(
                 obnovlenie = PultYadro.Obnovlenie.izJson(j.optJSONObject("obnovlenie")),
                 oshibkiObnovleniya = spisok(j.optJSONArray("oshibki_obnovleniya")) { a, i -> a.optString(i) },
                 plohieObnovleniya = spisok(j.optJSONArray("plohie_obnovleniya")) { a, i -> a.optString(i) }.toSet(),
+                sborka = j.optInt("sborka"),
+                sluzhbaZhila = j.optBoolean("sluzhba_zhila"),
             )
         }
     }
